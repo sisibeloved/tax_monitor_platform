@@ -68,6 +68,11 @@ class Company(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         nullable=False,
         server_default=func.now(),
     )
+    master_data_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lifecycle_reason: Mapped[str | None] = mapped_column(Text)
     lifecycle_changed_by: Mapped[str | None] = mapped_column(String(256))

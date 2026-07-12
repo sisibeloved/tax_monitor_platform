@@ -17,7 +17,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from tax_risk.config import Settings
 
 
-BACKEND_ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 PYTEST_SCHEMA_PATTERN = re.compile(r"tax_risk_pytest_[0-9a-f]{32}")
 PYTEST_SCHEMA_MARKER = "tax_risk_pytest_owned_v1"
 

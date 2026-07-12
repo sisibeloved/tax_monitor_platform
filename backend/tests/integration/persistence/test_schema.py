@@ -5,11 +5,16 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB, NUMERIC, TIMESTAMP, UUID
 from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
+from sqlalchemy.schema import CreateSchema, DropSchema
+
+from tax_risk.config import Settings
 
 
 EXPECTED_TABLES = {
@@ -46,13 +51,11 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
                 """
             )
         ).scalar_one()
-        revision = connection.execute(
-            text("SELECT version_num FROM alembic_version")
-        ).scalar_one()
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0001_control_plane"
+    assert revision == "0002_company_master_freshness"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -114,6 +117,11 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
     occurred_at = _column(engine, "audit_event", "occurred_at")
     assert isinstance(occurred_at["type"], TIMESTAMP)
     assert occurred_at["type"].timezone is True
+
+    master_updated_at = _column(engine, "company", "master_data_updated_at")
+    assert isinstance(master_updated_at["type"], TIMESTAMP)
+    assert master_updated_at["type"].timezone is True
+    assert master_updated_at["nullable"] is False
 
 
 @pytest.mark.parametrize(
@@ -251,11 +259,9 @@ def test_company_consistent_lineage_uses_composite_foreign_keys(engine: Engine) 
         for foreign_key in accounting_snapshot_foreign_keys
     )
     assert any(
-        foreign_key["constrained_columns"]
-        == ["snapshot_id", "company_id", "tax_master_version_id"]
+        foreign_key["constrained_columns"] == ["snapshot_id", "company_id", "tax_master_version_id"]
         and foreign_key["referred_table"] == "accounting_snapshot"
-        and foreign_key["referred_columns"]
-        == ["id", "company_id", "tax_master_version_id"]
+        and foreign_key["referred_columns"] == ["id", "company_id", "tax_master_version_id"]
         for foreign_key in detection_foreign_keys
     )
 
@@ -373,7 +379,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0001_control_plane (head)" in completed.stdout
+    assert "0002_company_master_freshness (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -396,4 +402,72 @@ def test_database_is_at_control_plane_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0001_control_plane"
+    assert revision == "0002_company_master_freshness"
+
+
+def test_0002_backfills_existing_company_from_historical_lifecycle_timestamp() -> None:
+    base_url = make_url(Settings().database_url)
+    schema_name = f"tax_risk_pytest_{uuid4().hex}"
+    admin_engine = create_engine(base_url, poolclass=NullPool)
+    try:
+        with admin_engine.begin() as connection:
+            connection.execute(CreateSchema(schema_name))
+            quoted = connection.dialect.identifier_preparer.quote(schema_name)
+            connection.exec_driver_sql(f"COMMENT ON SCHEMA {quoted} IS '{PYTEST_SCHEMA_MARKER}'")
+        database_url = base_url.update_query_dict(
+            {"options": f"-csearch_path={schema_name}"}
+        ).render_as_string(hide_password=False)
+        first_upgrade = _run_alembic(database_url, "upgrade", "0001_control_plane")
+        assert first_upgrade.returncode == 0, first_upgrade.stderr
+        isolated_engine = create_engine(database_url, poolclass=NullPool)
+        try:
+            with isolated_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO company (
+                            company_code, company_name, lifecycle_changed_at,
+                            created_at, updated_at
+                        ) VALUES (
+                            'HISTORICAL', 'Historical Company',
+                            TIMESTAMPTZ '2020-02-03 04:05:06+00',
+                            TIMESTAMPTZ '2019-01-01 00:00:00+00',
+                            TIMESTAMPTZ '2021-01-01 00:00:00+00'
+                        )
+                        """
+                    )
+                )
+            second_upgrade = _run_alembic(database_url, "upgrade", "head")
+            assert second_upgrade.returncode == 0, second_upgrade.stderr
+            with isolated_engine.connect() as connection:
+                backfilled = connection.execute(
+                    text(
+                        "SELECT master_data_updated_at FROM company "
+                        "WHERE company_code = 'HISTORICAL'"
+                    )
+                ).scalar_one()
+            assert backfilled.isoformat() == "2020-02-03T04:05:06+00:00"
+
+            downgrade = _run_alembic(database_url, "downgrade", "0001_control_plane")
+            assert downgrade.returncode == 0, downgrade.stderr
+            assert "master_data_updated_at" not in {
+                column["name"] for column in inspect(isolated_engine).get_columns("company")
+            }
+            final_upgrade = _run_alembic(database_url, "upgrade", "head")
+            assert final_upgrade.returncode == 0, final_upgrade.stderr
+        finally:
+            isolated_engine.dispose()
+    finally:
+        with admin_engine.begin() as connection:
+            marker = connection.execute(
+                text(
+                    """
+                    SELECT obj_description(oid, 'pg_namespace')
+                    FROM pg_namespace WHERE nspname = :schema_name
+                    """
+                ),
+                {"schema_name": schema_name},
+            ).scalar_one_or_none()
+            assert marker == PYTEST_SCHEMA_MARKER
+            connection.execute(DropSchema(schema_name, cascade=True))
+        admin_engine.dispose()
