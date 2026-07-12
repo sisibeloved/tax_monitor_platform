@@ -1,0 +1,399 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+import pytest
+from sqlalchemy import Engine, inspect, text
+from sqlalchemy.dialects.postgresql import JSONB, NUMERIC, TIMESTAMP, UUID
+from sqlalchemy.engine import make_url
+
+
+EXPECTED_TABLES = {
+    "company",
+    "ingest_batch",
+    "ingest_error",
+    "source_record",
+    "tax_master_version",
+    "accounting_snapshot",
+    "snapshot_source",
+    "snapshot_set",
+    "snapshot_set_member",
+    "rule_version",
+    "monitoring_run",
+    "detection_record",
+    "risk_case",
+    "review_action",
+    "audit_event",
+}
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+PYTEST_SCHEMA_PATTERN = re.compile(r"tax_risk_pytest_[0-9a-f]{32}")
+PYTEST_SCHEMA_MARKER = "tax_risk_pytest_owned_v1"
+
+
+def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engine) -> None:
+    with engine.connect() as connection:
+        schema_name = connection.execute(text("SELECT current_schema()")).scalar_one()
+        schema_marker = connection.execute(
+            text(
+                """
+                SELECT obj_description(namespace.oid, 'pg_namespace')
+                FROM pg_namespace AS namespace
+                WHERE namespace.nspname = current_schema()
+                """
+            )
+        ).scalar_one()
+        revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+
+    assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
+    assert schema_marker == PYTEST_SCHEMA_MARKER
+    assert revision == "0001_control_plane"
+
+
+def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
+    columns = inspect(engine).get_columns(table_name)
+    return next(column for column in columns if column["name"] == column_name)
+
+
+def _enum_labels(engine: Engine, enum_name: str) -> list[str]:
+    with engine.connect() as connection:
+        return list(
+            connection.execute(
+                text(
+                    """
+                    SELECT enum_value.enumlabel
+                    FROM pg_enum AS enum_value
+                    JOIN pg_type AS enum_type ON enum_type.oid = enum_value.enumtypid
+                    JOIN pg_namespace AS enum_namespace
+                      ON enum_namespace.oid = enum_type.typnamespace
+                    WHERE enum_type.typname = :enum_name
+                      AND enum_namespace.nspname = current_schema()
+                    ORDER BY enum_value.enumsortorder
+                    """
+                ),
+                {"enum_name": enum_name},
+            ).scalars()
+        )
+
+
+def test_control_plane_has_every_required_table_and_uuid_primary_key(engine: Engine) -> None:
+    inspector = inspect(engine)
+
+    assert EXPECTED_TABLES <= set(inspector.get_table_names())
+    for table_name in EXPECTED_TABLES:
+        primary_key = inspector.get_pk_constraint(table_name)
+        assert primary_key["constrained_columns"] == ["id"]
+        assert isinstance(_column(engine, table_name, "id")["type"], UUID)
+
+
+def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: Engine) -> None:
+    enum_names = {enum["name"] for enum in inspect(engine).get_enums()}
+
+    assert {
+        "company_lifecycle",
+        "ingest_batch_status",
+        "ingest_mode",
+        "version_status",
+        "snapshot_status",
+        "snapshot_set_status",
+        "monitoring_run_status",
+        "calculation_status",
+        "risk_case_status",
+    } <= enum_names
+
+    for table_name in EXPECTED_TABLES - {"audit_event"}:
+        created_at = _column(engine, table_name, "created_at")
+        assert isinstance(created_at["type"], TIMESTAMP)
+        assert created_at["type"].timezone is True
+
+    occurred_at = _column(engine, "audit_event", "occurred_at")
+    assert isinstance(occurred_at["type"], TIMESTAMP)
+    assert occurred_at["type"].timezone is True
+
+
+@pytest.mark.parametrize(
+    ("enum_name", "expected_labels"),
+    [
+        (
+            "ingest_batch_status",
+            ["RECEIVED", "VALIDATING", "SUCCEEDED", "PARTIAL", "FAILED"],
+        ),
+        ("snapshot_status", ["DRAFT", "VALIDATED", "PUBLISHED"]),
+        (
+            "monitor_type",
+            ["ACCRUAL_ACCURACY", "TAX_BURDEN", "POTENTIAL_TAX_COST"],
+        ),
+        (
+            "risk_case_status",
+            [
+                "NEW",
+                "ASSIGNED",
+                "PENDING_COMPANY_CONFIRMATION",
+                "PENDING_ADJUSTMENT",
+                "ADJUSTED_PENDING_REVIEW",
+                "CLOSED",
+                "GROUP_REVIEW",
+                "EVIDENCE_REQUIRED",
+            ],
+        ),
+    ],
+)
+def test_control_plane_enums_match_approved_phase_one_state_machines(
+    engine: Engine,
+    enum_name: str,
+    expected_labels: list[str],
+) -> None:
+    assert _enum_labels(engine, enum_name) == expected_labels
+
+
+def test_numeric_and_json_lineage_contracts_are_exact(engine: Engine) -> None:
+    for table_name, column_name in {
+        ("ingest_batch", "control_total"),
+        ("source_record", "amount"),
+        ("tax_master_version", "loss_carryforward"),
+        ("accounting_snapshot", "control_total"),
+        ("snapshot_source", "control_total"),
+        ("detection_record", "input_amount"),
+        ("detection_record", "result_amount"),
+        ("detection_record", "difference_amount"),
+        ("risk_case", "risk_amount"),
+    }:
+        numeric_type = _column(engine, table_name, column_name)["type"]
+        assert isinstance(numeric_type, NUMERIC)
+        assert (numeric_type.precision, numeric_type.scale) == (38, 12)
+
+    for table_name, column_name in {
+        ("tax_master_version", "tax_rate"),
+        ("tax_master_version", "average_tax_burden_rate_3y"),
+        ("detection_record", "rate_value"),
+    }:
+        rate_type = _column(engine, table_name, column_name)["type"]
+        assert isinstance(rate_type, NUMERIC)
+        assert (rate_type.precision, rate_type.scale) == (20, 12)
+
+    for table_name in {
+        "ingest_batch",
+        "source_record",
+        "tax_master_version",
+        "accounting_snapshot",
+        "snapshot_source",
+        "detection_record",
+        "risk_case",
+    }:
+        columns = {column["name"] for column in inspect(engine).get_columns(table_name)}
+        assert {"currency", "amount_scale"} <= columns
+
+    for table_name, column_name in {
+        ("source_record", "lineage"),
+        ("snapshot_source", "lineage"),
+        ("detection_record", "lineage"),
+        ("detection_record", "formula_substitution"),
+    }:
+        assert isinstance(_column(engine, table_name, column_name)["type"], JSONB)
+
+
+def test_foreign_keys_cover_lineage_and_control_plane_relationships(engine: Engine) -> None:
+    expected_foreign_keys = {
+        "ingest_error": {("batch_id", "ingest_batch")},
+        "source_record": {("batch_id", "ingest_batch"), ("company_id", "company")},
+        "tax_master_version": {("company_id", "company"), ("source_batch_id", "ingest_batch")},
+        "accounting_snapshot": {
+            ("company_id", "company"),
+            ("tax_master_version_id", "tax_master_version"),
+        },
+        "snapshot_source": {
+            ("snapshot_id", "accounting_snapshot"),
+            ("ingest_batch_id", "ingest_batch"),
+        },
+        "snapshot_set_member": {
+            ("snapshot_set_id", "snapshot_set"),
+            ("company_id", "company"),
+            ("snapshot_id", "accounting_snapshot"),
+        },
+        "monitoring_run": {
+            ("snapshot_set_id", "snapshot_set"),
+            ("rule_version_id", "rule_version"),
+        },
+        "detection_record": {
+            ("run_id", "monitoring_run"),
+            ("company_id", "company"),
+            ("snapshot_id", "accounting_snapshot"),
+            ("rule_version_id", "rule_version"),
+            ("tax_master_version_id", "tax_master_version"),
+        },
+        "risk_case": {("company_id", "company"), ("latest_detection_id", "detection_record")},
+        "review_action": {("risk_case_id", "risk_case")},
+    }
+
+    inspector = inspect(engine)
+    for table_name, expected in expected_foreign_keys.items():
+        actual = {
+            (foreign_key["constrained_columns"][0], foreign_key["referred_table"])
+            for foreign_key in inspector.get_foreign_keys(table_name)
+        }
+        assert expected <= actual
+
+
+def test_company_consistent_lineage_uses_composite_foreign_keys(engine: Engine) -> None:
+    inspector = inspect(engine)
+    accounting_snapshot_foreign_keys = inspector.get_foreign_keys("accounting_snapshot")
+    detection_foreign_keys = inspector.get_foreign_keys("detection_record")
+
+    assert any(
+        foreign_key["constrained_columns"] == ["tax_master_version_id", "company_id"]
+        and foreign_key["referred_table"] == "tax_master_version"
+        and foreign_key["referred_columns"] == ["id", "company_id"]
+        for foreign_key in accounting_snapshot_foreign_keys
+    )
+    assert any(
+        foreign_key["constrained_columns"]
+        == ["snapshot_id", "company_id", "tax_master_version_id"]
+        and foreign_key["referred_table"] == "accounting_snapshot"
+        and foreign_key["referred_columns"]
+        == ["id", "company_id", "tax_master_version_id"]
+        for foreign_key in detection_foreign_keys
+    )
+
+
+def test_quarterly_detection_schema_freezes_master_and_outcome_fields(engine: Engine) -> None:
+    accounting_snapshot_columns = {
+        column["name"]: column for column in inspect(engine).get_columns("accounting_snapshot")
+    }
+    detection_columns = {
+        column["name"]: column for column in inspect(engine).get_columns("detection_record")
+    }
+
+    assert accounting_snapshot_columns["tax_master_version_id"]["nullable"] is False
+    assert detection_columns["tax_master_version_id"]["nullable"] is False
+    assert detection_columns["alert_code"]["nullable"] is True
+    assert detection_columns["direction"]["nullable"] is True
+
+    review_status_type = _column(engine, "review_action", "from_status")["type"]
+    assert getattr(review_status_type, "name", None) == "risk_case_status"
+
+
+def test_repositories_import_cleanly_in_a_fresh_interpreter() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tax_risk.persistence.repositories import UnitOfWork; "
+            "assert UnitOfWork.__name__ == 'UnitOfWork'",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_models_import_registers_every_table_in_a_fresh_interpreter() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tax_risk.persistence.models import Base; "
+            f"expected = {EXPECTED_TABLES!r}; "
+            "actual = set(Base.metadata.tables); "
+            "assert actual == expected, f'expected {expected!r}, got {actual!r}'",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "direct_import",
+    [
+        "from tax_risk.persistence.ingest_models import Company; "
+        "from tax_risk.persistence.models import Base",
+        "from tax_risk.persistence.repositories import UnitOfWork; "
+        "from tax_risk.persistence.models import Base",
+        "from tax_risk.db import Base",
+    ],
+    ids=["focused-model", "repositories", "db"],
+)
+def test_every_persistence_import_path_registers_complete_metadata(
+    direct_import: str,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"{direct_import}; "
+            f"expected = {EXPECTED_TABLES!r}; "
+            "actual = set(Base.metadata.tables); "
+            "assert actual == expected, f'expected {expected!r}, got {actual!r}'",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def _run_alembic(database_url: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(BACKEND_ROOT / "alembic.ini"),
+            *arguments,
+        ],
+        cwd=BACKEND_ROOT,
+        env=os.environ | {"DATABASE_URL": database_url},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_alembic_current_accepts_a_percent_encoded_database_url(
+    isolated_database_url: str,
+) -> None:
+    encoded_url = (
+        make_url(isolated_database_url)
+        .update_query_dict({"application_name": "tax risk"})
+        .render_as_string(hide_password=False)
+        .replace("application_name=tax+risk", "application_name=tax%20risk")
+    )
+    assert "application_name=tax%20risk" in encoded_url
+    completed = _run_alembic(encoded_url, "current")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "0001_control_plane (head)" in completed.stdout
+
+
+def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
+    isolated_database_url: str,
+) -> None:
+    before = _run_alembic(isolated_database_url, "check")
+    assert before.returncode == 0, before.stderr
+
+    downgrade = _run_alembic(isolated_database_url, "downgrade", "base")
+    assert downgrade.returncode == 0, downgrade.stderr
+
+    upgrade = _run_alembic(isolated_database_url, "upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+
+    after = _run_alembic(isolated_database_url, "check")
+    assert after.returncode == 0, after.stderr
+
+
+def test_database_is_at_control_plane_revision(engine: Engine) -> None:
+    with engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    assert revision == "0001_control_plane"
