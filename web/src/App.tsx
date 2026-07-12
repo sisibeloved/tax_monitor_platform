@@ -1,5 +1,7 @@
 import { Layout, Typography } from "antd";
 
+import { QuarterlyDashboardPage } from "./features/quarterly/QuarterlyDashboardPage";
+
 const { Content, Header } = Layout;
 
 export default function App() {
@@ -10,7 +12,9 @@ export default function App() {
           集团所得税风险监测
         </Typography.Title>
       </Header>
-      <Content style={{ padding: 24 }} />
+      <Content style={{ padding: 24 }}>
+        <QuarterlyDashboardPage />
+      </Content>
     </Layout>
   );
 }
