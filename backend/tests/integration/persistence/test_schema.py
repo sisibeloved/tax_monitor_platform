@@ -61,7 +61,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0005_quarterly_batch_state"
+    assert revision == "0006_review_action_assignee"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -330,6 +330,24 @@ def test_quarterly_detection_schema_freezes_master_and_outcome_fields(engine: En
         if foreign_key["constrained_columns"] == ["run_id"]
     )
     assert run_foreign_key["options"].get("ondelete") == "RESTRICT"
+
+
+def test_review_action_assignment_owner_is_nullable_and_action_scoped(
+    engine: Engine,
+) -> None:
+    assignee = _column(engine, "review_action", "assignee")
+    constraints = {
+        constraint["name"]: constraint["sqltext"]
+        for constraint in inspect(engine).get_check_constraints("review_action")
+    }
+
+    assert assignee["nullable"] is True
+    assert getattr(assignee["type"], "length", None) == 256
+    contract = constraints["ck_review_action_assignee_action"]
+    assert "assignee IS NULL" in contract
+    assert "action" in contract
+    assert "ASSIGN" in contract
+    assert "btrim" in contract
 
 
 def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: Engine) -> None:
@@ -779,7 +797,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0005_quarterly_batch_state (head)" in completed.stdout
+    assert "0006_review_action_assignee (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -802,7 +820,7 @@ def test_database_is_at_control_plane_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0005_quarterly_batch_state"
+    assert revision == "0006_review_action_assignee"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

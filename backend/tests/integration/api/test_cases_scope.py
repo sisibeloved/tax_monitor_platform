@@ -421,7 +421,12 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
     audit_write = client.post(
         f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
         headers=_principal_headers(subject="audit-reader", roles=("audit",)),
-        json={"action": "ASSIGN", "to_status": "ASSIGNED", "reason": "not allowed"},
+        json={
+            "action": "ASSIGN",
+            "to_status": "ASSIGNED",
+            "reason": "not allowed",
+            "assignee": "audit-cannot-assign@example.com",
+        },
     )
     mixed_audit_write = client.post(
         f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
@@ -429,7 +434,12 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
             subject="mixed-audit-reader",
             roles=("audit", "group-tax"),
         ),
-        json={"action": "ASSIGN", "to_status": "ASSIGNED", "reason": "not allowed"},
+        json={
+            "action": "ASSIGN",
+            "to_status": "ASSIGNED",
+            "reason": "not allowed",
+            "assignee": "mixed-audit-cannot-assign@example.com",
+        },
     )
     mismatched_action = client.post(
         f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
@@ -449,6 +459,35 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
             "reason": "unknown action",
         },
     )
+    missing_assignee = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[0]}/actions",
+        headers=_principal_headers(subject="group-reviewer", roles=("group-tax",)),
+        json={
+            "action": "ASSIGN",
+            "to_status": "ASSIGNED",
+            "reason": "assignment must name its owner",
+        },
+    )
+    blank_assignee = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[0]}/actions",
+        headers=_principal_headers(subject="group-reviewer", roles=("group-tax",)),
+        json={
+            "action": "ASSIGN",
+            "to_status": "ASSIGNED",
+            "reason": "assignment must name its owner",
+            "assignee": "   ",
+        },
+    )
+    non_assign_with_assignee = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
+        headers=_principal_headers(subject="group-reviewer", roles=("group-tax",)),
+        json={
+            "action": "CLOSE",
+            "to_status": "ASSIGNED",
+            "reason": "only assignment can name an owner",
+            "assignee": "should-not-be-stored@example.com",
+        },
+    )
     hidden = client.post(
         f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
         headers=_principal_headers(
@@ -456,7 +495,12 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
             roles=("company-finance",),
             allowed_company_ids=(seed.company_ids[0],),
         ),
-        json={"action": "ASSIGN", "to_status": "ASSIGNED", "reason": "hidden"},
+        json={
+            "action": "ASSIGN",
+            "to_status": "ASSIGNED",
+            "reason": "hidden",
+            "assignee": "hidden-owner@example.com",
+        },
     )
 
     assert assigned.status_code == 200, assigned.text
@@ -469,12 +513,15 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
     assert mismatched_action.status_code == 409
     assert mismatched_action.json()["detail"]["code"] == "ACTION_TRANSITION_MISMATCH"
     assert unknown_action.status_code == 422
+    assert missing_assignee.status_code == 422
+    assert blank_assignee.status_code == 422
+    assert non_assign_with_assignee.status_code == 422
     assert hidden.status_code == 404
     with engine.connect() as connection:
         action = connection.execute(
             text(
                 """
-                SELECT actor, actor_role, from_status, action, to_status, reason
+                SELECT actor, actor_role, from_status, action, to_status, reason, assignee
                 FROM review_action WHERE risk_case_id = :case_id
                 """
             ),
@@ -487,6 +534,7 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
         "action": "ASSIGN",
         "to_status": "ASSIGNED",
         "reason": "assign quarterly variance",
+        "assignee": "case-owner@example.com",
     }
 
 

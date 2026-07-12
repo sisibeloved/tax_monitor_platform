@@ -6,7 +6,14 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from tax_risk.persistence.ingest_models import IngestBatchStatus, IngestMode
 from tax_risk.persistence.master_models import VersionStatus
@@ -322,6 +329,20 @@ class RiskCaseActionRequest(BaseModel):
         if not stripped:
             raise ValueError("value must not be blank")
         return stripped
+
+    @field_validator("assignee")
+    @classmethod
+    def strip_case_assignee(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+    @model_validator(mode="after")
+    def validate_assignee_action_contract(self) -> RiskCaseActionRequest:
+        if self.action == RiskCaseAction.ASSIGN:
+            if not self.assignee:
+                raise ValueError("ASSIGN requires a non-empty assignee")
+        elif self.assignee is not None:
+            raise ValueError("assignee is allowed only for ASSIGN")
+        return self
 
 
 class RiskCaseActionResponse(BaseModel):

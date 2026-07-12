@@ -203,7 +203,7 @@ def dashboard_api_resources(
                 "NOT_CALCULABLE",
                 None,
                 None,
-                "NON_POSITIVE_REVENUE",
+                "REVENUE_NON_POSITIVE",
                 None,
                 None,
             ),
@@ -575,5 +575,5 @@ def test_detection_detail_preserves_exact_values_lineage_and_not_calculable_reas
     assert not_calculable["difference_amount"] is None
     assert not_calculable["tax_burden_rate"] is None
     assert not_calculable["tax_burden_deviation"] is None
-    assert not_calculable["not_calculated_reason"] == "NON_POSITIVE_REVENUE"
+    assert not_calculable["not_calculated_reason"] == "REVENUE_NON_POSITIVE"
     assert hidden.status_code == 404

@@ -349,7 +349,13 @@ class RiskCase(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
 
 class ReviewAction(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     __tablename__ = "review_action"
-    __table_args__ = (Index("ix_review_action_case_id", "risk_case_id"),)
+    __table_args__ = (
+        CheckConstraint(
+            "assignee IS NULL OR (action = 'ASSIGN' AND btrim(assignee) <> '')",
+            name="assignee_action",
+        ),
+        Index("ix_review_action_case_id", "risk_case_id"),
+    )
 
     risk_case_id: Mapped[UUID] = mapped_column(
         ForeignKey("risk_case.id", ondelete="RESTRICT"), nullable=False
@@ -360,6 +366,7 @@ class ReviewAction(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         Enum(RiskCaseStatus, name="risk_case_status", create_type=False), nullable=False
     )
     action: Mapped[str] = mapped_column(String(128), nullable=False)
+    assignee: Mapped[str | None] = mapped_column(String(256))
     to_status: Mapped[RiskCaseStatus] = mapped_column(
         Enum(RiskCaseStatus, name="risk_case_status", create_type=False), nullable=False
     )

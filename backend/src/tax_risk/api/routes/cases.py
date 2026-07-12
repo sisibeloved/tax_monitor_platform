@@ -223,6 +223,7 @@ def apply_case_action(
                 actor_role=actor_role(principal),
                 from_status=RiskCaseStatus(from_status.value),
                 action=body.action.value,
+                assignee=body.assignee,
                 to_status=risk_case.status,
                 reason=body.reason,
                 attachment_refs=list(body.attachment_refs),
