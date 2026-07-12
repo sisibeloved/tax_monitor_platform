@@ -34,6 +34,7 @@ EXPECTED_TABLES = {
     "snapshot_set_member",
     "rule_version",
     "monitoring_run",
+    "monitoring_run_company",
     "detection_record",
     "risk_case",
     "review_action",
@@ -60,7 +61,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0004_quarterly_detection"
+    assert revision == "0005_quarterly_batch_state"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -110,6 +111,7 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
         "snapshot_status",
         "snapshot_set_status",
         "monitoring_run_status",
+        "monitoring_run_company_status",
         "calculation_status",
         "risk_case_status",
     } <= enum_names
@@ -140,6 +142,10 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
         (
             "monitor_type",
             ["ACCRUAL_ACCURACY", "TAX_BURDEN", "POTENTIAL_TAX_COST"],
+        ),
+        (
+            "monitoring_run_company_status",
+            ["PENDING", "RUNNING", "SUCCEEDED", "BLOCKED", "FAILED"],
         ),
         (
             "risk_case_status",
@@ -252,6 +258,10 @@ def test_foreign_keys_cover_lineage_and_control_plane_relationships(engine: Engi
             ("snapshot_set_id", "snapshot_set"),
             ("rule_version_id", "rule_version"),
         },
+        "monitoring_run_company": {
+            ("run_id", "monitoring_run"),
+            ("snapshot_set_member_id", "snapshot_set_member"),
+        },
         "detection_record": {
             ("run_id", "monitoring_run"),
             ("company_id", "company"),
@@ -313,6 +323,40 @@ def test_quarterly_detection_schema_freezes_master_and_outcome_fields(engine: En
         if foreign_key["constrained_columns"] == ["run_id"]
     )
     assert run_foreign_key["options"].get("ondelete") == "RESTRICT"
+
+
+def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: Engine) -> None:
+    columns = {
+        column["name"]: column
+        for column in inspect(engine).get_columns("monitoring_run_company")
+    }
+    assert {
+        "run_id",
+        "snapshot_set_member_id",
+        "status",
+        "attempt_count",
+        "retryable",
+        "celery_task_id",
+        "started_at",
+        "finished_at",
+        "error_code",
+        "error_message",
+        "detection_ids",
+        "case_ids",
+    } <= columns.keys()
+    assert isinstance(columns["detection_ids"]["type"], JSONB)
+    assert isinstance(columns["case_ids"]["type"], JSONB)
+
+    uniques = inspect(engine).get_unique_constraints("monitoring_run_company")
+    assert any(
+        unique["column_names"] == ["run_id", "snapshot_set_member_id"]
+        for unique in uniques
+    )
+    index_columns = {
+        tuple(index["column_names"])
+        for index in inspect(engine).get_indexes("monitoring_run_company")
+    }
+    assert ("run_id", "status") in index_columns
 
 
 def test_quarterly_rule_seed_records_0004_migration_provenance(engine: Engine) -> None:
@@ -696,7 +740,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0004_quarterly_detection (head)" in completed.stdout
+    assert "0005_quarterly_batch_state (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -719,7 +763,7 @@ def test_database_is_at_control_plane_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0004_quarterly_detection"
+    assert revision == "0005_quarterly_batch_state"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

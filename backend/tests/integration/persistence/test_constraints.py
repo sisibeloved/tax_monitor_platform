@@ -675,6 +675,105 @@ def test_monitoring_run_with_detection_is_protected_by_restrict_foreign_key(
 
 
 @pytest.mark.parametrize(
+    ("status", "attempt_count", "retryable", "started_at", "finished_at", "error_code"),
+    [
+        ("PENDING", -1, False, None, None, None),
+        (
+            "SUCCEEDED",
+            1,
+            True,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:01:00+00:00",
+            None,
+        ),
+        (
+            "FAILED",
+            1,
+            False,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:01:00+00:00",
+            "UNEXPECTED_COMPANY_FAILURE",
+        ),
+    ],
+    ids=["negative-attempt", "successful-retryable", "failed-not-retryable"],
+)
+def test_monitoring_run_company_rejects_invalid_retry_state(
+    connection: Connection,
+    status: str,
+    attempt_count: int,
+    retryable: bool,
+    started_at: str | None,
+    finished_at: str | None,
+    error_code: str | None,
+) -> None:
+    company_id = _insert_company(connection, code=f"RUN-COMPANY-{uuid4().hex}")
+    master_id = _insert_tax_master(connection, company_id)
+    snapshot_id = _insert_snapshot(
+        connection,
+        company_id,
+        status="PUBLISHED",
+        tax_master_version_id=master_id,
+    )
+    snapshot_set_id = _insert_snapshot_set(
+        connection,
+        set_key=f"RUN-COMPANY-SET-{uuid4().hex}",
+    )
+    member_id = connection.execute(
+        text(
+            """
+            INSERT INTO snapshot_set_member (snapshot_set_id, company_id, snapshot_id)
+            VALUES (:set_id, :company_id, :snapshot_id)
+            RETURNING id
+            """
+        ),
+        {
+            "set_id": snapshot_set_id,
+            "company_id": company_id,
+            "snapshot_id": snapshot_id,
+        },
+    ).scalar_one()
+    rule_version_id = _insert_rule_version(
+        connection,
+        rule_code=f"RUN-COMPANY-RULE-{uuid4().hex}",
+    )
+    run_id = _insert_monitoring_run(
+        connection,
+        snapshot_set_id,
+        rule_version_id,
+        run_key=f"RUN-COMPANY-{uuid4().hex}",
+    )
+
+    with pytest.raises(IntegrityError):
+        connection.execute(
+            text(
+                """
+                INSERT INTO monitoring_run_company (
+                    run_id, snapshot_set_member_id, status, attempt_count, retryable,
+                    celery_task_id, started_at, finished_at, error_code, error_message
+                ) VALUES (
+                    :run_id, :member_id, :status, :attempt_count, :retryable,
+                    :task_id,
+                    CAST(:started_at AS timestamptz), CAST(:finished_at AS timestamptz),
+                    :error_code, :error_message
+                )
+                """
+            ),
+            {
+                "run_id": run_id,
+                "member_id": member_id,
+                "status": status,
+                "attempt_count": attempt_count,
+                "retryable": retryable,
+                "task_id": None if status == "PENDING" else "task-invalid",
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "error_code": error_code,
+                "error_message": None if error_code is None else "failure",
+            },
+        )
+
+
+@pytest.mark.parametrize(
     ("result_amount", "not_calculated_reason"),
     [("10.00", "calculation failed"), (None, None)],
     ids=["failed-with-result", "failed-without-reason"],

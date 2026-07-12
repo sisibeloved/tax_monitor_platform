@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -37,6 +38,14 @@ class MonitoringRunStatus(StrEnum):
     RUNNING = "RUNNING"
     PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
     SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class MonitoringRunCompanyStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    BLOCKED = "BLOCKED"
     FAILED = "FAILED"
 
 
@@ -104,6 +113,96 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "monitoring_run_company"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "snapshot_set_member_id",
+            name="uq_monitoring_run_company_run_member",
+        ),
+        CheckConstraint("attempt_count >= 0", name="nonnegative_attempt_count"),
+        CheckConstraint(
+            "jsonb_typeof(detection_ids) = 'array' AND jsonb_typeof(case_ids) = 'array'",
+            name="result_ids_are_arrays",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR (started_at IS NOT NULL AND finished_at >= started_at)",
+            name="attempt_time_order",
+        ),
+        CheckConstraint(
+            "(status = 'PENDING' AND retryable = false "
+            "AND celery_task_id IS NULL AND started_at IS NULL AND finished_at IS NULL "
+            "AND error_code IS NULL AND error_message IS NULL "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
+            "(status = 'RUNNING' AND attempt_count > 0 AND retryable = false "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NULL "
+            "AND error_code IS NULL AND error_message IS NULL "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
+            "(status = 'SUCCEEDED' AND attempt_count > 0 AND retryable = false "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "AND error_code IS NULL AND error_message IS NULL) OR "
+            "(status = 'BLOCKED' AND attempt_count > 0 AND retryable = false "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND btrim(error_code) <> '' "
+            "AND error_message IS NOT NULL AND btrim(error_message) <> '' "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
+            "(status = 'FAILED' AND attempt_count > 0 AND retryable = true "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND btrim(error_code) <> '' "
+            "AND error_message IS NOT NULL AND btrim(error_message) <> '' "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb)",
+            name="lifecycle_state",
+        ),
+        Index("ix_monitoring_run_company_run_status", "run_id", "status"),
+        Index(
+            "ix_monitoring_run_company_snapshot_set_member_id",
+            "snapshot_set_member_id",
+        ),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("monitoring_run.id", ondelete="CASCADE"), nullable=False
+    )
+    snapshot_set_member_id: Mapped[UUID] = mapped_column(
+        ForeignKey("snapshot_set_member.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[MonitoringRunCompanyStatus] = mapped_column(
+        Enum(MonitoringRunCompanyStatus, name="monitoring_run_company_status"),
+        nullable=False,
+        server_default=text("'PENDING'"),
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("0"),
+    )
+    retryable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    celery_task_id: Mapped[str | None] = mapped_column(String(255))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    detection_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    case_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
 
 
 class DetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
@@ -271,6 +370,8 @@ __all__ = [
     "DetectionRecord",
     "MonitorType",
     "MonitoringRun",
+    "MonitoringRunCompany",
+    "MonitoringRunCompanyStatus",
     "MonitoringRunStatus",
     "MonitoringRunType",
     "ReviewAction",
