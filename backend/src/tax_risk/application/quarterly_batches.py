@@ -189,8 +189,19 @@ class QuarterlyBatchService:
             uow.commit()
             return plan
 
-    def run_company(self, *, run_company_id: UUID, task_id: str) -> dict[str, object]:
-        if not isinstance(run_company_id, UUID) or not isinstance(task_id, str) or not task_id.strip():
+    def run_company(
+        self,
+        *,
+        run_company_id: UUID,
+        task_id: str,
+        automatic_retry_pending: bool = False,
+    ) -> dict[str, object]:
+        if (
+            not isinstance(run_company_id, UUID)
+            or not isinstance(task_id, str)
+            or not task_id.strip()
+            or not isinstance(automatic_retry_pending, bool)
+        ):
             raise QuarterlyBatchError(
                 "INVALID_RUN_COMPANY_REQUEST",
                 "run_company_id must be a UUID and task_id must be non-empty",
@@ -217,11 +228,7 @@ class QuarterlyBatchService:
                 )
             normalized_task_id = task_id.strip()
             automatic_retry = (
-                run_company.status
-                in {
-                    MonitoringRunCompanyStatus.FAILED,
-                    MonitoringRunCompanyStatus.RETRY_PENDING,
-                }
+                run_company.status == MonitoringRunCompanyStatus.RETRY_PENDING
                 and run_company.retryable
                 and run_company.celery_task_id == normalized_task_id
             )
@@ -259,63 +266,15 @@ class QuarterlyBatchService:
             except QuarterlyRunError as error:
                 _finish_blocked(run_company, error)
             except Exception as error:
-                _finish_failed(run_company, error)
+                if automatic_retry_pending:
+                    _finish_retry_pending(run_company, error)
+                else:
+                    _finish_failed(run_company, error)
             else:
                 _finish_succeeded(run_company, raw_result)
             outcome = _company_outcome(run_company)
             uow.commit()
             return outcome
-
-    def prepare_automatic_retry(
-        self,
-        *,
-        run_company_id: UUID,
-        task_id: str,
-    ) -> bool:
-        """Reserve a retryable failed row for its owning Celery task."""
-
-        if not isinstance(run_company_id, UUID) or not isinstance(task_id, str) or not task_id.strip():
-            raise QuarterlyBatchError(
-                "INVALID_RUN_COMPANY_REQUEST",
-                "run_company_id must be a UUID and task_id must be non-empty",
-            )
-        normalized_task_id = task_id.strip()
-        with self._uow_factory() as uow:
-            candidate = uow.risks.get_run_company(run_company_id)
-            if candidate is None:
-                raise QuarterlyBatchError(
-                    "RUN_COMPANY_NOT_FOUND",
-                    f"run company {run_company_id} was not found",
-                )
-            run = uow.risks.get_run(candidate.run_id, for_share=True)
-            if run is None:
-                raise QuarterlyBatchError(
-                    "MONITORING_RUN_NOT_FOUND",
-                    f"run {candidate.run_id} was not found",
-                )
-            run_company = uow.risks.get_run_company(run_company_id, for_update=True)
-            if run_company is None or run_company.run_id != run.id:
-                raise QuarterlyBatchError(
-                    "RUN_COMPANY_IDENTITY_MISMATCH",
-                    "run-company state changed while its parent run was locked",
-                )
-            owned = run_company.celery_task_id == normalized_task_id
-            if (
-                run_company.status == MonitoringRunCompanyStatus.RETRY_PENDING
-                and run_company.retryable
-                and owned
-            ):
-                return True
-            if (
-                run.status != MonitoringRunStatus.RUNNING
-                or run_company.status != MonitoringRunCompanyStatus.FAILED
-                or not run_company.retryable
-                or not owned
-            ):
-                return False
-            run_company.status = MonitoringRunCompanyStatus.RETRY_PENDING
-            uow.commit()
-            return True
 
     def reconcile_header_results(
         self,
@@ -604,6 +563,18 @@ def _finish_failed(run_company: MonitoringRunCompany, error: Exception) -> None:
         error_code="UNEXPECTED_COMPANY_FAILURE",
         error_message=_error_message(error),
     )
+
+
+def _finish_retry_pending(
+    run_company: MonitoringRunCompany,
+    error: Exception,
+) -> None:
+    _finish_failed_values(
+        run_company,
+        error_code="UNEXPECTED_COMPANY_FAILURE",
+        error_message=_error_message(error),
+    )
+    run_company.status = MonitoringRunCompanyStatus.RETRY_PENDING
 
 
 def _finish_failed_values(

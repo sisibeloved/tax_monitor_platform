@@ -16,14 +16,13 @@ SUMMARIZE_BATCH_TASK = "tax_risk.workers.quarterly_batch.summarize_quarterly_bat
 class QuarterlyBatchService(Protocol):
     """Application boundary used by the Celery adapter."""
 
-    def run_company(self, *, run_company_id: UUID, task_id: str) -> dict[str, object]: ...
-
-    def prepare_automatic_retry(
+    def run_company(
         self,
         *,
         run_company_id: UUID,
         task_id: str,
-    ) -> bool: ...
+        automatic_retry_pending: bool = False,
+    ) -> dict[str, object]: ...
 
     def reconcile_header_results(
         self,
@@ -80,6 +79,7 @@ def register_quarterly_tasks(
             outcome = service.run_company(
                 run_company_id=parsed_run_company_id,
                 task_id=str(task_id),
+                automatic_retry_pending=(task.request.retries < max_retries),
             )
         except Exception as error:
             if task.request.retries < max_retries:
@@ -94,30 +94,17 @@ def register_quarterly_tasks(
                 task_id=str(task_id),
             )
         if (
-            outcome.get("status") == "FAILED"
+            outcome.get("status") == "RETRY_PENDING"
             and outcome.get("retryable") is True
             and outcome.get("task_id") == str(task_id)
             and task.request.retries < max_retries
         ):
-            try:
-                prepared = service.prepare_automatic_retry(
-                    run_company_id=parsed_run_company_id,
-                    task_id=str(task_id),
-                )
-            except Exception as error:
-                _retry_company_task(
-                    task,
-                    error=error,
-                    retry_backoff=retry_backoff,
-                    retry_backoff_max=retry_backoff_max,
-                )
-            if prepared:
-                _retry_company_task(
-                    task,
-                    error=RuntimeError("retryable quarterly company result"),
-                    retry_backoff=retry_backoff,
-                    retry_backoff_max=retry_backoff_max,
-                )
+            _retry_company_task(
+                task,
+                error=RuntimeError("retryable quarterly company result"),
+                retry_backoff=retry_backoff,
+                retry_backoff_max=retry_backoff_max,
+            )
         return outcome
 
     @app.task(  # type: ignore[untyped-decorator]

@@ -20,7 +20,14 @@ class _RecordingBatchService:
     )
     summary_calls: list[UUID] = field(default_factory=list)
 
-    def run_company(self, *, run_company_id: UUID, task_id: str) -> dict[str, object]:
+    def run_company(
+        self,
+        *,
+        run_company_id: UUID,
+        task_id: str,
+        automatic_retry_pending: bool = False,
+    ) -> dict[str, object]:
+        del automatic_retry_pending
         self.company_calls.append((run_company_id, task_id))
         return {
             "run_company_id": str(run_company_id),
@@ -109,8 +116,14 @@ class _BoundaryFailureService:
     )
     summary_calls: list[UUID] = field(default_factory=list)
 
-    def run_company(self, *, run_company_id: UUID, task_id: str) -> dict[str, object]:
-        del run_company_id, task_id
+    def run_company(
+        self,
+        *,
+        run_company_id: UUID,
+        task_id: str,
+        automatic_retry_pending: bool = False,
+    ) -> dict[str, object]:
+        del run_company_id, task_id, automatic_retry_pending
         raise RuntimeError("database boundary unavailable")
 
     def reconcile_header_results(
@@ -164,16 +177,23 @@ def test_exhausted_boundary_failure_returns_emergency_result_and_summarizes() ->
 
 @dataclass
 class _RetryThenSuccessService:
-    run_company_calls: list[tuple[UUID, str]] = field(default_factory=list)
-    prepare_calls: list[tuple[UUID, str]] = field(default_factory=list)
+    run_company_calls: list[tuple[UUID, str, bool]] = field(default_factory=list)
     reconcile_calls: list[list[dict[str, object]]] = field(default_factory=list)
 
-    def run_company(self, *, run_company_id: UUID, task_id: str) -> dict[str, object]:
-        self.run_company_calls.append((run_company_id, task_id))
+    def run_company(
+        self,
+        *,
+        run_company_id: UUID,
+        task_id: str,
+        automatic_retry_pending: bool = False,
+    ) -> dict[str, object]:
+        self.run_company_calls.append(
+            (run_company_id, task_id, automatic_retry_pending)
+        )
         if len(self.run_company_calls) == 1:
             return {
                 "run_company_id": str(run_company_id),
-                "status": "FAILED",
+                "status": "RETRY_PENDING",
                 "retryable": True,
                 "task_id": task_id,
                 "detection_ids": [],
@@ -189,15 +209,6 @@ class _RetryThenSuccessService:
             "case_ids": [],
             "error_code": None,
         }
-
-    def prepare_automatic_retry(
-        self,
-        *,
-        run_company_id: UUID,
-        task_id: str,
-    ) -> bool:
-        self.prepare_calls.append((run_company_id, task_id))
-        return True
 
     def reconcile_header_results(
         self,
@@ -241,7 +252,7 @@ def test_retryable_failed_result_retries_with_same_task_id_then_succeeds() -> No
         run_company_id,
     ]
     assert service.run_company_calls[0][1] == service.run_company_calls[1][1]
-    assert service.prepare_calls == [service.run_company_calls[0]]
+    assert [value[2] for value in service.run_company_calls] == [True, False]
     assert len(service.reconcile_calls) == 1
     assert service.reconcile_calls[0][0]["status"] == "SUCCEEDED"
 
@@ -251,7 +262,14 @@ class _SummaryRetryService:
     reconcile_attempts: int = 0
     summary_calls: int = 0
 
-    def run_company(self, *, run_company_id: UUID, task_id: str) -> dict[str, object]:
+    def run_company(
+        self,
+        *,
+        run_company_id: UUID,
+        task_id: str,
+        automatic_retry_pending: bool = False,
+    ) -> dict[str, object]:
+        del automatic_retry_pending
         return {
             "run_company_id": str(run_company_id),
             "status": "SUCCEEDED",

@@ -331,8 +331,12 @@ def test_same_celery_task_can_retry_a_persisted_failed_company_attempt(
             {"run_id": plan.run_id, "snapshot_id": seed.failed_snapshot_id},
         ).scalar_one()
 
-    first = service.run_company(run_company_id=run_company_id, task_id="celery-same-id")
-    assert first["status"] == "FAILED"
+    first = service.run_company(
+        run_company_id=run_company_id,
+        task_id="celery-same-id",
+        automatic_retry_pending=True,
+    )
+    assert first["status"] == "RETRY_PENDING"
     assert first["retryable"] is True
     failure_state.failed_snapshot_ids.clear()
 
@@ -449,23 +453,21 @@ def test_duplicate_canvas_cannot_finalize_while_owner_retry_is_pending(
             {"run_id": plan.run_id, "snapshot_id": seed.failed_snapshot_id},
         ).scalar_one()
 
-    failed = service.run_company(
+    retry_pending = service.run_company(
         run_company_id=owner_run_company_id,
         task_id="owner-task-a",
+        automatic_retry_pending=True,
     )
-    assert failed["status"] == "FAILED"
-    assert service.prepare_automatic_retry(
-        run_company_id=owner_run_company_id,
-        task_id="owner-task-a",
-    ) is True
-    assert service.prepare_automatic_retry(
-        run_company_id=owner_run_company_id,
-        task_id="foreign-task-b",
-    ) is False
-    assert service.prepare_automatic_retry(
-        run_company_id=owner_run_company_id,
-        task_id="owner-task-a",
-    ) is True
+    assert retry_pending["status"] == "RETRY_PENDING"
+    with engine.connect() as connection:
+        atomic_state = connection.execute(
+            text(
+                "SELECT status, attempt_count, celery_task_id "
+                "FROM monitoring_run_company WHERE id = :run_company_id"
+            ),
+            {"run_company_id": owner_run_company_id},
+        ).one()
+    assert tuple(atomic_state) == ("RETRY_PENDING", 1, "owner-task-a")
 
     settings = Settings(
         redis_url="redis://localhost:6379/15",
@@ -550,12 +552,12 @@ def test_emergency_failure_exhausted_during_retry_pending_becomes_failed(
             ),
             {"run_id": plan.run_id, "snapshot_id": seed.failed_snapshot_id},
         ).scalar_one()
-    first = service.run_company(run_company_id=run_company_id, task_id="retry-owner")
-    assert first["status"] == "FAILED"
-    assert service.prepare_automatic_retry(
+    first = service.run_company(
         run_company_id=run_company_id,
         task_id="retry-owner",
-    ) is True
+        automatic_retry_pending=True,
+    )
+    assert first["status"] == "RETRY_PENDING"
     foreign_emergency = {
         "run_company_id": str(run_company_id),
         "status": "FAILED",
