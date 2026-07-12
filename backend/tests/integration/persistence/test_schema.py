@@ -653,6 +653,36 @@ def _insert_pre_0004_tax_burden_detections(engine: Engine) -> tuple[object, obje
     return run_id, detection_ids[0], detection_ids[1]
 
 
+def _reference_pre_0004_detection_from_risk_case(
+    engine: Engine,
+    detection_id: object,
+) -> object:
+    with engine.begin() as connection:
+        company_id = connection.execute(
+            text("SELECT company_id FROM detection_record WHERE id = :detection_id"),
+            {"detection_id": detection_id},
+        ).scalar_one()
+        return connection.execute(
+            text(
+                """
+                INSERT INTO risk_case (
+                    fingerprint, company_id, latest_detection_id, monitor_type,
+                    status, risk_amount, currency, amount_scale, risk_direction,
+                    priority, lineage
+                ) VALUES (
+                    :fingerprint, :company_id, :detection_id, 'TAX_BURDEN',
+                    'NEW', 0.05, 'CNY', 2, 'HIGH', 3, '{}'::jsonb
+                ) RETURNING id
+                """
+            ),
+            {
+                "fingerprint": f"legacy-burden-case-{uuid4().hex}",
+                "company_id": company_id,
+                "detection_id": detection_id,
+            },
+        ).scalar_one()
+
+
 def test_alembic_current_accepts_a_percent_encoded_database_url(
     isolated_database_url: str,
 ) -> None:
@@ -794,6 +824,87 @@ def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:
                 },
             ).scalar_one()
         assert remaining == 0
+
+
+def test_0004_refuses_incomplete_legacy_burden_evidence_referenced_by_case() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0003 = _run_alembic(
+            database_url,
+            "upgrade",
+            "0003_tax_master_governance",
+        )
+        assert upgrade_0003.returncode == 0, upgrade_0003.stderr
+        _, _, incomplete_detection_id = _insert_pre_0004_tax_burden_detections(
+            isolated_engine
+        )
+        case_id = _reference_pre_0004_detection_from_risk_case(
+            isolated_engine,
+            incomplete_detection_id,
+        )
+        with isolated_engine.connect() as connection:
+            before_detection = connection.execute(
+                text(
+                    """
+                    SELECT calculation_status, result_amount, difference_amount,
+                           not_calculated_reason, alert_code, direction
+                    FROM detection_record WHERE id = :detection_id
+                    """
+                ),
+                {"detection_id": incomplete_detection_id},
+            ).mappings().one()
+            before_case = connection.execute(
+                text(
+                    """
+                    SELECT latest_detection_id, status, risk_amount, risk_direction
+                    FROM risk_case WHERE id = :case_id
+                    """
+                ),
+                {"case_id": case_id},
+            ).mappings().one()
+
+        upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+
+        assert upgrade_0004.returncode != 0
+        assert "LEGACY_TAX_BURDEN_CASE_EVIDENCE_INCOMPLETE" in upgrade_0004.stderr
+        with isolated_engine.connect() as connection:
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            after_detection = connection.execute(
+                text(
+                    """
+                    SELECT calculation_status, result_amount, difference_amount,
+                           not_calculated_reason, alert_code, direction
+                    FROM detection_record WHERE id = :detection_id
+                    """
+                ),
+                {"detection_id": incomplete_detection_id},
+            ).mappings().one()
+            after_case = connection.execute(
+                text(
+                    """
+                    SELECT latest_detection_id, status, risk_amount, risk_direction
+                    FROM risk_case WHERE id = :case_id
+                    """
+                ),
+                {"case_id": case_id},
+            ).mappings().one()
+
+        assert revision == "0003_tax_master_governance"
+        assert after_detection == before_detection == {
+            "calculation_status": "CALCULATED",
+            "result_amount": Decimal("0.110000000000"),
+            "difference_amount": None,
+            "not_calculated_reason": None,
+            "alert_code": "TAX_BURDEN_DEVIATION",
+            "direction": "HIGH",
+        }
+        assert after_case == before_case == {
+            "latest_detection_id": incomplete_detection_id,
+            "status": "NEW",
+            "risk_amount": Decimal("0.050000000000"),
+            "risk_direction": "HIGH",
+        }
 
 
 def test_0004_refuses_conflicting_fixed_rule_seed_without_overwriting_it() -> None:

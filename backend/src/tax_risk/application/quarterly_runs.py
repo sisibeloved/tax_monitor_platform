@@ -111,6 +111,13 @@ class _FrozenMaster:
 
 
 @dataclass(frozen=True, slots=True)
+class _ReplayContext:
+    run: MonitoringRun
+    snapshot_set: SnapshotSet
+    snapshot: AccountingSnapshot
+
+
+@dataclass(frozen=True, slots=True)
 class _RunContext:
     run: MonitoringRun
     snapshot_set: SnapshotSet
@@ -156,12 +163,21 @@ class QuarterlyRunService:
 
         with self._uow_factory() as uow:
             _lock_scopes(uow, (f"quarterly-run:{run_id}:{snapshot_id}",))
-            context = _load_context(uow, run_id=run_id, snapshot_id=snapshot_id)
             existing = _existing_detections(uow, run_id, snapshot_id)
             if existing:
-                _assert_complete_retry(existing, context)
-                _assert_replayable_run_status(context.run)
-                replay_case_ids = _case_ids_for_detections(uow, context, existing)
+                replay_context = _load_replay_context(
+                    uow,
+                    run_id=run_id,
+                    snapshot_id=snapshot_id,
+                )
+                company_code = _assert_complete_retry(existing, replay_context)
+                _assert_replayable_run_status(replay_context.run)
+                replay_case_ids = _case_ids_for_detections(
+                    uow,
+                    replay_context.run,
+                    company_code,
+                    existing,
+                )
                 return QuarterlyRunResult(
                     run_id=run_id,
                     snapshot_id=snapshot_id,
@@ -171,6 +187,7 @@ class QuarterlyRunService:
                     case_ids=replay_case_ids,
                     replayed=True,
                 )
+            context = _load_context(uow, run_id=run_id, snapshot_id=snapshot_id)
             _assert_first_execution_status(context.run)
 
             inputs = _quarterly_inputs(context.snapshot, context.frozen_master)
@@ -254,12 +271,12 @@ def _lock_scopes(uow: UnitOfWork, scopes: Iterable[str]) -> None:
         )
 
 
-def _load_context(
+def _load_replay_context(
     uow: UnitOfWork,
     *,
     run_id: UUID,
     snapshot_id: UUID,
-) -> _RunContext:
+) -> _ReplayContext:
     run = uow.session.scalar(
         select(MonitoringRun)
         .where(MonitoringRun.id == run_id)
@@ -315,6 +332,28 @@ def _load_context(
             "MONITORING_RUN_PERIOD_MISMATCH",
             "run fiscal year and quarter must match the frozen snapshot period",
         )
+
+    return _ReplayContext(
+        run=run,
+        snapshot_set=snapshot_set,
+        snapshot=snapshot,
+    )
+
+
+def _load_context(
+    uow: UnitOfWork,
+    *,
+    run_id: UUID,
+    snapshot_id: UUID,
+) -> _RunContext:
+    replay = _load_replay_context(
+        uow,
+        run_id=run_id,
+        snapshot_id=snapshot_id,
+    )
+    run = replay.run
+    snapshot_set = replay.snapshot_set
+    snapshot = replay.snapshot
 
     company = uow.session.scalar(
         select(Company).where(Company.id == snapshot.company_id).with_for_update(read=True)
@@ -769,8 +808,8 @@ def _existing_detections(
 
 def _assert_complete_retry(
     detections: tuple[DetectionRecord, ...],
-    context: _RunContext,
-) -> None:
+    context: _ReplayContext,
+) -> str:
     by_monitor = _by_monitor(detections)
     if len(detections) != len(MONITOR_ORDER) or set(by_monitor) != set(MONITOR_ORDER):
         raise QuarterlyRunError(
@@ -780,9 +819,9 @@ def _assert_complete_retry(
     if any(
         detection.run_id != context.run.id
         or detection.snapshot_id != context.snapshot.id
-        or detection.company_id != context.company.id
-        or detection.rule_version_id != context.rule.id
-        or detection.tax_master_version_id != context.master.id
+        or detection.company_id != context.snapshot.company_id
+        or detection.rule_version_id != context.run.rule_version_id
+        or detection.tax_master_version_id != context.snapshot.tax_master_version_id
         or detection.currency != context.snapshot.currency
         or detection.amount_scale != context.snapshot.amount_scale
         for detection in detections
@@ -791,6 +830,45 @@ def _assert_complete_retry(
             "DETECTION_IDENTITY_MISMATCH",
             "existing detections do not match the run's frozen evidence identity",
         )
+    first_lineage = detections[0].lineage
+    if any(detection.lineage != first_lineage for detection in detections[1:]):
+        raise QuarterlyRunError(
+            "DETECTION_IDENTITY_MISMATCH",
+            "existing detections do not share one immutable frozen lineage",
+        )
+    company = first_lineage.get("company")
+    snapshot = first_lineage.get("snapshot")
+    rule = first_lineage.get("rule_version")
+    master = first_lineage.get("tax_master_version")
+    if not all(isinstance(value, dict) for value in (company, snapshot, rule, master)):
+        raise QuarterlyRunError(
+            "DETECTION_IDENTITY_MISMATCH",
+            "existing detections lack their immutable identity lineage",
+        )
+    assert isinstance(company, dict)
+    assert isinstance(snapshot, dict)
+    assert isinstance(rule, dict)
+    assert isinstance(master, dict)
+    company_code = company.get("company_code")
+    if (
+        not isinstance(company_code, str)
+        or not company_code.strip()
+        or company.get("id") != str(context.snapshot.company_id)
+        or snapshot.get("id") != str(context.snapshot.id)
+        or snapshot.get("period") != context.snapshot.period.isoformat()
+        or snapshot.get("checksum") != context.snapshot.checksum
+        or snapshot.get("source_version_set_hash") != context.snapshot.source_version_set_hash
+        or snapshot.get("snapshot_set_id") != str(context.snapshot_set.id)
+        or rule.get("id") != str(context.run.rule_version_id)
+        or master.get("id") != str(context.snapshot.tax_master_version_id)
+        or master.get("currency") != context.snapshot.currency
+        or master.get("amount_scale") != context.snapshot.amount_scale
+    ):
+        raise QuarterlyRunError(
+            "DETECTION_IDENTITY_MISMATCH",
+            "existing detection lineage does not match the frozen run identity",
+        )
+    return company_code
 
 
 def _assert_replayable_run_status(run: MonitoringRun) -> None:
@@ -822,14 +900,15 @@ def _by_monitor(
 
 def _case_ids_for_detections(
     uow: UnitOfWork,
-    context: _RunContext,
+    run: MonitoringRun,
+    company_code: str,
     detections: tuple[DetectionRecord, ...],
 ) -> tuple[UUID, ...]:
     fingerprints = tuple(
         case_fingerprint(
-            context.company.company_code,
-            context.run.fiscal_year,
-            context.run.quarter,
+            company_code,
+            run.fiscal_year,
+            run.quarter,
             detection.monitor_type.value,
         )
         for detection in (_by_monitor(detections)[monitor] for monitor in MONITOR_ORDER)
@@ -861,6 +940,10 @@ def _detection_lineage(context: _RunContext) -> dict[str, Any]:
             "frozen snapshot source and metric lineage must be lists",
         )
     return {
+        "company": {
+            "id": str(context.company.id),
+            "company_code": context.company.company_code,
+        },
         "snapshot": {
             "id": str(context.snapshot.id),
             "period": context.snapshot.period.isoformat(),

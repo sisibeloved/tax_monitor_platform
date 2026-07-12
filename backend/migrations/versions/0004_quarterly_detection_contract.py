@@ -70,6 +70,28 @@ def _manifest_definition() -> dict[str, object]:
 
 
 def upgrade() -> None:
+    incomplete_case_evidence = op.get_bind().execute(
+        sa.text(
+            """
+            SELECT detection_record.id AS detection_id, risk_case.id AS case_id
+            FROM detection_record
+            JOIN risk_case
+              ON risk_case.latest_detection_id = detection_record.id
+            WHERE detection_record.monitor_type = 'TAX_BURDEN'
+              AND detection_record.calculation_status = 'CALCULATED'
+              AND detection_record.difference_amount IS NULL
+            ORDER BY detection_record.id, risk_case.id
+            LIMIT 1
+            """
+        )
+    ).mappings().one_or_none()
+    if incomplete_case_evidence is not None:
+        raise RuntimeError(
+            "LEGACY_TAX_BURDEN_CASE_EVIDENCE_INCOMPLETE: "
+            f"detection {incomplete_case_evidence['detection_id']} is referenced by "
+            f"risk case {incomplete_case_evidence['case_id']}"
+        )
+
     existing_rule = op.get_bind().execute(
         sa.text(
             "SELECT id, status, effective_from, effective_to, definition, "

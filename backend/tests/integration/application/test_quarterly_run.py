@@ -702,6 +702,111 @@ def test_complete_detection_set_replays_after_run_reaches_a_terminal_status(
     assert replay.case_ids == first.case_ids
 
 
+@pytest.mark.parametrize("current_drift", ["master", "company"])
+def test_terminal_replay_uses_frozen_evidence_after_current_governance_drift(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+    current_drift: str,
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    first = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE monitoring_run SET status = 'SUCCEEDED' WHERE id = :run_id"),
+            {"run_id": seed.run_id},
+        )
+        if current_drift == "master":
+            connection.execute(
+                text("UPDATE tax_master_version SET tax_rate = 0.20 WHERE id = :master_id"),
+                {"master_id": seed.tax_master_version_id},
+            )
+        else:
+            connection.execute(
+                text(
+                    "UPDATE company SET lifecycle = 'INACTIVE', deactivated_at = now() "
+                    "WHERE id = :company_id"
+                ),
+                {"company_id": seed.company_id},
+            )
+
+    replay = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert replay.replayed is True
+    assert replay.detection_ids == first.detection_ids
+    assert replay.case_ids == first.case_ids
+
+
+def test_terminal_replay_rejects_a_run_repointed_to_another_rule(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        other_rule_id = connection.execute(
+            text(
+                """
+                INSERT INTO rule_version (
+                    rule_code, version, status, effective_from, definition,
+                    change_reason, published_at, approved_by
+                ) VALUES (
+                    'OTHER_RULE', :version, 'DRAFT', '2026-01-01', '{}'::jsonb,
+                    'identity mismatch test', NULL, NULL
+                ) RETURNING id
+                """
+            ),
+            {"version": uuid4().hex},
+        ).scalar_one()
+        connection.execute(
+            text(
+                "UPDATE monitoring_run SET status = 'SUCCEEDED', "
+                "rule_version_id = :rule_id WHERE id = :run_id"
+            ),
+            {"rule_id": other_rule_id, "run_id": seed.run_id},
+        )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert caught.value.error_code == "DETECTION_IDENTITY_MISMATCH"
+
+
+def test_terminal_replay_rejects_snapshot_removed_from_the_frozen_set(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE snapshot_set_member DISABLE TRIGGER trg_snapshot_set_member_immutable"
+            )
+        )
+        connection.execute(
+            text(
+                "DELETE FROM snapshot_set_member "
+                "WHERE snapshot_set_id = :set_id AND snapshot_id = :snapshot_id"
+            ),
+            {"set_id": seed.snapshot_set_id, "snapshot_id": seed.snapshot_id},
+        )
+        connection.execute(
+            text("ALTER TABLE snapshot_set_member ENABLE TRIGGER trg_snapshot_set_member_immutable")
+        )
+        connection.execute(
+            text("UPDATE monitoring_run SET status = 'SUCCEEDED' WHERE id = :run_id"),
+            {"run_id": seed.run_id},
+        )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert caught.value.error_code == "SNAPSHOT_NOT_IN_RUN_SET"
+
+
 def test_pending_run_cannot_replay_an_existing_detection_set(
     resources: tuple[Callable[[], UnitOfWork], Engine],
 ) -> None:
