@@ -47,6 +47,8 @@ def _principal_headers(
 class _DashboardSeed:
     company_ids: tuple[UUID, UUID, UUID]
     company_codes: tuple[str, str, str]
+    snapshot_set_id: UUID
+    run_id: UUID
     potential_detection_id: UUID
     burden_detection_id: UUID
 
@@ -208,11 +210,11 @@ def dashboard_api_resources(
             (
                 "POTENTIAL_TAX_COST",
                 "CALCULATED",
-                "275",
-                "25",
+                "75",
+                "-25",
                 None,
                 "POTENTIAL_TAX_COST",
-                "INCREASE",
+                "DECREASE",
             ),
         ):
             detection_id = connection.execute(
@@ -356,6 +358,8 @@ def dashboard_api_resources(
     seed = _DashboardSeed(
         company_ids=(company_ids[0], company_ids[1], company_ids[2]),
         company_codes=(company_codes[0], company_codes[1], company_codes[2]),
+        snapshot_set_id=set_id,
+        run_id=run_id,
         potential_detection_id=detection_ids["POTENTIAL_TAX_COST"],
         burden_detection_id=detection_ids["TAX_BURDEN"],
     )
@@ -453,7 +457,7 @@ def test_quarterly_dashboard_returns_scoped_counts_cost_and_company_pagination(
     assert body["data_ready_count"] == 3
     assert body["blocked_count"] == 1
     assert body["risk_company_count"] == 1
-    assert body["potential_tax_cost_total"] == "25.000000000000"
+    assert body["potential_tax_cost_total"] == "-25.000000000000"
     assert body["currency"] == "CNY"
     assert body["amount_scale"] == 2
     assert body["monitoring_type_counts"] == {
@@ -493,6 +497,37 @@ def test_quarterly_dashboard_returns_scoped_counts_cost_and_company_pagination(
     assert scoped["companies"]["items"][0]["company_id"] == str(seed.company_ids[1])
 
 
+def test_company_finance_reads_only_authorized_run_members_with_derived_summary(
+    dashboard_api_resources: tuple[TestClient, Engine, _DashboardSeed],
+) -> None:
+    client, _, seed = dashboard_api_resources
+
+    scoped = client.get(
+        f"/api/v1/quarterly-runs/{seed.run_id}",
+        headers=_principal_headers(
+            roles=("company-finance",),
+            allowed_company_ids=(seed.company_ids[0], seed.company_ids[1]),
+        ),
+    )
+    hidden = client.get(
+        f"/api/v1/quarterly-runs/{seed.run_id}",
+        headers=_principal_headers(
+            roles=("company-finance",),
+            allowed_company_ids=(uuid4(),),
+        ),
+    )
+
+    assert scoped.status_code == 200, scoped.text
+    body = scoped.json()
+    assert body["snapshot_set_id"] == str(seed.snapshot_set_id)
+    assert body["requested_company_count"] == 2
+    assert body["succeeded_company_count"] == 1
+    assert body["blocked_company_count"] == 1
+    assert body["failed_company_count"] == 0
+    assert body["status"] == "PARTIAL_SUCCESS"
+    assert hidden.status_code == 404
+
+
 def test_detection_detail_preserves_exact_values_lineage_and_not_calculable_reason(
     dashboard_api_resources: tuple[TestClient, Engine, _DashboardSeed],
 ) -> None:
@@ -518,14 +553,14 @@ def test_detection_detail_preserves_exact_values_lineage_and_not_calculable_reas
     assert detail["monitoring_type"] == "POTENTIAL_TAX_COST"
     assert detail["calculation_status"] == "CALCULATED"
     assert detail["input_amount"] == "100.000000000000"
-    assert detail["result_amount"] == "275.000000000000"
-    assert detail["difference_amount"] == "25.000000000000"
+    assert detail["result_amount"] == "75.000000000000"
+    assert detail["difference_amount"] == "-25.000000000000"
     assert detail["rate_value"] == "0.250000000000"
     assert detail["currency"] == "CNY"
     assert detail["amount_scale"] == 2
     assert detail["not_calculated_reason"] is None
     assert detail["alert_code"] == "POTENTIAL_TAX_COST"
-    assert detail["direction"] == "INCREASE"
+    assert detail["direction"] == "DECREASE"
     assert detail["formula_substitution"] == {
         "base": "100.000000000000",
         "rate": "0.250000000000",

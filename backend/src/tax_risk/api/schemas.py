@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -236,6 +237,7 @@ class QuarterlyRunResponse(BaseModel):
     status: MonitoringRunStatus
     fiscal_year: int
     quarter: int
+    snapshot_set_id: UUID
     rule_version_id: UUID
     requested_company_count: int
     succeeded_company_count: int
@@ -253,7 +255,17 @@ class RiskCaseItemResponse(BaseModel):
     company_id: UUID
     company_code: str
     company_name: str
+    latest_detection_id: UUID | None
+    run_id: UUID
     monitoring_type: MonitorType
+    calculation_status: CalculationStatus
+    input_amount: Decimal | None
+    result_amount: Decimal | None
+    difference_amount: Decimal | None
+    tax_burden_rate: Decimal | None
+    tax_burden_deviation: Decimal | None
+    not_calculated_reason: str | None
+    alert_code: str | None
     risk_direction: str
     risk_amount: Decimal | None
     risk_rate: Decimal | None
@@ -264,7 +276,15 @@ class RiskCaseItemResponse(BaseModel):
     assignee: str | None
     row_version: int
 
-    @field_serializer("risk_amount", "risk_rate")
+    @field_serializer(
+        "input_amount",
+        "result_amount",
+        "difference_amount",
+        "tax_burden_rate",
+        "tax_burden_deviation",
+        "risk_amount",
+        "risk_rate",
+    )
     def serialize_risk_decimal(self, value: Decimal | None) -> str | None:
         return None if value is None else format(value, "f")
 
@@ -276,15 +296,26 @@ class RiskCaseListResponse(BaseModel):
     items: tuple[RiskCaseItemResponse, ...]
 
 
+class RiskCaseAction(StrEnum):
+    ASSIGN = "ASSIGN"
+    REQUEST_COMPANY_CONFIRMATION = "REQUEST_COMPANY_CONFIRMATION"
+    REQUEST_ADJUSTMENT = "REQUEST_ADJUSTMENT"
+    SUBMIT_ADJUSTMENT = "SUBMIT_ADJUSTMENT"
+    SUBMIT_GROUP_REVIEW = "SUBMIT_GROUP_REVIEW"
+    REQUEST_EVIDENCE = "REQUEST_EVIDENCE"
+    RESUBMIT_CONFIRMATION = "RESUBMIT_CONFIRMATION"
+    CLOSE = "CLOSE"
+
+
 class RiskCaseActionRequest(BaseModel):
-    action: str = Field(min_length=1, max_length=128)
+    action: RiskCaseAction
     to_status: RiskCaseStatus
     reason: str = Field(min_length=1)
     assignee: str | None = Field(default=None, max_length=256)
     attachment_refs: tuple[str, ...] = ()
     correction_voucher_no: str | None = Field(default=None, max_length=128)
 
-    @field_validator("action", "reason")
+    @field_validator("reason")
     @classmethod
     def strip_case_action_text(cls, value: str) -> str:
         stripped = value.strip()
@@ -385,6 +416,7 @@ __all__ = [
     "QuarterlyRunCreateRequest",
     "QuarterlyRunResponse",
     "QuarterlyRunStartResponse",
+    "RiskCaseAction",
     "RiskCaseActionRequest",
     "RiskCaseActionResponse",
     "RiskCaseItemResponse",

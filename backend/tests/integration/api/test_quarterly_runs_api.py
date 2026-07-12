@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
-from tax_risk.application.quarterly_batches import QuarterlyBatchPlan
+from tax_risk.application.quarterly_batches import QuarterlyBatchError, QuarterlyBatchPlan
 from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
@@ -51,9 +51,12 @@ def _principal_headers(
 class _RecordingBatchService:
     plan: QuarterlyBatchPlan
     calls: list[dict[str, object]] = field(default_factory=list)
+    error: QuarterlyBatchError | None = None
 
     def start_batch(self, **request: object) -> QuarterlyBatchPlan:
         self.calls.append(request)
+        if self.error is not None:
+            raise self.error
         return self.plan
 
 
@@ -203,6 +206,54 @@ def test_post_quarterly_run_uses_injected_dispatcher_without_a_real_broker(
     assert dispatcher.calls == [(service.plan.run_id, service.plan.run_company_ids)]
 
 
+def test_post_quarterly_run_returns_persisted_terminal_status_for_idempotent_run(
+    run_api_resources: tuple[
+        TestClient,
+        Engine,
+        UUID,
+        UUID,
+        _RecordingBatchService,
+        _RecordingDispatcher,
+    ],
+) -> None:
+    client, engine, snapshot_set_id, rule_version_id, service, dispatcher = (
+        run_api_resources
+    )
+    service.plan = QuarterlyBatchPlan(
+        run_id=service.plan.run_id,
+        run_key=service.plan.run_key,
+        run_company_ids=(),
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE monitoring_run
+                SET status = 'SUCCEEDED', requested_company_count = 2,
+                    succeeded_company_count = 2, finished_at = now()
+                WHERE id = :run_id
+                """
+            ),
+            {"run_id": service.plan.run_id},
+        )
+
+    response = client.post(
+        "/api/v1/quarterly-runs",
+        headers=_principal_headers(roles=("group-tax",)),
+        json={
+            "fiscal_year": 2031,
+            "quarter": 1,
+            "snapshot_set_id": str(snapshot_set_id),
+            "rule_version": str(rule_version_id),
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "SUCCEEDED"
+    assert response.json()["dispatched_company_count"] == 0
+    assert dispatcher.calls == []
+
+
 def test_group_tax_can_read_quarterly_run_with_persisted_counts(
     run_api_resources: tuple[
         TestClient,
@@ -213,7 +264,7 @@ def test_group_tax_can_read_quarterly_run_with_persisted_counts(
         _RecordingDispatcher,
     ],
 ) -> None:
-    client, _, _, rule_version_id, service, _ = run_api_resources
+    client, _, snapshot_set_id, rule_version_id, service, _ = run_api_resources
 
     response = client.get(
         f"/api/v1/quarterly-runs/{service.plan.run_id}",
@@ -227,6 +278,7 @@ def test_group_tax_can_read_quarterly_run_with_persisted_counts(
         "status": "RUNNING",
         "fiscal_year": 2031,
         "quarter": 1,
+        "snapshot_set_id": str(snapshot_set_id),
         "rule_version_id": str(rule_version_id),
         "requested_company_count": 2,
         "succeeded_company_count": 0,
@@ -237,6 +289,65 @@ def test_group_tax_can_read_quarterly_run_with_persisted_counts(
         "failure_reason": None,
     }
     assert response.json()["started_at"].endswith("Z")
+
+
+def test_audit_role_is_a_write_deny_even_when_combined_with_group_tax(
+    run_api_resources: tuple[
+        TestClient,
+        Engine,
+        UUID,
+        UUID,
+        _RecordingBatchService,
+        _RecordingDispatcher,
+    ],
+) -> None:
+    client, _, snapshot_set_id, rule_version_id, service, dispatcher = run_api_resources
+
+    response = client.post(
+        "/api/v1/quarterly-runs",
+        headers=_principal_headers(roles=("audit", "group-tax")),
+        json={
+            "fiscal_year": 2031,
+            "quarter": 1,
+            "snapshot_set_id": str(snapshot_set_id),
+            "rule_version": str(rule_version_id),
+        },
+    )
+
+    assert response.status_code == 403
+    assert service.calls == []
+    assert dispatcher.calls == []
+
+
+def test_actual_quarterly_manifest_error_is_reported_as_a_conflict(
+    run_api_resources: tuple[
+        TestClient,
+        Engine,
+        UUID,
+        UUID,
+        _RecordingBatchService,
+        _RecordingDispatcher,
+    ],
+) -> None:
+    client, _, snapshot_set_id, rule_version_id, service, _ = run_api_resources
+    service.error = QuarterlyBatchError(
+        "QUARTERLY_RULE_MANIFEST_INVALID",
+        "rule manifest is not the approved reviewed definition",
+    )
+
+    response = client.post(
+        "/api/v1/quarterly-runs",
+        headers=_principal_headers(roles=("group-tax",)),
+        json={
+            "fiscal_year": 2031,
+            "quarter": 1,
+            "snapshot_set_id": str(snapshot_set_id),
+            "rule_version": str(rule_version_id),
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "QUARTERLY_RULE_MANIFEST_INVALID"
 
 
 def test_development_principal_rejects_a_tampered_signature(

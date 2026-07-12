@@ -49,6 +49,8 @@ class _CaseSeed:
     company_ids: tuple[UUID, UUID]
     company_codes: tuple[str, str]
     case_ids: tuple[UUID, UUID]
+    detection_ids: tuple[UUID, UUID]
+    run_id: UUID
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +64,7 @@ def case_api_resources(
     master_ids: list[UUID] = []
     snapshot_ids: list[UUID] = []
     case_ids: list[UUID] = []
+    detection_ids: list[UUID] = []
     with engine.begin() as connection:
         rule_id = connection.execute(
             text(
@@ -238,6 +241,7 @@ def case_api_resources(
             master_ids.append(master_id)
             snapshot_ids.append(snapshot_id)
             case_ids.append(case_id)
+            detection_ids.append(detection_id)
 
     settings = Settings.model_validate(
         {
@@ -252,6 +256,8 @@ def case_api_resources(
         company_ids=(company_ids[0], company_ids[1]),
         company_codes=(company_codes[0], company_codes[1]),
         case_ids=(case_ids[0], case_ids[1]),
+        detection_ids=(detection_ids[0], detection_ids[1]),
+        run_id=run_id,
     )
     try:
         yield client, engine, seed
@@ -379,6 +385,16 @@ def test_case_list_applies_group_company_and_audit_scope_in_sql(
     assert item["currency"] == "CNY"
     assert item["amount_scale"] == 2
     assert item["status"] == "NEW"
+    assert item["latest_detection_id"] == str(seed.detection_ids[0])
+    assert item["run_id"] == str(seed.run_id)
+    assert item["calculation_status"] == "CALCULATED"
+    assert item["input_amount"] == "100.000000000000"
+    assert item["result_amount"] == "125.000000000000"
+    assert item["difference_amount"] == "25.000000000000"
+    assert item["tax_burden_rate"] is None
+    assert item["tax_burden_deviation"] is None
+    assert item["not_calculated_reason"] is None
+    assert item["alert_code"] == "UNDER_ACCRUED"
     assert finance.status_code == 200
     assert finance.json()["total"] == 1
     assert finance.json()["items"][0]["company_id"] == str(seed.company_ids[0])
@@ -407,6 +423,32 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
         headers=_principal_headers(subject="audit-reader", roles=("audit",)),
         json={"action": "ASSIGN", "to_status": "ASSIGNED", "reason": "not allowed"},
     )
+    mixed_audit_write = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
+        headers=_principal_headers(
+            subject="mixed-audit-reader",
+            roles=("audit", "group-tax"),
+        ),
+        json={"action": "ASSIGN", "to_status": "ASSIGNED", "reason": "not allowed"},
+    )
+    mismatched_action = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
+        headers=_principal_headers(subject="group-reviewer", roles=("group-tax",)),
+        json={
+            "action": "CLOSE",
+            "to_status": "ASSIGNED",
+            "reason": "action does not match the requested transition",
+        },
+    )
+    unknown_action = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
+        headers=_principal_headers(subject="group-reviewer", roles=("group-tax",)),
+        json={
+            "action": "NOT_A_REAL_ACTION",
+            "to_status": "ASSIGNED",
+            "reason": "unknown action",
+        },
+    )
     hidden = client.post(
         f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
         headers=_principal_headers(
@@ -423,6 +465,10 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
     assert assigned.json()["assignee"] == "case-owner@example.com"
     assert assigned.json()["row_version"] == 2
     assert audit_write.status_code == 403
+    assert mixed_audit_write.status_code == 403
+    assert mismatched_action.status_code == 409
+    assert mismatched_action.json()["detail"]["code"] == "ACTION_TRANSITION_MISMATCH"
+    assert unknown_action.status_code == 422
     assert hidden.status_code == 404
     with engine.connect() as connection:
         action = connection.execute(
@@ -442,3 +488,39 @@ def test_case_actions_are_audited_and_hide_out_of_scope_cases(
         "to_status": "ASSIGNED",
         "reason": "assign quarterly variance",
     }
+
+
+def test_only_group_tax_can_close_a_case(
+    case_api_resources: tuple[TestClient, Engine, _CaseSeed],
+) -> None:
+    client, engine, seed = case_api_resources
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE risk_case
+                SET status = 'GROUP_REVIEW', row_version = row_version + 1
+                WHERE id = :case_id
+                """
+            ),
+            {"case_id": seed.case_ids[1]},
+        )
+
+    finance = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
+        headers=_principal_headers(
+            subject="company-finance",
+            roles=("company-finance",),
+            allowed_company_ids=(seed.company_ids[1],),
+        ),
+        json={"action": "CLOSE", "to_status": "CLOSED", "reason": "finance close"},
+    )
+    group = client.post(
+        f"/api/v1/risk-cases/{seed.case_ids[1]}/actions",
+        headers=_principal_headers(subject="group-reviewer", roles=("group-tax",)),
+        json={"action": "CLOSE", "to_status": "CLOSED", "reason": "review passed"},
+    )
+
+    assert finance.status_code == 403
+    assert group.status_code == 200, group.text
+    assert group.json()["status"] == "CLOSED"

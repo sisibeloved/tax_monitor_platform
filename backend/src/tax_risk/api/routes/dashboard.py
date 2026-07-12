@@ -65,9 +65,14 @@ def get_quarterly_dashboard(
 
         company_conditions = [MonitoringRunCompany.run_id == run.id]
         risk_conditions = [DetectionRecord.run_id == run.id]
+        potential_cost_conditions = [
+            DetectionRecord.run_id == run.id,
+            DetectionRecord.monitor_type == MonitorType.POTENTIAL_TAX_COST,
+        ]
         if scope is not None:
             company_conditions.append(SnapshotSetMember.company_id.in_(scope))
             risk_conditions.append(RiskCase.company_id.in_(scope))
+            potential_cost_conditions.append(DetectionRecord.company_id.in_(scope))
 
         company_join = (
             MonitoringRunCompany.__table__.join(
@@ -112,11 +117,8 @@ def get_quarterly_dashboard(
             .where(*risk_conditions)
         ) or 0
         potential_tax_cost_total = uow.session.scalar(
-            select(func.sum(RiskCase.risk_amount))
-            .select_from(risk_join)
-            .where(
-                *risk_conditions,
-                RiskCase.monitor_type == MonitorType.POTENTIAL_TAX_COST,
+            select(func.sum(DetectionRecord.difference_amount)).where(
+                *potential_cost_conditions
             )
         ) or _ZERO_AMOUNT
         type_rows = uow.session.execute(

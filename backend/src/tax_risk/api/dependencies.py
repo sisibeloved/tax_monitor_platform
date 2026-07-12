@@ -65,13 +65,15 @@ def require_reader(principal: Annotated[Principal, Depends(get_principal)]) -> P
 
 
 def require_group_tax(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
-    if not principal.has_role(GROUP_TAX_ROLE):
+    if principal.has_role(AUDIT_ROLE) or not principal.has_role(GROUP_TAX_ROLE):
         _forbidden()
     return principal
 
 
 def require_case_writer(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
-    if principal.roles.isdisjoint({GROUP_TAX_ROLE, COMPANY_FINANCE_ROLE}):
+    if principal.has_role(AUDIT_ROLE) or principal.roles.isdisjoint(
+        {GROUP_TAX_ROLE, COMPANY_FINANCE_ROLE}
+    ):
         _forbidden()
     return principal
 
