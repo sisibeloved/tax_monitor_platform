@@ -3,7 +3,7 @@
 ## 1.1 产品版本&密级
 
 - 产品版本：V0.1。
-- 文档版本：V0.6。
+- 文档版本：V0.8。
 - 文档密级：集团内部。
 
 ## 1.2 拟制信息
@@ -20,6 +20,8 @@
 | V0.4 | 2026-07-12 | 与总设计独立评审修订保持一致 |
 | V0.5 | 2026-07-12 | 补充非案件候选candidate_key和幂等检测键 |
 | V0.6 | 2026-07-12 | 第三轮独立规格评审通过 |
+| V0.7 | 2026-07-12 | 增加业务招待费未关联SAP时基于OA/合思直接判断及后续案件合并 |
+| V0.8 | 2026-07-12 | 未关联业务单据双路径修订通过独立规格评审 |
 
 ## 1.4 Keywords 关键词
 
@@ -295,28 +297,44 @@ CalculateQuarterly(company_code, quarter, snapshot_id,
 
 ## 5.1 实现概述
 
-规则服务确定公司范围，候选生成器对本年1月至本月明细宽筛，证据服务建立跨SAP、合思、OA关联，专业Agent深判并输出严格结构化建议。
+规则服务确定公司范围，候选生成器对本年1月至本月明细宽筛，证据服务尝试建立跨SAP、合思、OA关联，专业Agent深判并输出严格结构化建议。业务招待费先构建“精确关联SAP的业务链”和“未关联SAP的OA/合思业务单据”两类判断对象；无法关联任何前置单据的SAP凭证只进入覆盖清单，不借用同公司其他业务单据作证据。
 
 ## 5.2 关键算法与流程
 
 ```text
 scope = select_company_scope(monitor_type, month)
-items = load_ytd_items(scope, month)
+
+if monitor_type == BUSINESS_ENTERTAINMENT:
+    sap_items = load_ytd_sap_items(scope, month)
+    business_docs = load_ytd_oa_hesi_business_documents(scope, month)
+    exact_links = build_exact_links(sap_items, business_docs)
+    items = build_sap_linked_packs(exact_links)
+    items += build_unlinked_business_document_packs(
+                 business_docs not in exact_links,
+                 canonical_priority = HESI_REIMBURSEMENT_THEN_OA_APPLICATION)
+    save_unlinked_sap_coverage_list(sap_items not in exact_links)
+else:
+    items = load_ytd_sap_items(scope, month)
 
 for each item:
     candidate = keyword_or_semantic_recall_filter(item)
     if not candidate:
         continue
     evidence_pack = link_evidence(item)
-    result = domain_agent.classify(evidence_pack)
+    source_mode = determine_source_mode(item, evidence_pack)
+    result = domain_agent.classify(source_mode, evidence_pack)
     validate_output_schema(result)
     evidence_reviewer.verify(result, evidence_pack)
     save_detection(result)
-    if result.semantic_label in SUSPECTED_MISPOSTING_LABELS
-       and evidence_pack.has_exact_sap_voucher_line:
-        upsert_risk_case(result)
-    else if result.semantic_label == INSUFFICIENT_EVIDENCE
-            or not evidence_pack.has_exact_sap_voucher_line:
+    if result.semantic_label in SUSPECTED_MISPOSTING_LABELS:
+        if source_mode == SAP_LINKED:
+            upsert_sap_risk_case(result)
+        else if monitor_type == BUSINESS_ENTERTAINMENT
+                and item.is_oa_or_hesi_business_document:
+            upsert_business_document_risk_case(result)  // UNLINKED
+        else:
+            create_or_update_evidence_task(result)
+    else if result.semantic_label == INSUFFICIENT_EVIDENCE:
         create_or_update_evidence_task(result)
     // CURRENT_ACCOUNT_REASONABLE只保留检测记录
 ```
@@ -331,7 +349,9 @@ for each item:
 
 标准分类标签至少包括：`CURRENT_ACCOUNT_REASONABLE`、`INTERNAL_MEAL_OR_WELFARE`、`CONFERENCE_EXPENSE`、`EMPLOYEE_EDUCATION`、`BUSINESS_ENTERTAINMENT`、`ADVERTISING_PROMOTION`、`SPONSORSHIP`、`INSUFFICIENT_EVIDENCE`。
 
-正式风险以SAP凭证行作为主记录。关联优先级：1）合思/OA直接携带SAP凭证号和行项目；2）SAP分配号/参考字段精确包含报销单号或申请单号；以上属于EXACT。仅以公司、金额、日期窗口、人员、部门或收款方相似匹配属于FUZZY，不自动归并、不创建正式风险，只进入待关联任务。
+关联优先级：1）合思/OA直接携带SAP凭证号和行项目；2）SAP分配号/参考字段精确包含报销单号或申请单号；以上属于EXACT。仅以公司、金额、日期窗口、人员、部门或收款方相似匹配属于FUZZY，不自动归并。
+
+业务招待费主记录有两种模式：`SAP_LINKED`表示SAP凭证行已精确关联OA/合思；`BUSINESS_DOCUMENT_UNLINKED`表示OA申请或合思报销未关联SAP，但可根据申请事由、报销事由、接待对象、参与人员、场景和金额等自身字段直接判断。OA与合思之间如有精确流程关联，使用合思报销单为主记录、OA申请为证据；否则分别作为主记录。第二种模式的疑似错入可以创建正式风险，标记“SAP凭证待定位”，不得将该业务单据作为同公司任意SAP凭证的证据。没有精确业务单据关联的SAP凭证只记录在覆盖清单，避免错误归因。
 
 ## 5.3 行为模型
 
@@ -341,7 +361,7 @@ for each item:
 
 ### 5.3.2 异常流程
 
-- 关键关联号缺失：允许模糊关联但标记低证据等级。
+- 关键关联号缺失：保留为独立SAP或OA/合思主记录；模糊关联只作候选提示，不自动归并。
 - 证据冲突：输出`INSUFFICIENT_EVIDENCE`并列出冲突。
 - Agent非结构化输出：拒绝入库并自动重试一次；仍失败进入人工队列。
 - 模型超时/限流：有限重试，超过上限保留候选并标记未深判。
@@ -362,8 +382,12 @@ SemanticDetection {
   detection_id, candidate_key,
   case_key?,  // 仅正式风险存在
   company_code, period, monitor_type,
-  sap_fiscal_year, voucher_no, line_item_no,
-  current_account, posting_date, amount,
+  canonical_record_type,  // SAP_VOUCHER_LINE | OA_APPLICATION | HESI_REIMBURSEMENT
+  source_system, source_document_id, source_line_id,
+  sap_link_status,  // LINKED | UNLINKED
+  sap_fiscal_year?, voucher_no?, line_item_no?,
+  current_account?, posting_date?, amount,
+  risk_amount_source,
   semantic_label,
   recommended_accounts[],
   rationale_summary,
@@ -381,6 +405,14 @@ EvidenceTask {
   relation_quality, reason,
   status, assignee, created_at, updated_at
 }
+
+SapLinkCoverageItem {
+  company_code, period, sap_fiscal_year,
+  voucher_no, line_item_no, amount,
+  link_status,  // LINKED | UNLINKED
+  evaluated_via_business_document,  // 未关联SAP恒为false
+  snapshot_id, created_at
+}
 ```
 
 `rationale_summary`只保存简洁业务解释，不保存模型内部思维链。
@@ -389,9 +421,9 @@ EvidenceTask {
 
 证据包只包含授权和最小必要字段；向模型传递临时引用或脱敏文本。结果入库前通过schema、公司权限、证据引用存在性和候选科目字典校验。
 
-`voucher_no`、`line_item_no`和`current_account`仅在SAP精确关联后必填。未精确关联时这些字段允许为空，但结果只能进入EvidenceTask，不能进入RiskCase或风险KPI。
+`voucher_no`、`line_item_no`和`current_account`在`SAP_LINKED`模式必填；在`BUSINESS_DOCUMENT_UNLINKED`模式允许为空。业务招待费未关联业务单据如形成疑似错入，可进入RiskCase和风险KPI，但必须单独统计“SAP凭证待定位”，风险金额取OA/合思主记录金额并记录`risk_amount_source`。证据不足仍只进入EvidenceTask。
 
-每个语义候选在调用Agent前生成稳定`candidate_key`：`公司 + 财年 + 候选来源系统 + 源单据号 + 源行项目/明细号 + 监测类型`。如已精确关联SAP，则候选来源使用SAP凭证行；否则使用触发宽筛的合思/OA/SAP原始明细。`candidate_key`不含规则、模型或批次版本，用于EvidenceTask幂等；`case_key`允许为空。
+每个语义候选在调用Agent前生成稳定`candidate_key`：`公司 + 财年 + 候选来源系统 + 源单据号 + 源行项目/明细号 + 监测类型`。已精确关联SAP时候选来源使用SAP凭证行；否则使用触发宽筛的合思/OA/SAP原始明细。`candidate_key`不含规则、模型或批次版本，用于DetectionRecord、EvidenceTask和未关联业务单据案件幂等；只有未形成正式风险时`case_key`为空。
 
 ## 5.5 接口设计
 
@@ -404,8 +436,13 @@ EvidenceTask {
 ```text
 SelectCompanyScope(monitor_type, month, rule_version) -> company_codes[]
 LoadYtdItems(company_codes[], monitor_type, month, snapshot_ids[]) -> items[]
+BuildBusinessEntertainmentEvaluationItems(company_codes[], month, snapshot_ids[])
+  -> {sap_linked_packs[], unlinked_business_document_packs[],
+      unlinked_sap_coverage[]}
 BuildEvidencePack(item_id, user_context) -> EvidenceRef[]
-ClassifyExpense(agent_type, evidence_pack, versions) -> SemanticDetection
+ClassifyExpense(agent_type, source_mode, evidence_pack, versions) -> SemanticDetection
+ResolveBusinessDocumentCaseToSap(business_case_id, sap_voucher_ref,
+                                 exact_link_evidence) -> RiskCase
 ```
 
 ## 5.6 代码实现要点
@@ -442,6 +479,13 @@ semantic_case_key = hash(company_code,
                          sap_line_item_no,
                          monitor_type)
 
+business_document_case_key = hash(company_code,
+                                  fiscal_year,
+                                  source_system,
+                                  source_document_id,
+                                  source_line_id,
+                                  monitor_type)
+
 detection_subject_key = numeric_case_key
                         or semantic_candidate_key
 
@@ -454,13 +498,13 @@ insert DetectionRecord by detection_key
 attach all exact/fuzzy evidence refs
 ```
 
-数值类以公司/财年/季度/监测类型区分案件；明细类以SAP凭证行作为唯一主记录。案件指纹不含规则/模型版本，避免版本重跑重复建案；检测键始终基于数值主体键或语义候选键，并包含版本以保留重判历史。FUZZY关联不生成`semantic_case_key`，但使用`semantic_candidate_key`幂等保存DetectionRecord和EvidenceTask。
+数值类以公司/财年/季度/监测类型区分案件；已关联业务招待费及福利费/捐赠以SAP凭证行为主记录；未关联业务招待费以OA/合思业务单据为主记录。案件指纹不含规则/模型版本；检测键始终基于数值主体键或语义候选键，并包含版本。FUZZY关联不生成`semantic_case_key`，但未关联业务单据如形成疑似错入使用`business_document_case_key`建正式风险。后续建立EXACT关联时，事务性合并业务单据案件到SAP案件并设置`merged_into_case_id`，不重复累计风险数量和金额。
 
 ## 6.3 行为模型
 
 ### 6.3.1 正常流程
 
-`新发现→待分派→待公司确认`；确认风险进入待改账，登记更正凭证后集团复核关闭；入账合理需理由和依据；信息不足补材料后重新判断。
+`新发现→待分派→待公司确认`；确认风险进入待改账，登记更正凭证后集团复核关闭；入账合理需理由和依据；信息不足补材料后重新判断。未关联业务招待费确认风险后先进入`待定位SAP凭证`，建立精确关联并合并案件后再进入待改账。
 
 ### 6.3.2 异常流程
 
@@ -476,9 +520,11 @@ attach all exact/fuzzy evidence refs
 ```text
 RiskCase {
   case_id, case_key, company_code,
-  monitor_type, canonical_source_ref,
-  risk_amount, risk_direction,
+  monitor_type, canonical_record_type,
+  canonical_source_ref, sap_link_status,
+  risk_amount, risk_amount_source, risk_direction,
   priority, status, assignee,
+  merged_into_case_id?,
   latest_detection_id, created_at, updated_at,
   row_version
 }
@@ -505,6 +551,8 @@ ReviewAction {
 
 ```text
 CreateOrUpdateRisk(detection) -> RiskCase
+ResolveBusinessDocumentCaseToSap(business_case_id, sap_voucher_ref,
+                                 exact_link_evidence) -> RiskCase
 TransitionRisk(case_id, expected_row_version, action, evidence) -> RiskCase
 ExportRisks(user_context, filters) -> export_job_id
 ```
@@ -570,6 +618,10 @@ ExportRisks(user_context, filters) -> export_job_id
 | 当前科目与文本 | 预期候选 |
 |---|---|
 | 招待费“内部培训午餐” | 职工教育经费/福利费，引用OA证据 |
+| 未关联SAP的OA申请“部门内部培训午餐” | 建业务单据风险，标记SAP凭证待定位，不关联任意SAP凭证 |
+| OA申请与合思报销精确关联但均未关联SAP | 以合思报销为主、OA为证据，只生成一个业务单据风险 |
+| SAP凭证无法关联任何前置单据 | 进入SAP未关联覆盖清单，不借用同公司其他OA/合思单据 |
+| 上述OA案件后续找到SAP凭证 | 合并到SAP案件，风险数量和金额不重复 |
 | 福利费“客户商务宴请” | 业务招待费 |
 | 捐赠“冠名并获得品牌露出” | 赞助或广告宣传；不作最终税务定性 |
 

@@ -3,7 +3,7 @@
 ## 1.1 产品版本&密级
 
 - 产品版本：V0.1。
-- 文档版本：V0.6。
+- 文档版本：V0.8。
 - 文档密级：集团内部。
 - 上游文档：[集团所得税风险监测平台总设计](../../superpowers/specs/2026-07-12-group-income-tax-risk-monitoring-platform-design.md)。
 
@@ -22,6 +22,8 @@
 | V0.4 | 2026-07-12 | 与总设计独立评审修订保持一致 |
 | V0.5 | 2026-07-12 | 与总设计第二轮评审修订保持一致 |
 | V0.6 | 2026-07-12 | 第三轮独立规格评审通过 |
+| V0.7 | 2026-07-12 | 增加未关联SAP的OA/合思业务招待费独立判断与案件合并路径 |
+| V0.8 | 2026-07-12 | 未关联业务单据双路径修订通过独立规格评审 |
 
 ## 1.4 Keywords 关键词
 
@@ -195,6 +197,7 @@ flowchart TB
 - 关键词/同义词/排除词进行高召回宽筛，语义Agent进行证据约束的深判。
 - 证据Agent只通过白名单接口读取必要字段，输出引用片段和关联等级。
 - 建议Agent输出标准候选科目；证据不足时输出“待补材料”。
+- 业务招待费支持双路径：已关联时以SAP凭证行为主；未关联时以OA申请或合思报销为主记录独立判断，并标记SAP待定位。未关联业务单据不得冒充某张SAP凭证的证据。
 - 模型不得计算税额、改写主数据、生成SQL遍历全库或自动过账。
 
 # 8 逻辑架构
@@ -241,11 +244,11 @@ flowchart TB
 
 ### 8.3.2 关键数据设计
 
-核心实体为Company、TaxMasterData、AccountingSnapshot、VoucherLine、BusinessDocument、EvidenceLink、RuleVersion、ModelVersion、MonitoringBatch、RiskCase、DetectionRecord和ReviewAction。
+核心实体为Company、TaxMasterData、AccountingSnapshot、VoucherLine、BusinessDocument、EvidenceLink、RuleVersion、ModelVersion、MonitoringBatch、RiskCase、DetectionRecord、EvidenceTask、SapLinkCoverage和ReviewAction。RiskCase允许SAP凭证行或未关联的OA/合思业务单据作为主记录，并记录SAP关联状态与案件合并关系；无法关联前置单据的SAP凭证进入SapLinkCoverage，不借用同公司其他业务单据。
 
 ### 8.3.3 静态数据结构模型
 
-TaxMasterData按公司和有效期唯一；AccountingSnapshot按公司、期间和来源批次唯一；RiskCase使用稳定案件指纹；DetectionRecord保存每次规则/模型版本结果。
+TaxMasterData按公司和有效期唯一；AccountingSnapshot按公司、期间和来源批次唯一；RiskCase按主记录类型使用稳定案件指纹；DetectionRecord保存每次规则/模型版本结果。未关联业务单据后续找到SAP凭证时，保留原案件历史并合并到SAP主案件。
 
 ### 8.3.4 数据所有权模型
 
@@ -378,7 +381,7 @@ REST/企业API、批量文件、数据视图、消息队列、对象存储引用
 
 #### 9.8.2.2 用例设计2：月度运行
 
-范围筛选后宽筛候选，证据服务批量关联，专业Agent深判，建议服务结构化输出；低证据结果进入人工待判。
+范围筛选后宽筛候选，证据服务批量关联，专业Agent深判，建议服务结构化输出。业务招待费无法关联SAP时，OA/合思业务单据作为独立主记录继续判断；证据不足而非单纯未关联时才进入人工待补材料。
 
 # 10 基于架构的安全/韧性/隐私/可靠/可用/Safety等属性分析
 
