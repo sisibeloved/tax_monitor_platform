@@ -11,6 +11,7 @@ from tax_risk.workers.quarterly_batch import (
     RUN_COMPANY_TASK,
     SUMMARIZE_BATCH_TASK,
     build_quarterly_batch_canvas,
+    register_quarterly_tasks,
 )
 
 
@@ -29,6 +30,10 @@ def _settings(**overrides: object) -> Settings:
 
 def test_celery_configuration_is_durable_json_only_and_quarterly_routed() -> None:
     app = create_celery_app(_settings())
+    register_quarterly_tasks(
+        app=app,
+        service_factory=lambda: None,  # type: ignore[arg-type,return-value]
+    )
 
     assert app.conf.task_serializer == "json"
     assert app.conf.result_serializer == "json"
@@ -43,6 +48,11 @@ def test_celery_configuration_is_durable_json_only_and_quarterly_routed() -> Non
     assert app.conf.worker_concurrency == 7
     assert app.conf.task_routes[RUN_COMPANY_TASK]["queue"] == QUARTERLY_QUEUE
     assert app.conf.task_routes[SUMMARIZE_BATCH_TASK]["queue"] == QUARTERLY_QUEUE
+    summary_task = app.tasks[SUMMARIZE_BATCH_TASK]
+    assert summary_task.max_retries is None
+    assert summary_task.autoretry_for == (Exception,)
+    assert summary_task.retry_backoff == 5
+    assert summary_task.retry_jitter is True
 
 
 @pytest.mark.parametrize(

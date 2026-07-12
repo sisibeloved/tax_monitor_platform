@@ -155,6 +155,11 @@ class SnapshotSetMember(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     __tablename__ = "snapshot_set_member"
     __table_args__ = (
         UniqueConstraint(
+            "id",
+            "snapshot_set_id",
+            name="uq_snapshot_set_member_id_set",
+        ),
+        UniqueConstraint(
             "snapshot_set_id", "company_id", name="uq_snapshot_set_member_set_company"
         ),
         UniqueConstraint(

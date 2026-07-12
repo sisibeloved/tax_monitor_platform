@@ -22,6 +22,7 @@ depends_on: str | Sequence[str] | None = None
 COMPANY_STATUSES: tuple[str, ...] = (
     "PENDING",
     "RUNNING",
+    "RETRY_PENDING",
     "SUCCEEDED",
     "BLOCKED",
     "FAILED",
@@ -29,6 +30,17 @@ COMPANY_STATUSES: tuple[str, ...] = (
 
 
 def upgrade() -> None:
+    op.create_unique_constraint(
+        "uq_monitoring_run_id_snapshot_set",
+        "monitoring_run",
+        ["id", "snapshot_set_id"],
+    )
+    op.create_unique_constraint(
+        "uq_snapshot_set_member_id_set",
+        "snapshot_set_member",
+        ["id", "snapshot_set_id"],
+    )
+
     status_type = postgresql.ENUM(
         *COMPANY_STATUSES,
         name="monitoring_run_company_status",
@@ -49,6 +61,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("snapshot_set_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "snapshot_set_member_id",
             postgresql.UUID(as_uuid=True),
@@ -118,6 +131,12 @@ def upgrade() -> None:
             "AND started_at IS NOT NULL AND finished_at IS NULL "
             "AND error_code IS NULL AND error_message IS NULL "
             "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
+            "(status = 'RETRY_PENDING' AND attempt_count > 0 AND retryable = true "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND btrim(error_code) <> '' "
+            "AND error_message IS NOT NULL AND btrim(error_message) <> '' "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
             "(status = 'SUCCEEDED' AND attempt_count > 0 AND retryable = false "
             "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
             "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
@@ -137,15 +156,15 @@ def upgrade() -> None:
             name="ck_monitoring_run_company_lifecycle_state",
         ),
         sa.ForeignKeyConstraint(
-            ["run_id"],
-            ["monitoring_run.id"],
-            name="fk_run_company_run",
-            ondelete="CASCADE",
+            ["run_id", "snapshot_set_id"],
+            ["monitoring_run.id", "monitoring_run.snapshot_set_id"],
+            name="fk_run_company_run_snapshot_set",
+            ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
-            ["snapshot_set_member_id"],
-            ["snapshot_set_member.id"],
-            name="fk_run_company_member",
+            ["snapshot_set_member_id", "snapshot_set_id"],
+            ["snapshot_set_member.id", "snapshot_set_member.snapshot_set_id"],
+            name="fk_run_company_member_snapshot_set",
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_monitoring_run_company"),
@@ -179,6 +198,16 @@ def downgrade() -> None:
         table_name="monitoring_run_company",
     )
     op.drop_table("monitoring_run_company")
+    op.drop_constraint(
+        "uq_snapshot_set_member_id_set",
+        "snapshot_set_member",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "uq_monitoring_run_id_snapshot_set",
+        "monitoring_run",
+        type_="unique",
+    )
     postgresql.ENUM(
         *COMPANY_STATUSES,
         name="monitoring_run_company_status",

@@ -145,7 +145,14 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
         ),
         (
             "monitoring_run_company_status",
-            ["PENDING", "RUNNING", "SUCCEEDED", "BLOCKED", "FAILED"],
+            [
+                "PENDING",
+                "RUNNING",
+                "RETRY_PENDING",
+                "SUCCEEDED",
+                "BLOCKED",
+                "FAILED",
+            ],
         ),
         (
             "risk_case_status",
@@ -332,6 +339,7 @@ def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: En
     }
     assert {
         "run_id",
+        "snapshot_set_id",
         "snapshot_set_member_id",
         "status",
         "attempt_count",
@@ -357,6 +365,37 @@ def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: En
         for index in inspect(engine).get_indexes("monitoring_run_company")
     }
     assert ("run_id", "status") in index_columns
+
+    run_company_foreign_keys = inspect(engine).get_foreign_keys("monitoring_run_company")
+    run_foreign_key = next(
+        foreign_key
+        for foreign_key in run_company_foreign_keys
+        if foreign_key["constrained_columns"] == ["run_id", "snapshot_set_id"]
+    )
+    assert run_foreign_key["referred_table"] == "monitoring_run"
+    assert run_foreign_key["referred_columns"] == ["id", "snapshot_set_id"]
+    assert run_foreign_key["options"].get("ondelete") == "RESTRICT"
+
+    member_foreign_key = next(
+        foreign_key
+        for foreign_key in run_company_foreign_keys
+        if foreign_key["constrained_columns"]
+        == ["snapshot_set_member_id", "snapshot_set_id"]
+    )
+    assert member_foreign_key["referred_table"] == "snapshot_set_member"
+    assert member_foreign_key["referred_columns"] == ["id", "snapshot_set_id"]
+    assert member_foreign_key["options"].get("ondelete") == "RESTRICT"
+
+    run_uniques = inspect(engine).get_unique_constraints("monitoring_run")
+    assert any(
+        unique["column_names"] == ["id", "snapshot_set_id"]
+        for unique in run_uniques
+    )
+    member_uniques = inspect(engine).get_unique_constraints("snapshot_set_member")
+    assert any(
+        unique["column_names"] == ["id", "snapshot_set_id"]
+        for unique in member_uniques
+    )
 
 
 def test_quarterly_rule_seed_records_0004_migration_provenance(engine: Engine) -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -14,7 +14,7 @@ from tax_risk.application.quarterly_runs import (
     QuarterlyRunError,
     QuarterlyRunResult,
     QuarterlyRunService,
-    _assert_approved_rule_manifest,
+    assert_approved_quarterly_rule_manifest,
 )
 from tax_risk.persistence.master_models import RuleVersion, VersionStatus
 from tax_risk.persistence.repositories import UnitOfWork
@@ -33,6 +33,7 @@ from tax_risk.persistence.snapshot_models import (
 
 
 UowFactory = Callable[[], UnitOfWork]
+EMERGENCY_FAILURE_CODE = "CELERY_TASK_EXECUTION_FAILED"
 
 
 class CompanyRunner(Protocol):
@@ -163,6 +164,7 @@ class QuarterlyBatchService:
             company_rows = [
                 MonitoringRunCompany(
                     run_id=run.id,
+                    snapshot_set_id=snapshot_set.id,
                     snapshot_set_member_id=member.id,
                     status=MonitoringRunCompanyStatus.PENDING,
                     attempt_count=0,
@@ -213,7 +215,20 @@ class QuarterlyBatchService:
                     "RUN_COMPANY_IDENTITY_MISMATCH",
                     "run-company state changed while its parent run was locked",
                 )
-            if run_company.status != MonitoringRunCompanyStatus.PENDING:
+            normalized_task_id = task_id.strip()
+            automatic_retry = (
+                run_company.status
+                in {
+                    MonitoringRunCompanyStatus.FAILED,
+                    MonitoringRunCompanyStatus.RETRY_PENDING,
+                }
+                and run_company.retryable
+                and run_company.celery_task_id == normalized_task_id
+            )
+            if (
+                run_company.status != MonitoringRunCompanyStatus.PENDING
+                and not automatic_retry
+            ):
                 return _company_outcome(run_company)
             if run.status != MonitoringRunStatus.RUNNING:
                 raise QuarterlyBatchError(
@@ -232,7 +247,7 @@ class QuarterlyBatchService:
                     "run-company state does not resolve to its frozen snapshot-set member",
                 )
 
-            _begin_attempt(run_company, task_id=task_id)
+            _begin_attempt(run_company, task_id=normalized_task_id)
             uow.session.flush()
             try:
                 raw_result = self._company_runner_factory().execute(
@@ -250,6 +265,124 @@ class QuarterlyBatchService:
             outcome = _company_outcome(run_company)
             uow.commit()
             return outcome
+
+    def prepare_automatic_retry(
+        self,
+        *,
+        run_company_id: UUID,
+        task_id: str,
+    ) -> bool:
+        """Reserve a retryable failed row for its owning Celery task."""
+
+        if not isinstance(run_company_id, UUID) or not isinstance(task_id, str) or not task_id.strip():
+            raise QuarterlyBatchError(
+                "INVALID_RUN_COMPANY_REQUEST",
+                "run_company_id must be a UUID and task_id must be non-empty",
+            )
+        normalized_task_id = task_id.strip()
+        with self._uow_factory() as uow:
+            candidate = uow.risks.get_run_company(run_company_id)
+            if candidate is None:
+                raise QuarterlyBatchError(
+                    "RUN_COMPANY_NOT_FOUND",
+                    f"run company {run_company_id} was not found",
+                )
+            run = uow.risks.get_run(candidate.run_id, for_share=True)
+            if run is None:
+                raise QuarterlyBatchError(
+                    "MONITORING_RUN_NOT_FOUND",
+                    f"run {candidate.run_id} was not found",
+                )
+            run_company = uow.risks.get_run_company(run_company_id, for_update=True)
+            if run_company is None or run_company.run_id != run.id:
+                raise QuarterlyBatchError(
+                    "RUN_COMPANY_IDENTITY_MISMATCH",
+                    "run-company state changed while its parent run was locked",
+                )
+            owned = run_company.celery_task_id == normalized_task_id
+            if (
+                run_company.status == MonitoringRunCompanyStatus.RETRY_PENDING
+                and run_company.retryable
+                and owned
+            ):
+                return True
+            if (
+                run.status != MonitoringRunStatus.RUNNING
+                or run_company.status != MonitoringRunCompanyStatus.FAILED
+                or not run_company.retryable
+                or not owned
+            ):
+                return False
+            run_company.status = MonitoringRunCompanyStatus.RETRY_PENDING
+            uow.commit()
+            return True
+
+    def reconcile_header_results(
+        self,
+        *,
+        run_id: UUID,
+        header_results: list[dict[str, object]],
+    ) -> None:
+        """Persist terminal task-boundary failures before computing the DB summary."""
+
+        if not isinstance(run_id, UUID) or not isinstance(header_results, list):
+            raise QuarterlyBatchError(
+                "INVALID_HEADER_RESULTS",
+                "run_id must be a UUID and header_results must be a list",
+            )
+        emergencies = _emergency_failures(header_results)
+        if not emergencies:
+            return
+        with self._uow_factory() as uow:
+            run = uow.risks.get_run(run_id, for_share=True)
+            if run is None:
+                raise QuarterlyBatchError(
+                    "MONITORING_RUN_NOT_FOUND",
+                    f"run {run_id} was not found",
+                )
+            for run_company_id in sorted(emergencies, key=str):
+                task_id = emergencies[run_company_id]
+                run_company = uow.risks.get_run_company(
+                    run_company_id,
+                    for_update=True,
+                )
+                if run_company is None or run_company.run_id != run.id:
+                    raise QuarterlyBatchError(
+                        "RUN_COMPANY_IDENTITY_MISMATCH",
+                        "emergency result does not belong to the summarized run",
+                    )
+                if run_company.status not in {
+                    MonitoringRunCompanyStatus.PENDING,
+                    MonitoringRunCompanyStatus.RUNNING,
+                    MonitoringRunCompanyStatus.RETRY_PENDING,
+                }:
+                    continue
+                if (
+                    run_company.status
+                    in {
+                        MonitoringRunCompanyStatus.RUNNING,
+                        MonitoringRunCompanyStatus.RETRY_PENDING,
+                    }
+                    and run_company.celery_task_id != task_id
+                ):
+                    # A duplicate canvas cannot exhaust or steal another task's
+                    # in-flight attempt or scheduled retry ownership.
+                    continue
+                if run_company.status in {
+                    MonitoringRunCompanyStatus.PENDING,
+                    MonitoringRunCompanyStatus.RETRY_PENDING,
+                }:
+                    _begin_attempt(run_company, task_id=task_id)
+                else:
+                    run_company.celery_task_id = task_id
+                _finish_failed_values(
+                    run_company,
+                    error_code=EMERGENCY_FAILURE_CODE,
+                    error_message=(
+                        "Celery task failed before its company result could be persisted"
+                    ),
+                )
+            uow.commit()
 
     def summarize(self, *, run_id: UUID) -> dict[str, object]:
         if not isinstance(run_id, UUID):
@@ -275,6 +408,7 @@ class QuarterlyBatchService:
                 MonitoringRunCompanyStatus.RUNNING,
                 0,
             )
+            active += counts.get(MonitoringRunCompanyStatus.RETRY_PENDING, 0)
             if active:
                 status = MonitoringRunStatus.RUNNING
                 finished_at = None
@@ -420,7 +554,7 @@ def _assert_rule_ready(rule: RuleVersion | None, snapshot_set: SnapshotSet) -> N
             "batch must pin the fixed effective reviewed QUARTERLY_V1 rule",
         )
     try:
-        _assert_approved_rule_manifest(rule)
+        assert_approved_quarterly_rule_manifest(rule)
     except QuarterlyRunError as error:
         raise QuarterlyBatchError(error.error_code, str(error)) from error
 
@@ -465,11 +599,24 @@ def _finish_blocked(
 
 
 def _finish_failed(run_company: MonitoringRunCompany, error: Exception) -> None:
+    _finish_failed_values(
+        run_company,
+        error_code="UNEXPECTED_COMPANY_FAILURE",
+        error_message=_error_message(error),
+    )
+
+
+def _finish_failed_values(
+    run_company: MonitoringRunCompany,
+    *,
+    error_code: str,
+    error_message: str,
+) -> None:
     run_company.status = MonitoringRunCompanyStatus.FAILED
     run_company.retryable = True
     run_company.finished_at = _utcnow()
-    run_company.error_code = "UNEXPECTED_COMPANY_FAILURE"
-    run_company.error_message = _error_message(error)
+    run_company.error_code = error_code
+    run_company.error_message = error_message
     run_company.detection_ids = []
     run_company.case_ids = []
 
@@ -490,6 +637,8 @@ def _company_outcome(run_company: MonitoringRunCompany) -> dict[str, object]:
     return {
         "run_company_id": str(run_company.id),
         "status": run_company.status.value,
+        "retryable": run_company.retryable,
+        "task_id": run_company.celery_task_id,
         "detection_ids": list(run_company.detection_ids),
         "case_ids": list(run_company.case_ids),
         "error_code": run_company.error_code,
@@ -511,11 +660,48 @@ def _error_message(error: Exception) -> str:
     return str(error).strip() or type(error).__name__
 
 
+def _emergency_failures(
+    header_results: list[dict[str, object]],
+) -> dict[UUID, str]:
+    emergencies: dict[UUID, str] = {}
+    for result in header_results:
+        if not isinstance(result, Mapping):
+            raise QuarterlyBatchError(
+                "INVALID_HEADER_RESULTS",
+                "every quarterly header result must be an object",
+            )
+        if result.get("error_code") != EMERGENCY_FAILURE_CODE:
+            continue
+        raw_run_company_id = result.get("run_company_id")
+        raw_task_id = result.get("task_id")
+        if (
+            result.get("status") != MonitoringRunCompanyStatus.FAILED.value
+            or not isinstance(raw_run_company_id, str)
+            or not isinstance(raw_task_id, str)
+            or not raw_task_id.strip()
+            or len(raw_task_id.strip()) > 255
+        ):
+            raise QuarterlyBatchError(
+                "INVALID_HEADER_RESULTS",
+                "emergency quarterly header result has an invalid identity",
+            )
+        try:
+            run_company_id = UUID(raw_run_company_id)
+        except ValueError as error:
+            raise QuarterlyBatchError(
+                "INVALID_HEADER_RESULTS",
+                "emergency quarterly header result has an invalid run-company id",
+            ) from error
+        emergencies[run_company_id] = raw_task_id.strip()
+    return emergencies
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 __all__ = [
+    "EMERGENCY_FAILURE_CODE",
     "QuarterlyBatchError",
     "QuarterlyBatchPlan",
     "QuarterlyBatchService",

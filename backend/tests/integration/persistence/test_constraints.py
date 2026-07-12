@@ -290,6 +290,32 @@ def _insert_monitoring_run(
     ).scalar_one()
 
 
+def _insert_monitoring_run_company(
+    connection: Connection,
+    *,
+    run_id: UUID,
+    snapshot_set_id: UUID,
+    snapshot_set_member_id: UUID,
+) -> UUID:
+    return connection.execute(
+        text(
+            """
+            INSERT INTO monitoring_run_company (
+                run_id, snapshot_set_id, snapshot_set_member_id
+            ) VALUES (
+                :run_id, :snapshot_set_id, :snapshot_set_member_id
+            )
+            RETURNING id
+            """
+        ),
+        {
+            "run_id": run_id,
+            "snapshot_set_id": snapshot_set_id,
+            "snapshot_set_member_id": snapshot_set_member_id,
+        },
+    ).scalar_one()
+
+
 def _insert_detection(
     connection: Connection,
     *,
@@ -694,8 +720,39 @@ def test_monitoring_run_with_detection_is_protected_by_restrict_foreign_key(
             "2026-01-01T00:01:00+00:00",
             "UNEXPECTED_COMPANY_FAILURE",
         ),
+        (
+            "RETRY_PENDING",
+            1,
+            False,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:01:00+00:00",
+            "UNEXPECTED_COMPANY_FAILURE",
+        ),
+        (
+            "RETRY_PENDING",
+            1,
+            True,
+            "2026-01-01T00:00:00+00:00",
+            None,
+            "UNEXPECTED_COMPANY_FAILURE",
+        ),
+        (
+            "RETRY_PENDING",
+            1,
+            True,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:01:00+00:00",
+            None,
+        ),
     ],
-    ids=["negative-attempt", "successful-retryable", "failed-not-retryable"],
+    ids=[
+        "negative-attempt",
+        "successful-retryable",
+        "failed-not-retryable",
+        "retry-pending-not-retryable",
+        "retry-pending-without-finished-at",
+        "retry-pending-without-error",
+    ],
 )
 def test_monitoring_run_company_rejects_invalid_retry_state(
     connection: Connection,
@@ -748,10 +805,12 @@ def test_monitoring_run_company_rejects_invalid_retry_state(
             text(
                 """
                 INSERT INTO monitoring_run_company (
-                    run_id, snapshot_set_member_id, status, attempt_count, retryable,
+                    run_id, snapshot_set_id, snapshot_set_member_id,
+                    status, attempt_count, retryable,
                     celery_task_id, started_at, finished_at, error_code, error_message
                 ) VALUES (
-                    :run_id, :member_id, :status, :attempt_count, :retryable,
+                    :run_id, :snapshot_set_id, :member_id,
+                    :status, :attempt_count, :retryable,
                     :task_id,
                     CAST(:started_at AS timestamptz), CAST(:finished_at AS timestamptz),
                     :error_code, :error_message
@@ -760,6 +819,7 @@ def test_monitoring_run_company_rejects_invalid_retry_state(
             ),
             {
                 "run_id": run_id,
+                "snapshot_set_id": snapshot_set_id,
                 "member_id": member_id,
                 "status": status,
                 "attempt_count": attempt_count,
@@ -770,6 +830,213 @@ def test_monitoring_run_company_rejects_invalid_retry_state(
                 "error_code": error_code,
                 "error_message": None if error_code is None else "failure",
             },
+        )
+
+
+def test_monitoring_run_company_accepts_retry_pending_owner_state(
+    connection: Connection,
+) -> None:
+    snapshot_set_id = _insert_snapshot_set(
+        connection,
+        set_key=f"RUN-COMPANY-RETRY-SET-{uuid4().hex}",
+    )
+    member_id = _populate_snapshot_set(
+        connection,
+        snapshot_set_id,
+        member_count=1,
+        company_code_prefix=f"RUN-COMPANY-RETRY-{uuid4().hex}-",
+    )[0]
+    rule_id = _insert_rule_version(
+        connection,
+        rule_code=f"RUN-COMPANY-RETRY-RULE-{uuid4().hex}",
+    )
+    run_id = _insert_monitoring_run(
+        connection,
+        snapshot_set_id,
+        rule_id,
+        run_key=f"RUN-COMPANY-RETRY-{uuid4().hex}",
+    )
+
+    run_company_id = connection.execute(
+        text(
+            """
+            INSERT INTO monitoring_run_company (
+                run_id, snapshot_set_id, snapshot_set_member_id,
+                status, attempt_count, retryable, celery_task_id,
+                started_at, finished_at, error_code, error_message
+            ) VALUES (
+                :run_id, :snapshot_set_id, :member_id,
+                'RETRY_PENDING', 1, true, 'retry-owner-task',
+                TIMESTAMPTZ '2026-01-01 00:00:00+00',
+                TIMESTAMPTZ '2026-01-01 00:01:00+00',
+                'UNEXPECTED_COMPANY_FAILURE', 'transient worker failure'
+            )
+            RETURNING id
+            """
+        ),
+        {
+            "run_id": run_id,
+            "snapshot_set_id": snapshot_set_id,
+            "member_id": member_id,
+        },
+    ).scalar_one()
+
+    assert isinstance(run_company_id, UUID)
+
+
+def test_monitoring_run_company_accepts_member_from_run_snapshot_set(
+    connection: Connection,
+) -> None:
+    company_id = _insert_company(connection, code=f"RUN-COMPANY-OK-{uuid4().hex}")
+    master_id = _insert_tax_master(connection, company_id)
+    snapshot_id = _insert_snapshot(
+        connection,
+        company_id,
+        status="PUBLISHED",
+        tax_master_version_id=master_id,
+    )
+    snapshot_set_id = _insert_snapshot_set(
+        connection,
+        set_key=f"RUN-COMPANY-OK-SET-{uuid4().hex}",
+    )
+    member_id = connection.execute(
+        text(
+            """
+            INSERT INTO snapshot_set_member (snapshot_set_id, company_id, snapshot_id)
+            VALUES (:snapshot_set_id, :company_id, :snapshot_id)
+            RETURNING id
+            """
+        ),
+        {
+            "snapshot_set_id": snapshot_set_id,
+            "company_id": company_id,
+            "snapshot_id": snapshot_id,
+        },
+    ).scalar_one()
+    rule_id = _insert_rule_version(
+        connection,
+        rule_code=f"RUN-COMPANY-OK-RULE-{uuid4().hex}",
+    )
+    run_id = _insert_monitoring_run(
+        connection,
+        snapshot_set_id,
+        rule_id,
+        run_key=f"RUN-COMPANY-OK-{uuid4().hex}",
+    )
+
+    run_company_id = _insert_monitoring_run_company(
+        connection,
+        run_id=run_id,
+        snapshot_set_id=snapshot_set_id,
+        snapshot_set_member_id=member_id,
+    )
+
+    assert isinstance(run_company_id, UUID)
+
+
+def test_monitoring_run_company_rejects_member_from_another_snapshot_set(
+    connection: Connection,
+) -> None:
+    company_id = _insert_company(connection, code=f"RUN-COMPANY-CROSS-{uuid4().hex}")
+    master_id = _insert_tax_master(connection, company_id)
+    snapshot_id = _insert_snapshot(
+        connection,
+        company_id,
+        status="PUBLISHED",
+        tax_master_version_id=master_id,
+    )
+    run_snapshot_set_id = _insert_snapshot_set(
+        connection,
+        set_key=f"RUN-COMPANY-RUN-SET-{uuid4().hex}",
+    )
+    member_snapshot_set_id = _insert_snapshot_set(
+        connection,
+        set_key=f"RUN-COMPANY-MEMBER-SET-{uuid4().hex}",
+    )
+    member_id = connection.execute(
+        text(
+            """
+            INSERT INTO snapshot_set_member (snapshot_set_id, company_id, snapshot_id)
+            VALUES (:snapshot_set_id, :company_id, :snapshot_id)
+            RETURNING id
+            """
+        ),
+        {
+            "snapshot_set_id": member_snapshot_set_id,
+            "company_id": company_id,
+            "snapshot_id": snapshot_id,
+        },
+    ).scalar_one()
+    rule_id = _insert_rule_version(
+        connection,
+        rule_code=f"RUN-COMPANY-CROSS-RULE-{uuid4().hex}",
+    )
+    run_id = _insert_monitoring_run(
+        connection,
+        run_snapshot_set_id,
+        rule_id,
+        run_key=f"RUN-COMPANY-CROSS-{uuid4().hex}",
+    )
+
+    with pytest.raises(IntegrityError, match="fk_run_company_member_snapshot_set"):
+        _insert_monitoring_run_company(
+            connection,
+            run_id=run_id,
+            snapshot_set_id=run_snapshot_set_id,
+            snapshot_set_member_id=member_id,
+        )
+
+
+def test_monitoring_run_with_company_state_is_protected_by_restrict_foreign_key(
+    connection: Connection,
+) -> None:
+    company_id = _insert_company(connection, code=f"RUN-COMPANY-AUDIT-{uuid4().hex}")
+    master_id = _insert_tax_master(connection, company_id)
+    snapshot_id = _insert_snapshot(
+        connection,
+        company_id,
+        status="PUBLISHED",
+        tax_master_version_id=master_id,
+    )
+    snapshot_set_id = _insert_snapshot_set(
+        connection,
+        set_key=f"RUN-COMPANY-AUDIT-SET-{uuid4().hex}",
+    )
+    member_id = connection.execute(
+        text(
+            """
+            INSERT INTO snapshot_set_member (snapshot_set_id, company_id, snapshot_id)
+            VALUES (:snapshot_set_id, :company_id, :snapshot_id)
+            RETURNING id
+            """
+        ),
+        {
+            "snapshot_set_id": snapshot_set_id,
+            "company_id": company_id,
+            "snapshot_id": snapshot_id,
+        },
+    ).scalar_one()
+    rule_id = _insert_rule_version(
+        connection,
+        rule_code=f"RUN-COMPANY-AUDIT-RULE-{uuid4().hex}",
+    )
+    run_id = _insert_monitoring_run(
+        connection,
+        snapshot_set_id,
+        rule_id,
+        run_key=f"RUN-COMPANY-AUDIT-{uuid4().hex}",
+    )
+    _insert_monitoring_run_company(
+        connection,
+        run_id=run_id,
+        snapshot_set_id=snapshot_set_id,
+        snapshot_set_member_id=member_id,
+    )
+
+    with pytest.raises(IntegrityError, match="fk_run_company_run_snapshot_set"):
+        connection.execute(
+            text("DELETE FROM monitoring_run WHERE id = :run_id"),
+            {"run_id": run_id},
         )
 
 

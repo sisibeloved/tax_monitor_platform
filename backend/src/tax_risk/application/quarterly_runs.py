@@ -401,7 +401,7 @@ def _load_context(
             "QUARTERLY_RULE_NOT_EFFECTIVE",
             "the run must pin an effective published QUARTERLY_V1 rule version",
         )
-    _assert_approved_rule_manifest(rule)
+    assert_approved_quarterly_rule_manifest(rule)
 
     return _RunContext(
         run=run,
@@ -414,7 +414,9 @@ def _load_context(
     )
 
 
-def _assert_approved_rule_manifest(rule: RuleVersion) -> None:
+def assert_approved_quarterly_rule_manifest(rule: RuleVersion) -> None:
+    """Reject any quarterly rule outside the fixed reviewed manifest."""
+
     definition = rule.definition
     manifest = definition.get("formula_manifest")
     stored_hash = definition.get("formula_manifest_sha256")
@@ -1118,4 +1120,5 @@ __all__ = [
     "QuarterlyRunError",
     "QuarterlyRunResult",
     "QuarterlyRunService",
+    "assert_approved_quarterly_rule_manifest",
 ]

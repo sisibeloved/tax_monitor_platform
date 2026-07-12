@@ -30,6 +30,7 @@ class _InjectedCompanyFailure(RuntimeError):
 class _QuarterlyBatchSeed(Protocol):
     snapshot_set_id: UUID
     rule_version_id: UUID
+    snapshot_ids: tuple[UUID, ...]
     inactive_company_id: UUID
     failed_snapshot_id: UUID
 
@@ -114,6 +115,30 @@ def _evidence_counts(engine: Engine, run_id: UUID) -> dict[str, int]:
         }
 
 
+def _snapshot_source_counts(engine: Engine, snapshot_ids: tuple[UUID, ...]) -> dict[str, int]:
+    with engine.connect() as connection:
+        counts = connection.execute(
+            text(
+                """
+                SELECT count(DISTINCT source.id) AS snapshot_sources,
+                       count(DISTINCT batch.id) AS sap_batches,
+                       count(record.id) AS source_records
+                FROM snapshot_source AS source
+                JOIN accounting_snapshot AS snapshot
+                  ON snapshot.id = source.snapshot_id
+                JOIN ingest_batch AS batch
+                  ON batch.id = source.ingest_batch_id
+                 AND batch.source = 'SAP'
+                JOIN source_record AS record
+                  ON record.batch_id = batch.id
+                WHERE snapshot.id = ANY(:snapshot_ids)
+                """
+            ),
+            {"snapshot_ids": list(snapshot_ids)},
+        ).mappings().one()
+        return {key: int(value) for key, value in counts.items()}
+
+
 def test_105_company_batch_isolates_failures_and_retries_failed_only(
     quarterly_batch_resources: tuple[
         Callable[[], UnitOfWork],
@@ -143,6 +168,11 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
     )
     assert len(plan.run_company_ids) == 105
     assert len(set(plan.run_company_ids)) == 105
+    assert _snapshot_source_counts(engine, seed.snapshot_ids) == {
+        "snapshot_sources": 105,
+        "sap_batches": 105,
+        "source_records": 840,
+    }
 
     # If the process dies after the database commit but before broker publish,
     # resubmitting the same immutable batch must return only its still-pending work.
@@ -265,3 +295,317 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         ("BLOCKED", 1),
         ("SUCCEEDED", 2),
     ]
+
+
+def test_same_celery_task_can_retry_a_persisted_failed_company_attempt(
+    quarterly_batch_resources: tuple[
+        Callable[[], UnitOfWork],
+        Engine,
+        _QuarterlyBatchSeed,
+    ],
+) -> None:
+    uow_factory, engine, seed = quarterly_batch_resources
+    failure_state = _InjectedFailureState({seed.failed_snapshot_id})
+    service = QuarterlyBatchService(
+        uow_factory,
+        company_runner_factory=lambda: _CompanyRunner(uow_factory, failure_state),
+    )
+    plan = service.start_batch(
+        fiscal_year=2026,
+        quarter=2,
+        snapshot_set_id=seed.snapshot_set_id,
+        rule_version_id=seed.rule_version_id,
+    )
+    with engine.connect() as connection:
+        run_company_id = connection.execute(
+            text(
+                """
+                SELECT company_run.id
+                FROM monitoring_run_company AS company_run
+                JOIN snapshot_set_member AS member
+                  ON member.id = company_run.snapshot_set_member_id
+                WHERE company_run.run_id = :run_id
+                  AND member.snapshot_id = :snapshot_id
+                """
+            ),
+            {"run_id": plan.run_id, "snapshot_id": seed.failed_snapshot_id},
+        ).scalar_one()
+
+    first = service.run_company(run_company_id=run_company_id, task_id="celery-same-id")
+    assert first["status"] == "FAILED"
+    assert first["retryable"] is True
+    failure_state.failed_snapshot_ids.clear()
+
+    second = service.run_company(run_company_id=run_company_id, task_id="celery-same-id")
+
+    assert second["status"] == "SUCCEEDED"
+    assert second["retryable"] is False
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT status, attempt_count, celery_task_id
+                FROM monitoring_run_company
+                WHERE id = :run_company_id
+                """
+            ),
+            {"run_company_id": run_company_id},
+        ).one()
+    assert tuple(row) == ("SUCCEEDED", 2, "celery-same-id")
+
+
+def test_emergency_header_failure_is_reconciled_once_before_database_summary(
+    quarterly_batch_resources: tuple[
+        Callable[[], UnitOfWork],
+        Engine,
+        _QuarterlyBatchSeed,
+    ],
+) -> None:
+    uow_factory, engine, seed = quarterly_batch_resources
+    service = QuarterlyBatchService(uow_factory)
+    plan = service.start_batch(
+        fiscal_year=2026,
+        quarter=2,
+        snapshot_set_id=seed.snapshot_set_id,
+        rule_version_id=seed.rule_version_id,
+    )
+    run_company_id = plan.run_company_ids[0]
+    emergency = {
+        "run_company_id": str(run_company_id),
+        "status": "FAILED",
+        "retryable": False,
+        "task_id": "celery-emergency-id",
+        "error_code": "CELERY_TASK_EXECUTION_FAILED",
+        "detection_ids": [],
+        "case_ids": [],
+    }
+
+    service.reconcile_header_results(
+        run_id=plan.run_id,
+        header_results=[emergency],
+    )
+    service.reconcile_header_results(
+        run_id=plan.run_id,
+        header_results=[emergency],
+    )
+    summary = service.summarize(run_id=plan.run_id)
+
+    assert summary["status"] == "RUNNING"
+    assert summary["failed_company_count"] == 1
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT status, attempt_count, retryable, celery_task_id,
+                       error_code, detection_ids, case_ids
+                FROM monitoring_run_company
+                WHERE id = :run_company_id
+                """
+            ),
+            {"run_company_id": run_company_id},
+        ).one()
+    assert tuple(row) == (
+        "FAILED",
+        1,
+        True,
+        "celery-emergency-id",
+        "CELERY_TASK_EXECUTION_FAILED",
+        [],
+        [],
+    )
+
+
+def test_duplicate_canvas_cannot_finalize_while_owner_retry_is_pending(
+    quarterly_batch_resources: tuple[
+        Callable[[], UnitOfWork],
+        Engine,
+        _QuarterlyBatchSeed,
+    ],
+) -> None:
+    uow_factory, engine, seed = quarterly_batch_resources
+    failure_state = _InjectedFailureState({seed.failed_snapshot_id})
+    service = QuarterlyBatchService(
+        uow_factory,
+        company_runner_factory=lambda: _CompanyRunner(uow_factory, failure_state),
+    )
+    plan = service.start_batch(
+        fiscal_year=2026,
+        quarter=2,
+        snapshot_set_id=seed.snapshot_set_id,
+        rule_version_id=seed.rule_version_id,
+    )
+    with engine.connect() as connection:
+        owner_run_company_id = connection.execute(
+            text(
+                """
+                SELECT company_run.id
+                FROM monitoring_run_company AS company_run
+                JOIN snapshot_set_member AS member
+                  ON member.id = company_run.snapshot_set_member_id
+                WHERE company_run.run_id = :run_id
+                  AND member.snapshot_id = :snapshot_id
+                """
+            ),
+            {"run_id": plan.run_id, "snapshot_id": seed.failed_snapshot_id},
+        ).scalar_one()
+
+    failed = service.run_company(
+        run_company_id=owner_run_company_id,
+        task_id="owner-task-a",
+    )
+    assert failed["status"] == "FAILED"
+    assert service.prepare_automatic_retry(
+        run_company_id=owner_run_company_id,
+        task_id="owner-task-a",
+    ) is True
+    assert service.prepare_automatic_retry(
+        run_company_id=owner_run_company_id,
+        task_id="foreign-task-b",
+    ) is False
+    assert service.prepare_automatic_retry(
+        run_company_id=owner_run_company_id,
+        task_id="owner-task-a",
+    ) is True
+
+    settings = Settings(
+        redis_url="redis://localhost:6379/15",
+        environment="test",
+        celery_task_always_eager=True,
+        celery_task_eager_propagates=False,
+        celery_task_store_eager_result=True,
+        quarterly_task_max_retries=0,
+    )
+    app = create_celery_app(settings)
+    register_quarterly_tasks(app=app, service_factory=lambda: service)
+    duplicate_summary = build_quarterly_batch_canvas(
+        app=app,
+        run_id=plan.run_id,
+        run_company_ids=(owner_run_company_id,),
+    ).apply_async().get(timeout=10)
+
+    assert duplicate_summary["status"] == "RUNNING"
+    with engine.connect() as connection:
+        owner_state = connection.execute(
+            text(
+                """
+                SELECT status, attempt_count, celery_task_id
+                FROM monitoring_run_company
+                WHERE id = :run_company_id
+                """
+            ),
+            {"run_company_id": owner_run_company_id},
+        ).one()
+    assert tuple(owner_state) == ("RETRY_PENDING", 1, "owner-task-a")
+
+    failure_state.failed_snapshot_ids.clear()
+    for run_company_id in plan.run_company_ids:
+        if run_company_id != owner_run_company_id:
+            service.run_company(
+                run_company_id=run_company_id,
+                task_id=f"remaining-{run_company_id}",
+            )
+    owner_success = service.run_company(
+        run_company_id=owner_run_company_id,
+        task_id="owner-task-a",
+    )
+    final_summary = service.summarize(run_id=plan.run_id)
+
+    assert owner_success["status"] == "SUCCEEDED"
+    assert final_summary["status"] == "PARTIAL_SUCCESS"
+    assert final_summary["succeeded_company_count"] == 104
+    assert final_summary["blocked_company_count"] == 1
+    assert final_summary["failed_company_count"] == 0
+
+
+def test_emergency_failure_exhausted_during_retry_pending_becomes_failed(
+    quarterly_batch_resources: tuple[
+        Callable[[], UnitOfWork],
+        Engine,
+        _QuarterlyBatchSeed,
+    ],
+) -> None:
+    uow_factory, engine, seed = quarterly_batch_resources
+    failure_state = _InjectedFailureState({seed.failed_snapshot_id})
+    service = QuarterlyBatchService(
+        uow_factory,
+        company_runner_factory=lambda: _CompanyRunner(uow_factory, failure_state),
+    )
+    plan = service.start_batch(
+        fiscal_year=2026,
+        quarter=2,
+        snapshot_set_id=seed.snapshot_set_id,
+        rule_version_id=seed.rule_version_id,
+    )
+    with engine.connect() as connection:
+        run_company_id = connection.execute(
+            text(
+                """
+                SELECT company_run.id
+                FROM monitoring_run_company AS company_run
+                JOIN snapshot_set_member AS member
+                  ON member.id = company_run.snapshot_set_member_id
+                WHERE company_run.run_id = :run_id
+                  AND member.snapshot_id = :snapshot_id
+                """
+            ),
+            {"run_id": plan.run_id, "snapshot_id": seed.failed_snapshot_id},
+        ).scalar_one()
+    first = service.run_company(run_company_id=run_company_id, task_id="retry-owner")
+    assert first["status"] == "FAILED"
+    assert service.prepare_automatic_retry(
+        run_company_id=run_company_id,
+        task_id="retry-owner",
+    ) is True
+    foreign_emergency = {
+        "run_company_id": str(run_company_id),
+        "status": "FAILED",
+        "retryable": False,
+        "task_id": "duplicate-task-without-ownership",
+        "error_code": "CELERY_TASK_EXECUTION_FAILED",
+        "detection_ids": [],
+        "case_ids": [],
+    }
+    service.reconcile_header_results(
+        run_id=plan.run_id,
+        header_results=[foreign_emergency],
+    )
+    with engine.connect() as connection:
+        still_owned = connection.execute(
+            text(
+                "SELECT status, attempt_count, celery_task_id "
+                "FROM monitoring_run_company WHERE id = :run_company_id"
+            ),
+            {"run_company_id": run_company_id},
+        ).one()
+    assert tuple(still_owned) == ("RETRY_PENDING", 1, "retry-owner")
+
+    emergency = {
+        "run_company_id": str(run_company_id),
+        "status": "FAILED",
+        "retryable": False,
+        "task_id": "retry-owner",
+        "error_code": "CELERY_TASK_EXECUTION_FAILED",
+        "detection_ids": [],
+        "case_ids": [],
+    }
+
+    service.reconcile_header_results(run_id=plan.run_id, header_results=[emergency])
+    service.reconcile_header_results(run_id=plan.run_id, header_results=[emergency])
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT status, attempt_count, celery_task_id, error_code
+                FROM monitoring_run_company
+                WHERE id = :run_company_id
+                """
+            ),
+            {"run_company_id": run_company_id},
+        ).one()
+    assert tuple(row) == (
+        "FAILED",
+        2,
+        "retry-owner",
+        "CELERY_TASK_EXECUTION_FAILED",
+    )

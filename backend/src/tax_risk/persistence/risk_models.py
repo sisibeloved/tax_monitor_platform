@@ -44,6 +44,7 @@ class MonitoringRunStatus(StrEnum):
 class MonitoringRunCompanyStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    RETRY_PENDING = "RETRY_PENDING"
     SUCCEEDED = "SUCCEEDED"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
@@ -76,6 +77,11 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     __tablename__ = "monitoring_run"
     __table_args__ = (
         UniqueConstraint("run_key", name="uq_monitoring_run_key"),
+        UniqueConstraint(
+            "id",
+            "snapshot_set_id",
+            name="uq_monitoring_run_id_snapshot_set",
+        ),
         CheckConstraint("fiscal_year BETWEEN 2000 AND 9999", name="fiscal_year"),
         CheckConstraint("quarter BETWEEN 1 AND 4", name="quarter"),
         CheckConstraint(
@@ -118,6 +124,18 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
 class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     __tablename__ = "monitoring_run_company"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "snapshot_set_id"],
+            ["monitoring_run.id", "monitoring_run.snapshot_set_id"],
+            name="fk_run_company_run_snapshot_set",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["snapshot_set_member_id", "snapshot_set_id"],
+            ["snapshot_set_member.id", "snapshot_set_member.snapshot_set_id"],
+            name="fk_run_company_member_snapshot_set",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "run_id",
             "snapshot_set_member_id",
@@ -141,6 +159,12 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
             "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
             "AND started_at IS NOT NULL AND finished_at IS NULL "
             "AND error_code IS NULL AND error_message IS NULL "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
+            "(status = 'RETRY_PENDING' AND attempt_count > 0 AND retryable = true "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND btrim(error_code) <> '' "
+            "AND error_message IS NOT NULL AND btrim(error_message) <> '' "
             "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
             "(status = 'SUCCEEDED' AND attempt_count > 0 AND retryable = false "
             "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
@@ -167,12 +191,9 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         ),
     )
 
-    run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("monitoring_run.id", ondelete="CASCADE"), nullable=False
-    )
-    snapshot_set_member_id: Mapped[UUID] = mapped_column(
-        ForeignKey("snapshot_set_member.id", ondelete="RESTRICT"), nullable=False
-    )
+    run_id: Mapped[UUID] = mapped_column(nullable=False)
+    snapshot_set_id: Mapped[UUID] = mapped_column(nullable=False)
+    snapshot_set_member_id: Mapped[UUID] = mapped_column(nullable=False)
     status: Mapped[MonitoringRunCompanyStatus] = mapped_column(
         Enum(MonitoringRunCompanyStatus, name="monitoring_run_company_status"),
         nullable=False,
