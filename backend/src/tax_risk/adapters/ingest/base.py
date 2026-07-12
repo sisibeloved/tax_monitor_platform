@@ -137,6 +137,28 @@ class RowError:
     message: str
     field: str | None = None
     rejected_value: str | None = None
+    context: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        limits = {"company_code": 64, "metric_code": 128}
+        expected_order = {key: index for index, key in enumerate(limits)}
+        seen: set[str] = set()
+        previous_order = -1
+        for key, value in self.context:
+            if key not in limits or key in seen:
+                raise ValueError("row error context contains an unsupported or duplicate key")
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or len(value) > limits[key]
+            ):
+                raise ValueError("row error context contains an unsafe value")
+            current_order = expected_order[key]
+            if current_order <= previous_order:
+                raise ValueError("row error context keys must use canonical order")
+            seen.add(key)
+            previous_order = current_order
 
 
 @dataclass(frozen=True, slots=True)

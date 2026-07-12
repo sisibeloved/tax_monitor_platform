@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from tax_risk.persistence.ingest_models import IngestBatchStatus, IngestMode
 from tax_risk.persistence.master_models import VersionStatus
+from tax_risk.persistence.snapshot_models import SnapshotSetStatus, SnapshotStatus
+from tax_risk.snapshot_limits import (
+    MAX_SNAPSHOT_SET_MEMBERS,
+    MAX_SNAPSHOT_SOURCE_BATCHES,
+)
 
 
 class IngestBatchCreate(BaseModel):
@@ -125,6 +130,85 @@ class TaxMasterResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SnapshotValidateRequest(BaseModel):
+    company_code: str
+    period: date
+    source_batch_ids: tuple[UUID, ...] = Field(
+        max_length=MAX_SNAPSHOT_SOURCE_BATCHES
+    )
+    accepted_partial_batch_ids: tuple[UUID, ...] = Field(
+        default=(),
+        max_length=MAX_SNAPSHOT_SOURCE_BATCHES,
+    )
+
+
+class SnapshotQualityIssueResponse(BaseModel):
+    category: str
+    error_code: str
+    source: str
+    field: str
+    company: str
+    period: date
+    remediation: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SnapshotResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    company_code: str
+    tax_master_version_id: UUID
+    period: date
+    source_version_set_hash: str
+    status: SnapshotStatus
+    currency: str
+    amount_scale: int
+    record_count: int
+    control_total: Decimal
+    checksum: str
+    lineage: dict[str, Any]
+    published_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SnapshotValidationResponse(BaseModel):
+    valid: bool
+    issues: tuple[SnapshotQualityIssueResponse, ...]
+    snapshot: SnapshotResponse | None
+    reused: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SnapshotSetMemberRequest(BaseModel):
+    company_id: UUID
+    snapshot_id: UUID
+
+
+class SnapshotSetCreateRequest(BaseModel):
+    set_key: str
+    period: date
+    expected_members: tuple[SnapshotSetMemberRequest, ...] = Field(
+        max_length=MAX_SNAPSHOT_SET_MEMBERS
+    )
+    supersedes_snapshot_set_id: UUID | None = None
+
+
+class SnapshotSetResponse(BaseModel):
+    id: UUID
+    set_key: str
+    period: date
+    status: SnapshotSetStatus
+    expected_member_count: int
+    published_at: datetime
+    supersedes_snapshot_set_id: UUID | None
+    members: tuple[SnapshotSetMemberRequest, ...]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 __all__ = [
     "IngestBatchCreate",
     "IngestBatchResponse",
@@ -132,4 +216,11 @@ __all__ = [
     "TaxMasterApproveRequest",
     "TaxMasterImportResponse",
     "TaxMasterResponse",
+    "SnapshotQualityIssueResponse",
+    "SnapshotResponse",
+    "SnapshotSetCreateRequest",
+    "SnapshotSetMemberRequest",
+    "SnapshotSetResponse",
+    "SnapshotValidateRequest",
+    "SnapshotValidationResponse",
 ]

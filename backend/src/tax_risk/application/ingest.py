@@ -381,7 +381,7 @@ class IngestService:
 
     @staticmethod
     def _add_error(uow: UnitOfWork, batch_id: UUID, error: RowError) -> None:
-        details: dict[str, Any] = {}
+        details: dict[str, Any] = dict(error.context)
         if error.field is not None:
             details["field"] = error.field
         if error.rejected_value is not None:

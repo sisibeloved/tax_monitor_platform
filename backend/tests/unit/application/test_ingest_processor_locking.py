@@ -128,3 +128,87 @@ def test_financial_materializes_rows_then_takes_one_sorted_shared_lock_set() -> 
 
     assert result.accepted_count == 2
     assert repository.calls == [("shared", ("A", "B"))]
+
+
+def test_financial_processor_errors_preserve_safe_company_and_metric_context() -> None:
+    repository = _LockOrderRepository()
+    rows = [
+        AdapterRow(
+            row_number=2,
+            value=CanonicalFinancialRow(
+                source_record_key="duplicate",
+                company_code="A",
+                fiscal_year=2026,
+                period=date(2026, 6, 30),
+                currency="CNY",
+                amount_scale=2,
+                metric_code="cumulative_profit",
+                amount=Decimal("1.00"),
+                extracted_at=EVENT_TIME,
+            ),
+            error=None,
+        ),
+        AdapterRow(
+            row_number=3,
+            value=CanonicalFinancialRow(
+                source_record_key="duplicate",
+                company_code="A",
+                fiscal_year=2026,
+                period=date(2026, 6, 30),
+                currency="CNY",
+                amount_scale=2,
+                metric_code="received_dividends",
+                amount=Decimal("2.00"),
+                extracted_at=EVENT_TIME,
+            ),
+            error=None,
+        ),
+        AdapterRow(
+            row_number=4,
+            value=CanonicalFinancialRow(
+                source_record_key="metadata",
+                company_code="B",
+                fiscal_year=2026,
+                period=date(2026, 6, 30),
+                currency="USD",
+                amount_scale=2,
+                metric_code="fair_value_change",
+                amount=Decimal("3.00"),
+                extracted_at=EVENT_TIME,
+            ),
+            error=None,
+        ),
+        AdapterRow(
+            row_number=5,
+            value=CanonicalFinancialRow(
+                source_record_key="unknown",
+                company_code="C",
+                fiscal_year=2026,
+                period=date(2026, 6, 30),
+                currency="CNY",
+                amount_scale=2,
+                metric_code="cumulative_revenue",
+                amount=Decimal("4.00"),
+                extracted_at=EVENT_TIME,
+            ),
+            error=None,
+        ),
+    ]
+
+    result = FinancialProcessor().process(
+        rows,
+        uow=_uow(repository),  # type: ignore[arg-type]
+        batch=_batch("quarterly_metric"),  # type: ignore[arg-type]
+        checksum="c" * 64,
+    )
+
+    assert [error.error_code for error in result.errors] == [
+        "DUPLICATE_SOURCE_RECORD_KEY",
+        "BATCH_METADATA_MISMATCH",
+        "UNKNOWN_COMPANY",
+    ]
+    assert [error.context for error in result.errors] == [
+        (("company_code", "A"), ("metric_code", "received_dividends")),
+        (("company_code", "B"), ("metric_code", "fair_value_change")),
+        (("company_code", "C"), ("metric_code", "cumulative_revenue")),
+    ]

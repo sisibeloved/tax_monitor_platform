@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from uuid import UUID
 
@@ -26,7 +27,7 @@ class MasterRepository:
     ) -> TaxMasterVersion | None:
         statement = select(TaxMasterVersion).where(TaxMasterVersion.id == version_id)
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(populate_existing=True)
         return self._session.scalar(statement)
 
     def tax_masters_for_source_batch(self, source_batch_id: UUID) -> list[TaxMasterVersion]:
@@ -42,22 +43,56 @@ class MasterRepository:
         self,
         company_id: UUID,
         effective_on: date,
+        *,
+        for_update: bool = False,
     ) -> list[TaxMasterVersion]:
-        return list(
-            self._session.scalars(
-                select(TaxMasterVersion)
-                .where(
-                    TaxMasterVersion.company_id == company_id,
-                    TaxMasterVersion.status == VersionStatus.PUBLISHED,
-                    TaxMasterVersion.valid_from <= effective_on,
-                    (
-                        TaxMasterVersion.valid_to.is_(None)
-                        | (TaxMasterVersion.valid_to >= effective_on)
-                    ),
-                )
-                .order_by(TaxMasterVersion.valid_from, TaxMasterVersion.id)
+        statement = (
+            select(TaxMasterVersion)
+            .where(
+                TaxMasterVersion.company_id == company_id,
+                TaxMasterVersion.status == VersionStatus.PUBLISHED,
+                TaxMasterVersion.valid_from <= effective_on,
+                (
+                    TaxMasterVersion.valid_to.is_(None)
+                    | (TaxMasterVersion.valid_to >= effective_on)
+                ),
+            )
+            .order_by(TaxMasterVersion.valid_from, TaxMasterVersion.id)
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return list(self._session.scalars(statement))
+
+    def published_tax_masters_for_companies(
+        self,
+        company_ids: Iterable[UUID],
+        effective_on: date,
+        *,
+        for_update: bool = False,
+    ) -> list[TaxMasterVersion]:
+        ordered_ids = sorted(set(company_ids))
+        if not ordered_ids:
+            return []
+        statement = (
+            select(TaxMasterVersion)
+            .where(
+                TaxMasterVersion.company_id.in_(ordered_ids),
+                TaxMasterVersion.status == VersionStatus.PUBLISHED,
+                TaxMasterVersion.valid_from <= effective_on,
+                (
+                    TaxMasterVersion.valid_to.is_(None)
+                    | (TaxMasterVersion.valid_to >= effective_on)
+                ),
+            )
+            .order_by(
+                TaxMasterVersion.company_id,
+                TaxMasterVersion.valid_from,
+                TaxMasterVersion.id,
             )
         )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return list(self._session.scalars(statement))
 
     def overlapping_published_tax_masters(
         self,

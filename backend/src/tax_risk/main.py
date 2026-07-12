@@ -4,6 +4,7 @@ from threading import BoundedSemaphore
 from tax_risk.api.routes.health import router as health_router
 from tax_risk.api.routes.ingest import router as ingest_router
 from tax_risk.api.routes.master_data import router as master_data_router
+from tax_risk.api.routes.snapshots import router as snapshots_router
 from tax_risk.adapters.ingest.tax_master_xlsx import XlsxResourceLimits
 from tax_risk.application.ingest import (
     AdapterFactory,
@@ -45,4 +46,5 @@ def create_app(
     app.include_router(health_router)
     app.include_router(ingest_router)
     app.include_router(master_data_router)
+    app.include_router(snapshots_router)
     return app

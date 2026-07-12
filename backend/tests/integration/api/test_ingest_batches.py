@@ -470,6 +470,20 @@ def test_partial_file_reports_exact_rows_and_excludes_invalid_amount_from_total(
         "UNKNOWN_COMPANY",
         "INVALID_DECIMAL",
     ]
+    assert [error["details"] for error in result["errors"]] == [
+        {
+            "company_code": "C999",
+            "metric_code": "cumulative_revenue",
+            "field": "company_code",
+            "rejected_value": "C999",
+        },
+        {
+            "company_code": "C001",
+            "metric_code": "fair_value_change",
+            "field": "amount",
+            "rejected_value": "not-a-decimal",
+        },
+    ]
     with database_engine.connect() as connection:
         source_keys = (
             connection.execute(

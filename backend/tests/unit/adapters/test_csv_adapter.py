@@ -62,6 +62,10 @@ def test_invalid_decimal_is_a_row_error_and_is_never_coerced_to_zero() -> None:
     assert invalid.error.error_code == "INVALID_DECIMAL"
     assert invalid.error.field == "amount"
     assert invalid.error.rejected_value == "not-a-decimal"
+    assert invalid.error.context == (
+        ("company_code", "C001"),
+        ("metric_code", "fair_value_change"),
+    )
     assert all(
         not (
             isinstance(item.value, CanonicalFinancialRow)
@@ -86,6 +90,32 @@ def test_blank_amount_is_rejected_instead_of_becoming_zero() -> None:
     assert result.error is not None
     assert result.error.error_code == "MISSING_VALUE"
     assert result.error.field == "amount"
+
+
+@pytest.mark.parametrize(
+    ("company_code", "metric_code", "expected_context"),
+    [
+        ("   ", "cumulative_profit", (("metric_code", "cumulative_profit"),)),
+        ("C" * 65, "cumulative_profit", (("metric_code", "cumulative_profit"),)),
+        ("C001", "M" * 129, (("company_code", "C001"),)),
+    ],
+)
+def test_invalid_row_context_omits_blank_or_overlong_identity_values(
+    company_code: str,
+    metric_code: str,
+    expected_context: tuple[tuple[str, str], ...],
+) -> None:
+    payload = (
+        "source_record_key,company_code,fiscal_year,period,currency,amount_scale,"
+        "metric_code,amount,extracted_at\n"
+        f"bad-context,{company_code},2026,2026-03-31,CNY,2,{metric_code},bad,"
+        "2026-04-01T08:00:00+00:00\n"
+    ).encode()
+
+    result = next(CSVAdapter(payload, dataset_code="quarterly_metric").iter_rows())
+
+    assert result.error is not None
+    assert result.error.context == expected_context
 
 
 def test_financial_row_rejects_non_decimal_amounts() -> None:

@@ -124,6 +124,7 @@ class CSVAdapter:
                         row_number=row_number,
                         error_code="ROW_COLUMN_COUNT_MISMATCH",
                         message="row column count does not match the CSV header",
+                        context=_safe_error_context(raw),
                     ),
                 )
                 continue
@@ -143,6 +144,7 @@ class CSVAdapter:
                         message=error.message,
                         field=error.field,
                         rejected_value=error.rejected_value,
+                        context=_safe_error_context(raw),
                     ),
                 )
             else:
@@ -260,6 +262,17 @@ def _raw_value(
     if isinstance(value, str):
         return value.strip()
     return None
+
+
+def _safe_error_context(
+    raw: Mapping[str | None, str | list[str] | None],
+) -> tuple[tuple[str, str], ...]:
+    context: list[tuple[str, str]] = []
+    for field, maximum_length in (("company_code", 64), ("metric_code", 128)):
+        value = _raw_value(raw, field)
+        if value and len(value) <= maximum_length:
+            context.append((field, value))
+    return tuple(context)
 
 
 def _required(raw: Mapping[str | None, str | list[str] | None], field: str) -> str:

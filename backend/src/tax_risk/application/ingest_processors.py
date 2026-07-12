@@ -194,6 +194,7 @@ class FinancialProcessor:
                         "source_record_key is duplicated within the file",
                         "source_record_key",
                         row.source_record_key,
+                        _financial_context(row),
                     )
                 )
                 continue
@@ -279,6 +280,7 @@ class FinancialProcessor:
                 "row currency does not match batch currency",
                 "currency",
                 row.currency,
+                _financial_context(row),
             )
         if row.amount_scale != batch.amount_scale:
             return RowError(
@@ -287,6 +289,7 @@ class FinancialProcessor:
                 "row amount_scale does not match batch amount_scale",
                 "amount_scale",
                 str(row.amount_scale),
+                _financial_context(row),
             )
         if row.period != batch.period:
             return RowError(
@@ -295,6 +298,7 @@ class FinancialProcessor:
                 "row period does not match batch period",
                 "period",
                 row.period.isoformat(),
+                _financial_context(row),
             )
         if not fits_database_amount(row.amount):
             return RowError(
@@ -303,6 +307,7 @@ class FinancialProcessor:
                 "amount exceeds NUMERIC(38, 12)",
                 "amount",
                 str(row.amount),
+                _financial_context(row),
             )
         return None
 
@@ -319,6 +324,7 @@ class FinancialProcessor:
                 "company_code does not exist in the controlled company master",
                 "company_code",
                 row.company_code,
+                _financial_context(row),
             )
         if company.lifecycle != CompanyLifecycle.ACTIVE:
             return RowError(
@@ -327,6 +333,7 @@ class FinancialProcessor:
                 "company_code is inactive in the controlled company master",
                 "company_code",
                 row.company_code,
+                _financial_context(row),
             )
         return None
 
@@ -379,6 +386,13 @@ def _financial_payload(row: CanonicalFinancialRow) -> dict[str, Any]:
         "amount": str(row.amount),
         "extracted_at": row.extracted_at.isoformat(),
     }
+
+
+def _financial_context(row: CanonicalFinancialRow) -> tuple[tuple[str, str], ...]:
+    return (
+        ("company_code", row.company_code),
+        ("metric_code", row.metric_code),
+    )
 
 
 __all__ = ["CompanyMasterProcessor", "FinancialProcessor", "ProcessingResult"]
