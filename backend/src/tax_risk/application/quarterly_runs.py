@@ -485,8 +485,27 @@ def _frozen_master(
         "currency": current.currency,
         "amount_scale": current.amount_scale,
     }
+    optional_expected: dict[str, object] = {}
+    if "source_file_name" in lineage:
+        optional_expected["source_file_name"] = current.source_file_name
+    if "imported_at" in lineage:
+        try:
+            imported_at = _canonical_utc_lineage_timestamp(lineage["imported_at"])
+            current_imported_at = _canonical_json(current.created_at)
+        except (TypeError, ValueError) as error:
+            raise QuarterlyRunError(
+                "FROZEN_MASTER_MISMATCH",
+                "snapshot tax-master lineage contains an invalid import timestamp",
+            ) from error
+        optional_expected["imported_at"] = current_imported_at
+        if imported_at != current_imported_at:
+            raise QuarterlyRunError(
+                "FROZEN_MASTER_MISMATCH",
+                "current tax master no longer matches the snapshot's frozen lineage",
+            )
     if (
         any(lineage.get(field) != value for field, value in expected.items())
+        or any(lineage.get(field) != value for field, value in optional_expected.items())
         or tax_rate != current.tax_rate
         or loss_carryforward != current.loss_carryforward
         or average_tax_burden != current.average_tax_burden_rate_3y
@@ -509,6 +528,19 @@ def _lineage_decimal(lineage: dict[str, Any], field: str) -> Decimal:
     value = Decimal(raw)
     if not value.is_finite():
         raise ValueError(f"{field} must be finite")
+    return value
+
+
+def _canonical_utc_lineage_timestamp(value: object) -> str:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise TypeError("lineage timestamp must be a canonical UTC string")
+    try:
+        parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
+    except ValueError as error:
+        raise ValueError("lineage timestamp is not ISO-8601") from error
+    canonical = _canonical_json(parsed)
+    if canonical != value:
+        raise ValueError("lineage timestamp must use canonical UTC representation")
     return value
 
 
@@ -941,6 +973,49 @@ def _detection_lineage(context: _RunContext) -> dict[str, Any]:
             "SNAPSHOT_LINEAGE_INVALID",
             "frozen snapshot source and metric lineage must be lists",
         )
+    frozen_master = snapshot_lineage.get("tax_master")
+    if not isinstance(frozen_master, dict):
+        raise QuarterlyRunError(
+            "SNAPSHOT_LINEAGE_INVALID",
+            "frozen snapshot tax-master lineage must be an object",
+        )
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        batch = source.get("batch")
+        if not isinstance(batch, dict):
+            continue
+        try:
+            if "extraction_time" in batch:
+                _canonical_utc_lineage_timestamp(batch["extraction_time"])
+            if "payload_ref" in batch and not isinstance(
+                batch["payload_ref"], (str, type(None))
+            ):
+                raise TypeError("payload_ref must be text or null")
+        except (TypeError, ValueError) as error:
+            raise QuarterlyRunError(
+                "SNAPSHOT_LINEAGE_INVALID",
+                "frozen snapshot source lineage contains invalid batch metadata",
+            ) from error
+    master_version_lineage = {
+        "id": frozen_master["id"],
+        "version": frozen_master["version"],
+        "source_batch_id": frozen_master["source_batch_id"],
+        "source_checksum": frozen_master["source_checksum"],
+        "source_row_number": frozen_master["source_row_number"],
+        "valid_from": frozen_master["valid_from"],
+        "valid_to": frozen_master["valid_to"],
+        "tax_rate": frozen_master["tax_rate"],
+        "loss_carryforward": frozen_master["loss_carryforward"],
+        "historical_average_tax_burden": frozen_master[
+            "three_year_average_tax_burden"
+        ],
+        "currency": frozen_master["currency"],
+        "amount_scale": frozen_master["amount_scale"],
+    }
+    for optional_field in ("source_file_name", "imported_at"):
+        if optional_field in frozen_master:
+            master_version_lineage[optional_field] = frozen_master[optional_field]
     return {
         "company": {
             "id": str(context.company.id),
@@ -959,25 +1034,7 @@ def _detection_lineage(context: _RunContext) -> dict[str, Any]:
             "version": context.rule.version,
             "definition": _canonical_json(context.rule.definition),
         },
-        "tax_master_version": {
-            "id": str(context.master.id),
-            "version": context.master.version,
-            "source_batch_id": str(context.master.source_batch_id),
-            "source_checksum": context.master.source_checksum,
-            "source_row_number": context.master.source_row_number,
-            "valid_from": context.master.valid_from.isoformat(),
-            "valid_to": (
-                context.master.valid_to.isoformat() if context.master.valid_to is not None else None
-            ),
-            "tax_rate": format(context.master.tax_rate, "f"),
-            "loss_carryforward": format(context.master.loss_carryforward, "f"),
-            "historical_average_tax_burden": format(
-                context.master.average_tax_burden_rate_3y,
-                "f",
-            ),
-            "currency": context.master.currency,
-            "amount_scale": context.master.amount_scale,
-        },
+        "tax_master_version": master_version_lineage,
         "sources": deepcopy(sources),
         "metrics": deepcopy(metrics),
     }

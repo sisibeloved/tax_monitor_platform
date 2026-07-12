@@ -72,6 +72,8 @@ const calculatedDetection = {
       source_batch_id: "90000000-0000-4000-8000-000000000001",
       source_checksum: "master-checksum-v7",
       source_row_number: 18,
+      source_file_name: "group-tax-master-2026.xlsx",
+      imported_at: "2026-07-01T09:45:00Z",
       valid_from: "2026-01-01",
       valid_to: null,
       tax_rate: "0.250000000000",
@@ -88,6 +90,8 @@ const calculatedDetection = {
           dataset_code: "sap-quarterly-trial-balance",
           source_batch_key: "SAP-2026-Q3-1001",
           checksum: "sap-source-checksum",
+          extraction_time: "2026-07-01T08:15:30Z",
+          payload_ref: "sap-quarterly-2026-q3.csv",
         },
         target_subset: {
           company_code: "1001",
@@ -198,6 +202,16 @@ function renderDrawer(detectionId: string) {
   );
 }
 
+function expectDescriptionValue(
+  container: HTMLElement,
+  label: string,
+  value: string,
+) {
+  const row = within(container).getByText(label).closest("tr");
+  expect(row).not.toBeNull();
+  expect(within(row as HTMLElement).getByText(value)).toBeInTheDocument();
+}
+
 beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -302,6 +316,10 @@ describe("FormulaDrawer", () => {
     expect(
       within(drawer).getByText("tax-master-2026-q3-v7"),
     ).toBeInTheDocument();
+    expectDescriptionValue(drawer, "主数据文件", "group-tax-master-2026.xlsx");
+    expectDescriptionValue(drawer, "主数据导入时间", "2026-07-01T09:45:00Z");
+    expectDescriptionValue(drawer, "来源文件", "sap-quarterly-2026-q3.csv");
+    expectDescriptionValue(drawer, "取数时间", "2026-07-01T08:15:30Z");
     expect(within(drawer).getByText("phase-1-reviewed")).toBeInTheDocument();
     for (const sourceField of [
       "SAP利润总额",
@@ -314,6 +332,42 @@ describe("FormulaDrawer", () => {
       "合思无票报销",
     ]) {
       expect(within(drawer).getByText(sourceField)).toBeInTheDocument();
+    }
+  });
+
+  it("shows an em dash for lineage created before source timestamps were frozen", async () => {
+    const legacyMaster = {
+      ...calculatedDetection.lineage.tax_master_version,
+    } as Record<string, unknown>;
+    delete legacyMaster.source_file_name;
+    delete legacyMaster.imported_at;
+    const currentSource = calculatedDetection.lineage.sources[0];
+    const legacyBatch = { ...currentSource.batch } as Record<string, unknown>;
+    delete legacyBatch.extraction_time;
+    delete legacyBatch.payload_ref;
+    const legacyDetection = {
+      ...calculatedDetection,
+      id: "40000000-0000-4000-8000-000000000005",
+      lineage: {
+        ...calculatedDetection.lineage,
+        tax_master_version: legacyMaster,
+        sources: [{ ...currentSource, batch: legacyBatch }],
+      },
+    };
+    installDetectionFetch(legacyDetection);
+    renderDrawer(legacyDetection.id);
+
+    const drawer = await screen.findByRole("dialog", {
+      name: "公式与数据血缘",
+    });
+    await within(drawer).findByText("主数据文件");
+    for (const label of [
+      "主数据文件",
+      "主数据导入时间",
+      "来源文件",
+      "取数时间",
+    ]) {
+      expectDescriptionValue(drawer, label, "—");
     }
   });
 

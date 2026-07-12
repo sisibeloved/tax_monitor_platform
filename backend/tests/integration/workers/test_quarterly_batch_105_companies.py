@@ -228,6 +228,35 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         "cases": 309,
         "unique_case_fingerprints": 309,
     }
+    with engine.connect() as connection:
+        frozen = connection.execute(
+            text(
+                """
+                SELECT snapshot.lineage AS snapshot_lineage,
+                       detection.lineage AS detection_lineage
+                FROM detection_record AS detection
+                JOIN accounting_snapshot AS snapshot ON snapshot.id = detection.snapshot_id
+                WHERE detection.run_id = :run_id
+                  AND detection.company_id = :company_id
+                ORDER BY detection.monitor_type
+                LIMIT 1
+                """
+            ),
+            {"run_id": plan.run_id, "company_id": seed.company_ids[0]},
+        ).mappings().one()
+    snapshot_lineage = frozen["snapshot_lineage"]
+    detection_lineage = frozen["detection_lineage"]
+    source_batch = snapshot_lineage["sources"][0]["batch"]
+    assert source_batch["extraction_time"].endswith("Z")
+    assert source_batch["payload_ref"].endswith(".csv")
+    assert detection_lineage["sources"] == snapshot_lineage["sources"]
+    assert detection_lineage["tax_master_version"]["source_file_name"] == (
+        snapshot_lineage["tax_master"]["source_file_name"]
+    )
+    assert detection_lineage["tax_master_version"]["imported_at"] == (
+        snapshot_lineage["tax_master"]["imported_at"]
+    )
+    assert detection_lineage["tax_master_version"]["imported_at"].endswith("Z")
 
     duplicate_summary = service.summarize(run_id=plan.run_id)
     assert duplicate_summary == first_summary

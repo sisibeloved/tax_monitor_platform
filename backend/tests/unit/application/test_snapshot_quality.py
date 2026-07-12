@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -121,6 +121,46 @@ def test_source_hash_changes_with_batch_checksum_and_partial_evidence() -> None:
 
     assert checksum_changed != baseline
     assert evidence_changed != baseline
+
+
+def test_source_hash_changes_with_extraction_payload_and_master_import_identity() -> None:
+    batch = {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "checksum": "a" * 64,
+        "schema_version": "1",
+        "extraction_time": "2026-07-01T08:00:00Z",
+        "payload_ref": "sap-q2.csv",
+    }
+    master = {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "version": "v1",
+        "checksum": "m" * 64,
+        "source_file_name": "tax-master-v1.xlsx",
+        "imported_at": "2026-07-01T09:00:00Z",
+    }
+    baseline = source_version_set_hash((batch,), master)
+
+    assert source_version_set_hash(
+        (batch | {"extraction_time": "2026-07-01T08:00:01Z"},), master
+    ) != baseline
+    assert source_version_set_hash(
+        (batch | {"payload_ref": "sap-q2-reissued.csv"},), master
+    ) != baseline
+    assert source_version_set_hash(
+        (batch,), master | {"source_file_name": "tax-master-v2.xlsx"}
+    ) != baseline
+    assert source_version_set_hash(
+        (batch,), master | {"imported_at": "2026-07-01T09:00:01Z"}
+    ) != baseline
+
+
+def test_canonical_hash_rejects_naive_lineage_timestamps() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        canonical_sha256({"extraction_time": datetime(2026, 7, 1, 8)})
+
+    assert canonical_sha256(
+        {"extraction_time": datetime(2026, 7, 1, 8, tzinfo=timezone.utc)}
+    )
 
 
 def test_full_snapshot_checksum_changes_with_metric_value() -> None:

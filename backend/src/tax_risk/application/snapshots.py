@@ -96,9 +96,7 @@ def _canonicalize(value: object) -> Any:
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, datetime):
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("canonical snapshot JSON requires timezone-aware datetimes")
-        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return _canonical_utc_timestamp(value)
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Enum):
@@ -113,6 +111,12 @@ def _canonicalize(value: object) -> Any:
     if isinstance(value, (list, tuple)):
         return [_canonicalize(item) for item in value]
     raise TypeError(f"unsupported canonical snapshot value: {type(value).__name__}")
+
+
+def _canonical_utc_timestamp(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("canonical snapshot JSON requires timezone-aware datetimes")
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1450,6 +1454,8 @@ def _freeze_snapshot(
                 "rejected_count": batch.rejected_count,
                 "control_total": _decimal_string(batch.control_total),
                 "checksum": batch.checksum,
+                "extraction_time": _canonical_utc_timestamp(batch.extraction_time),
+                "payload_ref": batch.payload_ref,
             },
             "target_subset": {
                 "company_id": str(company.id),
@@ -1476,6 +1482,8 @@ def _freeze_snapshot(
                 "source_batch_key": batch.source_batch_key,
                 "checksum": batch.checksum,
                 "schema_version": batch.schema_version,
+                "extraction_time": _canonical_utc_timestamp(batch.extraction_time),
+                "payload_ref": batch.payload_ref,
                 "partial_decision": deepcopy(partial_decisions[batch.id]),
                 "target_subset_checksum": canonical_sha256(
                     [
@@ -1508,7 +1516,7 @@ def _freeze_snapshot(
             }
         )
     lineage: dict[str, Any] = {
-        "schema_version": "quarterly-accounting-snapshot-v1",
+        "schema_version": "quarterly-accounting-snapshot-v2",
         "company": {
             "id": str(company.id),
             "company_code": company.company_code,
@@ -1535,6 +1543,8 @@ def _freeze_snapshot(
         ],
         "currency": master_lineage["currency"],
         "amount_scale": master_lineage["amount_scale"],
+        "source_file_name": master_lineage["source_file_name"],
+        "imported_at": master_lineage["imported_at"],
     }
     return _FrozenSnapshot(
         company=company,
@@ -1554,6 +1564,8 @@ def _master_lineage(master: TaxMasterVersion) -> dict[str, Any]:
         "source_batch_id": str(master.source_batch_id),
         "source_checksum": master.source_checksum,
         "source_row_number": master.source_row_number,
+        "source_file_name": master.source_file_name,
+        "imported_at": _canonical_utc_timestamp(master.created_at),
         "valid_from": master.valid_from.isoformat(),
         "valid_to": master.valid_to.isoformat() if master.valid_to is not None else None,
         "tax_rate": _decimal_string(master.tax_rate),

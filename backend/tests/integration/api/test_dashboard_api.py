@@ -244,8 +244,15 @@ def dashboard_api_resources(
                                 'version', 'phase-1-reviewed'),
                             'tax_master_version', jsonb_build_object(
                                 'id', CAST(:master_id_text AS text),
-                                'version', 'dashboard-v0'),
-                            'sources', jsonb_build_array(jsonb_build_object('source', 'SAP')),
+                                'version', 'dashboard-v0',
+                                'source_file_name', 'dashboard-tax-master.xlsx',
+                                'imported_at', '2033-07-01T09:45:00Z'),
+                            'sources', jsonb_build_array(jsonb_build_object(
+                                'batch', jsonb_build_object(
+                                    'source', 'SAP',
+                                    'source_batch_key', 'SAP-2033-Q3-DASH',
+                                    'extraction_time', '2033-07-01T08:15:30Z',
+                                    'payload_ref', 'sap-dashboard-q3.csv'))),
                             'metrics', '[]'::jsonb
                         ),
                         jsonb_build_object(
@@ -567,6 +574,18 @@ def test_detection_detail_preserves_exact_values_lineage_and_not_calculable_reas
     }
     assert detail["lineage"]["company"]["id"] == str(seed.company_ids[0])
     assert detail["lineage"]["rule_version"]["version"] == "phase-1-reviewed"
+    assert detail["lineage"]["tax_master_version"]["source_file_name"] == (
+        "dashboard-tax-master.xlsx"
+    )
+    assert detail["lineage"]["tax_master_version"]["imported_at"] == (
+        "2033-07-01T09:45:00Z"
+    )
+    assert detail["lineage"]["sources"][0]["batch"] == {
+        "source": "SAP",
+        "source_batch_key": "SAP-2033-Q3-DASH",
+        "extraction_time": "2033-07-01T08:15:30Z",
+        "payload_ref": "sap-dashboard-q3.csv",
+    }
 
     assert burden.status_code == 200, burden.text
     not_calculable = burden.json()

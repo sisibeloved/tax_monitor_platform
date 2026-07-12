@@ -102,9 +102,48 @@ def _lineage(
     tax_rate: Decimal,
     loss_carryforward: Decimal,
     average_tax_burden: Decimal,
+    include_source_metadata: bool = False,
+    imported_at: str = "2026-07-01T09:45:00Z",
+    extraction_time: str = "2026-07-01T08:15:30Z",
 ) -> dict[str, object]:
+    tax_master: dict[str, object] = {
+        "id": str(master_id),
+        "version": master_version,
+        "source_batch_id": str(master_batch_id),
+        "source_checksum": master_checksum,
+        "source_row_number": source_row_number,
+        "valid_from": "2026-01-01",
+        "valid_to": None,
+        "tax_rate": format(tax_rate, "f"),
+        "loss_carryforward": format(loss_carryforward, "f"),
+        "three_year_average_tax_burden": format(average_tax_burden, "f"),
+        "currency": "CNY",
+        "amount_scale": 2,
+    }
+    sources: list[dict[str, object]] = [{"source": "SAP", "version": token}]
+    if include_source_metadata:
+        tax_master |= {
+            "source_file_name": "tax-master.xlsx",
+            "imported_at": imported_at,
+        }
+        sources = [
+            {
+                "batch": {
+                    "id": str(uuid4()),
+                    "source": "SAP",
+                    "source_batch_key": f"SAP-{token}",
+                    "dataset_code": "quarterly_metric",
+                    "extraction_time": extraction_time,
+                    "payload_ref": "sap-quarterly-2026-q2.csv",
+                }
+            }
+        ]
     return {
-        "schema_version": "quarterly-v1",
+        "schema_version": (
+            "quarterly-accounting-snapshot-v2"
+            if include_source_metadata
+            else "quarterly-accounting-snapshot-v1"
+        ),
         "metrics": [
             {
                 "metric_code": metric,
@@ -117,21 +156,8 @@ def _lineage(
             }
             for index, metric in enumerate(METRICS)
         ],
-        "sources": [{"source": "SAP", "version": token}],
-        "tax_master": {
-            "id": str(master_id),
-            "version": master_version,
-            "source_batch_id": str(master_batch_id),
-            "source_checksum": master_checksum,
-            "source_row_number": source_row_number,
-            "valid_from": "2026-01-01",
-            "valid_to": None,
-            "tax_rate": format(tax_rate, "f"),
-            "loss_carryforward": format(loss_carryforward, "f"),
-            "three_year_average_tax_burden": format(average_tax_burden, "f"),
-            "currency": "CNY",
-            "amount_scale": 2,
-        },
+        "sources": sources,
+        "tax_master": tax_master,
     }
 
 
@@ -142,6 +168,9 @@ def _seed_quarterly_case(
     tax_rate: Decimal = Decimal("0.25"),
     loss_carryforward: Decimal = Decimal("0"),
     average_tax_burden: Decimal = Decimal("0.08"),
+    include_source_metadata: bool = False,
+    lineage_imported_at: str = "2026-07-01T09:45:00Z",
+    lineage_extraction_time: str = "2026-07-01T08:15:30Z",
 ) -> QuarterlySeed:
     token = uuid4().hex
     target_values = DEFAULT_VALUES | dict(values or {})
@@ -217,13 +246,15 @@ def _seed_quarterly_case(
                         company_id, source_batch_id, valid_from, version, status,
                         tax_rate, loss_carryforward, average_tax_burden_rate_3y,
                         currency, amount_scale, source_file_name, source_checksum,
-                        source_row_number, uploaded_by, data, published_at, approved_by
+                        source_row_number, uploaded_by, data, published_at, approved_by,
+                        created_at
                     )
                     VALUES (
                         :company_id, :source_batch_id, '2026-01-01', :version,
                         'PUBLISHED', :tax_rate, :loss, :average, 'CNY', 2,
                         'tax-master.xlsx', :checksum, :row_number, 'maker',
-                        '{}'::jsonb, now(), 'reviewer'
+                        '{}'::jsonb, now(), 'reviewer',
+                        TIMESTAMPTZ '2026-07-01 09:45:00+00'
                     )
                     RETURNING id
                     """
@@ -251,6 +282,9 @@ def _seed_quarterly_case(
                     tax_rate=tax_rate,
                     loss_carryforward=loss_carryforward,
                     average_tax_burden=average_tax_burden,
+                    include_source_metadata=include_source_metadata,
+                    imported_at=lineage_imported_at,
+                    extraction_time=lineage_extraction_time,
                 )
                 if index < 2
                 else {"metrics": []}
@@ -506,6 +540,8 @@ def test_all_alerts_persist_three_exact_detections_and_isolated_cases(
     assert burden["lineage"]["snapshot"]["id"] == str(seed.snapshot_id)
     assert burden["lineage"]["rule_version"]["id"] == str(seed.rule_version_id)
     assert burden["lineage"]["tax_master_version"]["id"] == str(seed.tax_master_version_id)
+    assert "source_file_name" not in burden["lineage"]["tax_master_version"]
+    assert "imported_at" not in burden["lineage"]["tax_master_version"]
     assert burden["lineage"]["sources"]
 
     with engine.connect() as connection:
@@ -530,6 +566,120 @@ def test_all_alerts_persist_three_exact_detections_and_isolated_cases(
         if row["monitor_type"] != "TAX_BURDEN":
             assert row["risk_amount"] is not None
             assert row["risk_rate"] is None
+
+
+def test_detection_lineage_uses_new_metadata_from_frozen_snapshot(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine, include_source_metadata=True)
+
+    QuarterlyRunService(uow_factory).execute(
+        run_id=seed.run_id,
+        snapshot_id=seed.snapshot_id,
+    )
+
+    detection = _rows(engine, "detection_record", seed.run_id)[0]
+    master = detection["lineage"]["tax_master_version"]
+    assert master["source_file_name"] == "tax-master.xlsx"
+    assert master["imported_at"] == "2026-07-01T09:45:00Z"
+    source_batch = detection["lineage"]["sources"][0]["batch"]
+    assert source_batch["extraction_time"] == "2026-07-01T08:15:30Z"
+    assert source_batch["payload_ref"] == "sap-quarterly-2026-q2.csv"
+
+
+def test_run_rejects_new_frozen_master_source_file_drift(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine, include_source_metadata=True)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE tax_master_version
+                SET source_file_name = 'mutable-display-name.xlsx'
+                WHERE id = :id
+                """
+            ),
+            {"id": seed.tax_master_version_id},
+        )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        QuarterlyRunService(uow_factory).execute(
+            run_id=seed.run_id,
+            snapshot_id=seed.snapshot_id,
+        )
+
+    assert caught.value.error_code == "FROZEN_MASTER_MISMATCH"
+    assert _rows(engine, "detection_record", seed.run_id) == []
+
+
+def test_run_rejects_new_frozen_master_import_timestamp_drift(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine, include_source_metadata=True)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE tax_master_version
+                SET created_at = TIMESTAMPTZ '2026-07-01 09:46:00+00'
+                WHERE id = :id
+                """
+            ),
+            {"id": seed.tax_master_version_id},
+        )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        QuarterlyRunService(uow_factory).execute(
+            run_id=seed.run_id,
+            snapshot_id=seed.snapshot_id,
+        )
+
+    assert caught.value.error_code == "FROZEN_MASTER_MISMATCH"
+    assert _rows(engine, "detection_record", seed.run_id) == []
+
+
+def test_run_rejects_naive_frozen_master_import_timestamp(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(
+        engine,
+        include_source_metadata=True,
+        lineage_imported_at="2026-07-01T09:45:00",
+    )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        QuarterlyRunService(uow_factory).execute(
+            run_id=seed.run_id,
+            snapshot_id=seed.snapshot_id,
+        )
+
+    assert caught.value.error_code == "FROZEN_MASTER_MISMATCH"
+    assert _rows(engine, "detection_record", seed.run_id) == []
+
+
+def test_run_rejects_naive_frozen_source_extraction_timestamp(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(
+        engine,
+        include_source_metadata=True,
+        lineage_extraction_time="2026-07-01T08:15:30",
+    )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        QuarterlyRunService(uow_factory).execute(
+            run_id=seed.run_id,
+            snapshot_id=seed.snapshot_id,
+        )
+
+    assert caught.value.error_code == "SNAPSHOT_LINEAGE_INVALID"
+    assert _rows(engine, "detection_record", seed.run_id) == []
 
 
 @pytest.mark.parametrize(

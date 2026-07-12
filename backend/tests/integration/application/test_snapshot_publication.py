@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from functools import partial
 import json
@@ -800,6 +800,79 @@ def test_metric_value_change_changes_source_hash_and_full_checksum_even_if_batch
     assert second.snapshot.id != first.snapshot.id
     assert second.snapshot.source_version_set_hash != first.snapshot.source_version_set_hash
     assert second.snapshot.checksum != first.snapshot.checksum
+
+
+def test_snapshot_freezes_source_extraction_and_tax_master_import_identity(
+    service_resources: tuple[SnapshotService, Engine, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, engine, _ = service_resources
+    company_code, batch_id = _seed_quality_case(engine)
+    extraction_time = datetime(2026, 7, 1, 8, 15, 30, tzinfo=timezone.utc)
+    imported_at = datetime(2026, 7, 1, 9, 45, tzinfo=timezone.utc)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE ingest_batch
+                SET extraction_time = :extraction_time,
+                    payload_ref = 'sap-quarterly-2026-q2.csv'
+                WHERE id = :batch_id
+                """
+            ),
+            {"extraction_time": extraction_time, "batch_id": batch_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE tax_master_version
+                SET source_file_name = 'group-tax-master-2026.xlsx',
+                    created_at = :imported_at
+                WHERE company_id = (
+                    SELECT company_id FROM source_record
+                    WHERE batch_id = :batch_id LIMIT 1
+                )
+                """
+            ),
+            {"imported_at": imported_at, "batch_id": batch_id},
+        )
+
+    captured: dict[str, object] = {}
+    original_hash = snapshots_application.source_version_set_hash
+
+    def capture_identities(
+        batches: Sequence[dict[str, object]],
+        master: dict[str, object],
+    ) -> str:
+        captured["batches"] = batches
+        captured["master"] = master
+        return original_hash(batches, master)
+
+    monkeypatch.setattr(
+        snapshots_application,
+        "source_version_set_hash",
+        capture_identities,
+    )
+
+    result = _validate(service, company_code, batch_id)
+
+    assert result.valid is True, result.issues
+    assert result.snapshot is not None
+    assert result.snapshot.lineage["schema_version"] == "quarterly-accounting-snapshot-v2"
+    source_batch = result.snapshot.lineage["sources"][0]["batch"]
+    assert source_batch["extraction_time"] == "2026-07-01T08:15:30Z"
+    assert source_batch["payload_ref"] == "sap-quarterly-2026-q2.csv"
+    master_lineage = result.snapshot.lineage["tax_master"]
+    assert master_lineage["source_file_name"] == "group-tax-master-2026.xlsx"
+    assert master_lineage["imported_at"] == "2026-07-01T09:45:00Z"
+    captured_batch = captured["batches"]
+    assert isinstance(captured_batch, list)
+    assert captured_batch[0]["extraction_time"] == "2026-07-01T08:15:30Z"
+    assert captured_batch[0]["payload_ref"] == "sap-quarterly-2026-q2.csv"
+    captured_master = captured["master"]
+    assert isinstance(captured_master, dict)
+    assert captured_master["source_file_name"] == "group-tax-master-2026.xlsx"
+    assert captured_master["imported_at"] == "2026-07-01T09:45:00Z"
 
 
 def test_selected_batch_input_order_reuses_identical_draft_hash_and_sources(

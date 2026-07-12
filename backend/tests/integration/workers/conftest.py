@@ -138,12 +138,14 @@ def _seed_105_company_snapshot_set(
                     INSERT INTO ingest_batch (
                         source, source_batch_key, dataset_code, status, extraction_time,
                         period, mode, schema_version, currency, amount_scale,
-                        record_count, accepted_count, rejected_count, control_total, checksum
+                        record_count, accepted_count, rejected_count, control_total, checksum,
+                        payload_ref
                     )
                     VALUES (
                         'SAP', :batch_key, 'quarterly_metric', 'SUCCEEDED', now(),
                         :period, 'FULL', 'quarterly-v1', 'CNY', 2,
-                        :record_count, :record_count, 0, :control_total, :checksum
+                        :record_count, :record_count, 0, :control_total, :checksum,
+                        :payload_ref
                     )
                     RETURNING id
                     """
@@ -154,6 +156,7 @@ def _seed_105_company_snapshot_set(
                     "record_count": len(METRICS),
                     "control_total": sum(METRICS.values(), Decimal("0")),
                     "checksum": _digest(f"sap-batch:{token}:{index}"),
+                    "payload_ref": f"sap-quarterly-{token}-{index:03d}.csv",
                 },
             ).scalar_one()
             connection.execute(

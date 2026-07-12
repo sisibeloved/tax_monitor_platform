@@ -266,6 +266,12 @@ function Lineage({ detection }: { detection: DetectionDetail }) {
         <Descriptions.Item label="税务主数据版本">
           {textValue(master, "version") ?? detection.tax_master_version_id}
         </Descriptions.Item>
+        <Descriptions.Item label="主数据文件">
+          {textValue(master, "source_file_name") ?? "—"}
+        </Descriptions.Item>
+        <Descriptions.Item label="主数据导入时间">
+          {textValue(master, "imported_at") ?? "—"}
+        </Descriptions.Item>
         <Descriptions.Item label="规则版本">
           {textValue(rule, "version") ?? detection.rule_version_id}
         </Descriptions.Item>
@@ -293,6 +299,18 @@ function Lineage({ detection }: { detection: DetectionDetail }) {
             {textValue(
               source.batch as Record<string, unknown> | undefined,
               "source_batch_key",
+            ) ?? "—"}
+          </Descriptions.Item>
+          <Descriptions.Item label="来源文件">
+            {textValue(
+              source.batch as Record<string, unknown> | undefined,
+              "payload_ref",
+            ) ?? "—"}
+          </Descriptions.Item>
+          <Descriptions.Item label="取数时间">
+            {textValue(
+              source.batch as Record<string, unknown> | undefined,
+              "extraction_time",
             ) ?? "—"}
           </Descriptions.Item>
         </Descriptions>
