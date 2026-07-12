@@ -58,7 +58,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0003_tax_master_governance"
+    assert revision == "0004_quarterly_detection"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -493,7 +493,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0003_tax_master_governance (head)" in completed.stdout
+    assert "0004_quarterly_detection (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -516,7 +516,7 @@ def test_database_is_at_control_plane_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0003_tax_master_governance"
+    assert revision == "0004_quarterly_detection"
 
 
 def test_0003_backfills_legacy_approval_audit_then_removes_insert_defaults() -> None:

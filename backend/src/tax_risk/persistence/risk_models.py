@@ -124,13 +124,15 @@ class DetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
         CheckConstraint("rate_value IS NULL OR rate_value BETWEEN 0 AND 1", name="rate_value"),
         CheckConstraint(
-            "(calculation_status = 'CALCULATED' AND result_amount IS NOT NULL AND "
-            "not_calculated_reason IS NULL) OR "
-            "(calculation_status = 'NOT_CALCULABLE' AND result_amount IS NULL AND "
-            "not_calculated_reason IS NOT NULL) OR "
-            "(calculation_status = 'FAILED' AND result_amount IS NULL AND "
-            "not_calculated_reason IS NOT NULL)",
-            name="calculation_result_state",
+            "(calculation_status = 'CALCULATED' AND not_calculated_reason IS NULL AND "
+            "((monitor_type = 'TAX_BURDEN' AND result_amount IS NULL AND "
+            "tax_burden_rate IS NOT NULL AND tax_burden_deviation IS NOT NULL) OR "
+            "(monitor_type <> 'TAX_BURDEN' AND result_amount IS NOT NULL AND "
+            "tax_burden_rate IS NULL AND tax_burden_deviation IS NULL))) OR "
+            "(calculation_status IN ('NOT_CALCULABLE', 'FAILED') AND "
+            "result_amount IS NULL AND tax_burden_rate IS NULL AND "
+            "tax_burden_deviation IS NULL AND not_calculated_reason IS NOT NULL)",
+            name="calculation_state",
         ),
     )
 
@@ -160,6 +162,8 @@ class DetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     result_amount: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
     difference_amount: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
     rate_value: Mapped[Decimal | None] = mapped_column(Numeric(20, 12))
+    tax_burden_rate: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    tax_burden_deviation: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     amount_scale: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     formula_substitution: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -177,6 +181,21 @@ class RiskCase(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
         CheckConstraint("priority BETWEEN 1 AND 5", name="priority"),
         CheckConstraint("row_version > 0", name="row_version"),
+        CheckConstraint(
+            "(monitor_type = 'TAX_BURDEN' AND risk_amount IS NULL AND "
+            "risk_rate IS NOT NULL) OR "
+            "(monitor_type <> 'TAX_BURDEN' AND risk_amount IS NOT NULL AND "
+            "risk_rate IS NULL)",
+            name="monitor_value",
+        ),
+        CheckConstraint(
+            "risk_amount IS NULL OR risk_amount >= 0",
+            name="nonnegative_amount",
+        ),
+        CheckConstraint(
+            "risk_rate IS NULL OR risk_rate >= 0",
+            name="nonnegative_rate",
+        ),
     )
 
     fingerprint: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
@@ -192,7 +211,8 @@ class RiskCase(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     status: Mapped[RiskCaseStatus] = mapped_column(
         Enum(RiskCaseStatus, name="risk_case_status"), nullable=False
     )
-    risk_amount: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    risk_amount: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    risk_rate: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     amount_scale: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     risk_direction: Mapped[str] = mapped_column(String(64), nullable=False)
