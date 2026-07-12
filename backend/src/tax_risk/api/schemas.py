@@ -5,10 +5,17 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from tax_risk.persistence.ingest_models import IngestBatchStatus, IngestMode
 from tax_risk.persistence.master_models import VersionStatus
+from tax_risk.persistence.risk_models import (
+    CalculationStatus,
+    MonitorType,
+    MonitoringRunCompanyStatus,
+    MonitoringRunStatus,
+    RiskCaseStatus,
+)
 from tax_risk.persistence.snapshot_models import SnapshotSetStatus, SnapshotStatus
 from tax_risk.snapshot_limits import (
     MAX_SNAPSHOT_SET_MEMBERS,
@@ -209,10 +216,179 @@ class SnapshotSetResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class QuarterlyRunCreateRequest(BaseModel):
+    fiscal_year: int = Field(ge=2000, le=9999)
+    quarter: int = Field(ge=1, le=4)
+    snapshot_set_id: UUID
+    rule_version: UUID
+
+
+class QuarterlyRunStartResponse(BaseModel):
+    run_id: UUID
+    run_key: str
+    status: MonitoringRunStatus
+    dispatched_company_count: int
+
+
+class QuarterlyRunResponse(BaseModel):
+    id: UUID
+    run_key: str
+    status: MonitoringRunStatus
+    fiscal_year: int
+    quarter: int
+    rule_version_id: UUID
+    requested_company_count: int
+    succeeded_company_count: int
+    blocked_company_count: int
+    failed_company_count: int
+    started_at: datetime | None
+    finished_at: datetime | None
+    failure_reason: str | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskCaseItemResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    company_code: str
+    company_name: str
+    monitoring_type: MonitorType
+    risk_direction: str
+    risk_amount: Decimal | None
+    risk_rate: Decimal | None
+    currency: str
+    amount_scale: int
+    status: RiskCaseStatus
+    priority: int
+    assignee: str | None
+    row_version: int
+
+    @field_serializer("risk_amount", "risk_rate")
+    def serialize_risk_decimal(self, value: Decimal | None) -> str | None:
+        return None if value is None else format(value, "f")
+
+
+class RiskCaseListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: tuple[RiskCaseItemResponse, ...]
+
+
+class RiskCaseActionRequest(BaseModel):
+    action: str = Field(min_length=1, max_length=128)
+    to_status: RiskCaseStatus
+    reason: str = Field(min_length=1)
+    assignee: str | None = Field(default=None, max_length=256)
+    attachment_refs: tuple[str, ...] = ()
+    correction_voucher_no: str | None = Field(default=None, max_length=128)
+
+    @field_validator("action", "reason")
+    @classmethod
+    def strip_case_action_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+
+class RiskCaseActionResponse(BaseModel):
+    id: UUID
+    status: RiskCaseStatus
+    assignee: str | None
+    row_version: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DashboardCompanyResponse(BaseModel):
+    company_id: UUID
+    company_code: str
+    company_name: str
+    data_ready: bool
+    execution_status: MonitoringRunCompanyStatus
+    blocked_reason: str | None
+    risk_count: int
+
+
+class DashboardCompanyPageResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: tuple[DashboardCompanyResponse, ...]
+
+
+class QuarterlyDashboardResponse(BaseModel):
+    fiscal_year: int
+    quarter: int
+    run_id: UUID
+    coverage_company_count: int
+    data_ready_count: int
+    blocked_count: int
+    risk_company_count: int
+    potential_tax_cost_total: Decimal
+    currency: str
+    amount_scale: int
+    monitoring_type_counts: dict[MonitorType, int]
+    companies: DashboardCompanyPageResponse
+
+    @field_serializer("potential_tax_cost_total")
+    def serialize_potential_tax_cost(self, value: Decimal) -> str:
+        return format(value, "f")
+
+
+class DetectionDetailResponse(BaseModel):
+    id: UUID
+    run_id: UUID
+    company_id: UUID
+    snapshot_id: UUID
+    rule_version_id: UUID
+    tax_master_version_id: UUID
+    monitoring_type: MonitorType
+    calculation_status: CalculationStatus
+    input_amount: Decimal | None
+    result_amount: Decimal | None
+    difference_amount: Decimal | None
+    rate_value: Decimal | None
+    tax_burden_rate: Decimal | None
+    tax_burden_deviation: Decimal | None
+    currency: str
+    amount_scale: int
+    formula_substitution: dict[str, Any]
+    lineage: dict[str, Any]
+    structured_output: dict[str, Any]
+    not_calculated_reason: str | None
+    alert_code: str | None
+    direction: str | None
+
+    @field_serializer(
+        "input_amount",
+        "result_amount",
+        "difference_amount",
+        "rate_value",
+        "tax_burden_rate",
+        "tax_burden_deviation",
+    )
+    def serialize_detection_decimal(self, value: Decimal | None) -> str | None:
+        return None if value is None else format(value, "f")
+
+
 __all__ = [
     "IngestBatchCreate",
     "IngestBatchResponse",
     "IngestErrorResponse",
+    "DashboardCompanyPageResponse",
+    "DashboardCompanyResponse",
+    "DetectionDetailResponse",
+    "QuarterlyDashboardResponse",
+    "QuarterlyRunCreateRequest",
+    "QuarterlyRunResponse",
+    "QuarterlyRunStartResponse",
+    "RiskCaseActionRequest",
+    "RiskCaseActionResponse",
+    "RiskCaseItemResponse",
+    "RiskCaseListResponse",
     "TaxMasterApproveRequest",
     "TaxMasterImportResponse",
     "TaxMasterResponse",

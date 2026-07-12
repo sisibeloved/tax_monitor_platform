@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     environment: Literal["development", "test", "production"] = "development"
     development_principal_enabled: bool = False
+    development_principal_secret: str | None = None
     ingest_max_upload_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     ingest_max_concurrent_uploads: int = Field(default=4, gt=0)
     tax_master_xlsx_max_zip_members: int = Field(default=128, gt=0)
