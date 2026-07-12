@@ -138,7 +138,7 @@ class DetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
 
     detection_key: Mapped[str] = mapped_column(String(512), nullable=False)
     run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("monitoring_run.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("monitoring_run.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     company_id: Mapped[UUID] = mapped_column(
         ForeignKey("company.id", ondelete="RESTRICT"), nullable=False

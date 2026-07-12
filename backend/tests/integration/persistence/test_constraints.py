@@ -639,6 +639,41 @@ def test_detection_rejects_company_or_master_that_disagrees_with_snapshot(
         )
 
 
+def test_monitoring_run_with_detection_is_protected_by_restrict_foreign_key(
+    connection: Connection,
+) -> None:
+    company_id = _insert_company(connection, code="RUN-WITH-DETECTION")
+    master_id = _insert_tax_master(connection, company_id)
+    snapshot_id = _insert_snapshot(
+        connection,
+        company_id,
+        tax_master_version_id=master_id,
+    )
+    snapshot_set_id = _insert_snapshot_set(connection, set_key="RUN-RESTRICT-SET")
+    rule_version_id = _insert_rule_version(connection, rule_code="RUN-RESTRICT-RULE")
+    run_id = _insert_monitoring_run(
+        connection,
+        snapshot_set_id,
+        rule_version_id,
+        run_key="RUN-RESTRICT",
+    )
+    _insert_detection(
+        connection,
+        detection_key="RUN-RESTRICT-DETECTION",
+        run_id=run_id,
+        company_id=company_id,
+        snapshot_id=snapshot_id,
+        rule_version_id=rule_version_id,
+        tax_master_version_id=master_id,
+    )
+
+    with pytest.raises(IntegrityError, match="detection_record_run_id_fkey"):
+        connection.execute(
+            text("DELETE FROM monitoring_run WHERE id = :run_id"),
+            {"run_id": run_id},
+        )
+
+
 @pytest.mark.parametrize(
     ("result_amount", "not_calculated_reason"),
     [("10.00", "calculation failed"), (None, None)],

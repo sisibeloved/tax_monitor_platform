@@ -159,7 +159,8 @@ class QuarterlyRunService:
             context = _load_context(uow, run_id=run_id, snapshot_id=snapshot_id)
             existing = _existing_detections(uow, run_id, snapshot_id)
             if existing:
-                _assert_complete_retry(existing)
+                _assert_complete_retry(existing, context)
+                _assert_replayable_run_status(context.run)
                 replay_case_ids = _case_ids_for_detections(uow, context, existing)
                 return QuarterlyRunResult(
                     run_id=run_id,
@@ -170,6 +171,7 @@ class QuarterlyRunService:
                     case_ids=replay_case_ids,
                     replayed=True,
                 )
+            _assert_first_execution_status(context.run)
 
             inputs = _quarterly_inputs(context.snapshot, context.frozen_master)
             calculation = calculate_quarterly(inputs)
@@ -219,9 +221,8 @@ class QuarterlyRunService:
                         fingerprint=fingerprint,
                     )
                     uow.risks.add_case(risk_case)
-                else:
-                    risk_case.latest_detection_id = detection.id
-                    risk_case.row_version += 1
+                elif _is_newer_case_detection(uow, context.run, risk_case):
+                    _refresh_case_summary(risk_case, detection)
                 uow.session.flush()
                 persisted_case_ids.append(risk_case.id)
                 self._inject("case_persisted")
@@ -262,7 +263,7 @@ def _load_context(
     run = uow.session.scalar(
         select(MonitoringRun)
         .where(MonitoringRun.id == run_id)
-        .with_for_update()
+        .with_for_update(read=True)
         .execution_options(populate_existing=True)
     )
     if run is None:
@@ -272,12 +273,6 @@ def _load_context(
             "MONITORING_RUN_TYPE_INVALID",
             "only QUARTERLY monitoring runs can execute the quarterly calculator",
         )
-    if run.status != MonitoringRunStatus.RUNNING:
-        raise QuarterlyRunError(
-            "MONITORING_RUN_NOT_RUNNING",
-            "a quarterly company can execute only while its run is RUNNING",
-        )
-
     snapshot_set = uow.session.scalar(
         select(SnapshotSet).where(SnapshotSet.id == run.snapshot_set_id).with_for_update(read=True)
     )
@@ -663,18 +658,7 @@ def _new_case(
     detection: DetectionRecord,
     fingerprint: str,
 ) -> RiskCase:
-    if detection.monitor_type == MonitorType.TAX_BURDEN:
-        risk_amount = None
-        risk_rate = (
-            abs(detection.tax_burden_deviation)
-            if detection.tax_burden_deviation is not None
-            else None
-        )
-    else:
-        risk_amount = (
-            abs(detection.difference_amount) if detection.difference_amount is not None else None
-        )
-        risk_rate = None
+    risk_amount, risk_rate = _case_values(detection)
     if detection.id is None or detection.direction is None:
         raise QuarterlyRunError(
             "ALERT_DETECTION_INVALID",
@@ -704,6 +688,68 @@ def _new_case(
     )
 
 
+def _case_values(detection: DetectionRecord) -> tuple[Decimal | None, Decimal | None]:
+    if detection.monitor_type == MonitorType.TAX_BURDEN:
+        return (
+            None,
+            abs(detection.tax_burden_deviation)
+            if detection.tax_burden_deviation is not None
+            else None,
+        )
+    return (
+        abs(detection.difference_amount) if detection.difference_amount is not None else None,
+        None,
+    )
+
+
+def _is_newer_case_detection(
+    uow: UnitOfWork,
+    candidate_run: MonitoringRun,
+    risk_case: RiskCase,
+) -> bool:
+    if risk_case.latest_detection_id is None:
+        return True
+    latest_run = uow.session.execute(
+        select(MonitoringRun.created_at, MonitoringRun.id)
+        .join(DetectionRecord, DetectionRecord.run_id == MonitoringRun.id)
+        .where(DetectionRecord.id == risk_case.latest_detection_id)
+    ).one_or_none()
+    if latest_run is None:
+        raise QuarterlyRunError(
+            "CASE_LATEST_DETECTION_INVALID",
+            "risk case latest detection does not resolve to a monitoring run",
+        )
+    return (candidate_run.created_at, candidate_run.id.int) > (
+        latest_run.created_at,
+        latest_run.id.int,
+    )
+
+
+def _refresh_case_summary(
+    risk_case: RiskCase,
+    detection: DetectionRecord,
+) -> None:
+    risk_amount, risk_rate = _case_values(detection)
+    if detection.id is None or detection.direction is None:
+        raise QuarterlyRunError(
+            "ALERT_DETECTION_INVALID",
+            "an alert detection must have a persisted id and direction",
+        )
+    if risk_amount is None and risk_rate is None:
+        raise QuarterlyRunError(
+            "ALERT_DETECTION_INVALID",
+            "an alert detection must carry its monitor-specific risk value",
+        )
+    risk_case.latest_detection_id = detection.id
+    risk_case.risk_amount = risk_amount
+    risk_case.risk_rate = risk_rate
+    risk_case.risk_direction = detection.direction
+    risk_case.currency = detection.currency
+    risk_case.amount_scale = detection.amount_scale
+    risk_case.lineage = deepcopy(detection.lineage)
+    risk_case.row_version += 1
+
+
 def _existing_detections(
     uow: UnitOfWork,
     run_id: UUID,
@@ -721,12 +767,50 @@ def _existing_detections(
     )
 
 
-def _assert_complete_retry(detections: tuple[DetectionRecord, ...]) -> None:
+def _assert_complete_retry(
+    detections: tuple[DetectionRecord, ...],
+    context: _RunContext,
+) -> None:
     by_monitor = _by_monitor(detections)
     if len(detections) != len(MONITOR_ORDER) or set(by_monitor) != set(MONITOR_ORDER):
         raise QuarterlyRunError(
             "PARTIAL_DETECTION_SET",
             "an idempotent retry found an incomplete quarterly detection set",
+        )
+    if any(
+        detection.run_id != context.run.id
+        or detection.snapshot_id != context.snapshot.id
+        or detection.company_id != context.company.id
+        or detection.rule_version_id != context.rule.id
+        or detection.tax_master_version_id != context.master.id
+        or detection.currency != context.snapshot.currency
+        or detection.amount_scale != context.snapshot.amount_scale
+        for detection in detections
+    ):
+        raise QuarterlyRunError(
+            "DETECTION_IDENTITY_MISMATCH",
+            "existing detections do not match the run's frozen evidence identity",
+        )
+
+
+def _assert_replayable_run_status(run: MonitoringRun) -> None:
+    if run.status not in {
+        MonitoringRunStatus.RUNNING,
+        MonitoringRunStatus.SUCCEEDED,
+        MonitoringRunStatus.PARTIAL_SUCCESS,
+        MonitoringRunStatus.FAILED,
+    }:
+        raise QuarterlyRunError(
+            "MONITORING_RUN_NOT_RUNNING",
+            "only running or terminal quarterly runs can replay complete detections",
+        )
+
+
+def _assert_first_execution_status(run: MonitoringRun) -> None:
+    if run.status != MonitoringRunStatus.RUNNING:
+        raise QuarterlyRunError(
+            "MONITORING_RUN_NOT_RUNNING",
+            "a quarterly company can execute initially only while its run is RUNNING",
         )
 
 

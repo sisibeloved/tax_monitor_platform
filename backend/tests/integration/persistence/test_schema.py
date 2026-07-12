@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from decimal import Decimal
+import json
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ import pytest
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB, NUMERIC, TIMESTAMP, UUID
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateSchema, DropSchema
 
@@ -305,6 +307,30 @@ def test_quarterly_detection_schema_freezes_master_and_outcome_fields(engine: En
     review_status_type = _column(engine, "review_action", "from_status")["type"]
     assert getattr(review_status_type, "name", None) == "risk_case_status"
 
+    run_foreign_key = next(
+        foreign_key
+        for foreign_key in inspect(engine).get_foreign_keys("detection_record")
+        if foreign_key["constrained_columns"] == ["run_id"]
+    )
+    assert run_foreign_key["options"].get("ondelete") == "RESTRICT"
+
+
+def test_quarterly_rule_seed_records_0004_migration_provenance(engine: Engine) -> None:
+    with engine.connect() as connection:
+        definition = connection.execute(
+            text(
+                """
+                SELECT definition FROM rule_version
+                WHERE rule_code = 'QUARTERLY_V1' AND version = 'phase-1-reviewed'
+                """
+            )
+        ).scalar_one()
+
+    assert definition["migration_provenance"] == {
+        "revision": "0004_quarterly_detection",
+        "seed": "QUARTERLY_V1:phase-1-reviewed",
+    }
+
 
 def test_repositories_import_cleanly_in_a_fresh_interpreter() -> None:
     completed = subprocess.run(
@@ -480,6 +506,153 @@ def _insert_pre_0003_tax_master(
         )
 
 
+def _insert_pre_0004_tax_burden_detections(engine: Engine) -> tuple[object, object, object]:
+    """Seed the legacy 0003 shape, including a historically incomplete burden row."""
+
+    with engine.begin() as connection:
+        company_id = connection.execute(
+            text(
+                """
+                INSERT INTO company (company_code, company_name)
+                VALUES (:code, 'Legacy Quarterly Company') RETURNING id
+                """
+            ),
+            {"code": f"LEGACY-Q-{uuid4().hex}"},
+        ).scalar_one()
+        batch_id = connection.execute(
+            text(
+                """
+                INSERT INTO ingest_batch (
+                    source, source_batch_key, dataset_code, status, extraction_time,
+                    period, mode, schema_version, currency, amount_scale,
+                    record_count, accepted_count, rejected_count, control_total, checksum
+                ) VALUES (
+                    'TAX_MASTER', :key, 'tax_master', 'SUCCEEDED', now(),
+                    DATE '2026-03-31', 'FULL', '1', 'CNY', 2,
+                    1, 1, 0, 0, repeat('a', 64)
+                ) RETURNING id
+                """
+            ),
+            {"key": f"legacy-quarterly-{uuid4().hex}"},
+        ).scalar_one()
+        master_id = connection.execute(
+            text(
+                """
+                INSERT INTO tax_master_version (
+                    company_id, source_batch_id, valid_from, version, status,
+                    tax_rate, loss_carryforward, average_tax_burden_rate_3y,
+                    currency, amount_scale, data, published_at, approved_by,
+                    source_row_number, uploaded_by
+                ) VALUES (
+                    :company_id, :batch_id, DATE '2026-01-01', 'legacy-quarterly-v1',
+                    'PUBLISHED', 0.25, 0, 0.10, 'CNY', 2, '{}'::jsonb, now(),
+                    'legacy-reviewer', 2, 'legacy-uploader'
+                ) RETURNING id
+                """
+            ),
+            {"company_id": company_id, "batch_id": batch_id},
+        ).scalar_one()
+        snapshot_id = connection.execute(
+            text(
+                """
+                INSERT INTO accounting_snapshot (
+                    company_id, tax_master_version_id, period, source_version_set_hash,
+                    status, currency, amount_scale, record_count, control_total,
+                    checksum, published_at
+                ) VALUES (
+                    :company_id, :master_id, DATE '2026-03-31', repeat('b', 64),
+                    'PUBLISHED', 'CNY', 2, 1, 0, repeat('c', 64), now()
+                ) RETURNING id
+                """
+            ),
+            {"company_id": company_id, "master_id": master_id},
+        ).scalar_one()
+        snapshot_set_id = connection.execute(
+            text(
+                """
+                INSERT INTO snapshot_set (
+                    set_key, period, status, expected_member_count
+                ) VALUES (
+                    :key, DATE '2026-03-31', 'DRAFT', 100
+                ) RETURNING id
+                """
+            ),
+            {"key": f"legacy-set-{uuid4().hex}"},
+        ).scalar_one()
+        rule_id = connection.execute(
+            text(
+                """
+                INSERT INTO rule_version (
+                    rule_code, version, status, effective_from, definition,
+                    change_reason, published_at
+                ) VALUES (
+                    'LEGACY_QUARTERLY', 'v1', 'PUBLISHED', DATE '2026-01-01',
+                    '{}'::jsonb, 'legacy migration fixture', now()
+                ) RETURNING id
+                """
+            )
+        ).scalar_one()
+        run_id = connection.execute(
+            text(
+                """
+                INSERT INTO monitoring_run (
+                    run_key, run_type, snapshot_set_id, rule_version_id, status,
+                    fiscal_year, quarter, requested_company_count
+                ) VALUES (
+                    :key, 'QUARTERLY', :snapshot_set_id, :rule_id, 'SUCCEEDED',
+                    2026, 1, 1
+                ) RETURNING id
+                """
+            ),
+            {
+                "key": f"legacy-run-{uuid4().hex}",
+                "snapshot_set_id": snapshot_set_id,
+                "rule_id": rule_id,
+            },
+        ).scalar_one()
+
+        detection_ids: list[object] = []
+        for key_suffix, result_amount, difference_amount, direction in (
+            ("complete", "0.120000000000", "0.060000000000", "HIGH"),
+            ("missing-deviation", "0.110000000000", None, "HIGH"),
+        ):
+            detection_ids.append(
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO detection_record (
+                            detection_key, run_id, company_id, snapshot_id,
+                            rule_version_id, tax_master_version_id, monitor_type,
+                            calculation_status, input_amount, result_amount,
+                            difference_amount, rate_value, currency, amount_scale,
+                            formula_substitution, lineage, structured_output,
+                            alert_code, direction
+                        ) VALUES (
+                            :key, :run_id, :company_id, :snapshot_id, :rule_id,
+                            :master_id, 'TAX_BURDEN', 'CALCULATED', 100,
+                            :result_amount, :difference_amount, 0.25, 'CNY', 2,
+                            '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+                            'TAX_BURDEN_DEVIATION', :direction
+                        ) RETURNING id
+                        """
+                    ),
+                    {
+                        "key": f"legacy-burden-{key_suffix}-{uuid4().hex}",
+                        "run_id": run_id,
+                        "company_id": company_id,
+                        "snapshot_id": snapshot_id,
+                        "rule_id": rule_id,
+                        "master_id": master_id,
+                        "result_amount": result_amount,
+                        "difference_amount": difference_amount,
+                        "direction": direction,
+                    },
+                ).scalar_one()
+            )
+
+    return run_id, detection_ids[0], detection_ids[1]
+
+
 def test_alembic_current_accepts_a_percent_encoded_database_url(
     isolated_database_url: str,
 ) -> None:
@@ -517,6 +690,297 @@ def test_database_is_at_control_plane_revision(engine: Engine) -> None:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
     assert revision == "0004_quarterly_detection"
+
+
+def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0003 = _run_alembic(
+            database_url,
+            "upgrade",
+            "0003_tax_master_governance",
+        )
+        assert upgrade_0003.returncode == 0, upgrade_0003.stderr
+        run_id, complete_id, missing_deviation_id = _insert_pre_0004_tax_burden_detections(
+            isolated_engine
+        )
+
+        upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+
+        assert upgrade_0004.returncode == 0, upgrade_0004.stderr
+        with isolated_engine.connect() as connection:
+            migrated = {
+                row["id"]: row
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT id, calculation_status, result_amount, difference_amount,
+                               tax_burden_rate, tax_burden_deviation,
+                               not_calculated_reason, alert_code, direction
+                        FROM detection_record
+                        WHERE id IN (:complete_id, :missing_deviation_id)
+                        """
+                    ),
+                    {
+                        "complete_id": complete_id,
+                        "missing_deviation_id": missing_deviation_id,
+                    },
+                ).mappings()
+            }
+
+        assert migrated[complete_id] == {
+            "id": complete_id,
+            "calculation_status": "CALCULATED",
+            "result_amount": None,
+            "difference_amount": None,
+            "tax_burden_rate": Decimal("0.120000000000"),
+            "tax_burden_deviation": Decimal("0.060000000000"),
+            "not_calculated_reason": None,
+            "alert_code": "TAX_BURDEN_DEVIATION",
+            "direction": "HIGH",
+        }
+        assert migrated[missing_deviation_id] == {
+            "id": missing_deviation_id,
+            "calculation_status": "FAILED",
+            "result_amount": None,
+            "difference_amount": None,
+            "tax_burden_rate": None,
+            "tax_burden_deviation": None,
+            "not_calculated_reason": "LEGACY_TAX_BURDEN_DEVIATION_MISSING",
+            "alert_code": None,
+            "direction": None,
+        }
+
+        upgraded_run_foreign_key = next(
+            foreign_key
+            for foreign_key in inspect(isolated_engine).get_foreign_keys("detection_record")
+            if foreign_key["constrained_columns"] == ["run_id"]
+        )
+        assert upgraded_run_foreign_key["options"].get("ondelete") == "RESTRICT"
+
+        with isolated_engine.connect() as connection:
+            transaction = connection.begin()
+            with pytest.raises(IntegrityError, match="detection_record_run_id_fkey"):
+                connection.execute(
+                    text("DELETE FROM monitoring_run WHERE id = :run_id"),
+                    {"run_id": run_id},
+                )
+            transaction.rollback()
+
+        downgrade_0003 = _run_alembic(
+            database_url,
+            "downgrade",
+            "0003_tax_master_governance",
+        )
+        assert downgrade_0003.returncode == 0, downgrade_0003.stderr
+        downgraded_run_foreign_key = next(
+            foreign_key
+            for foreign_key in inspect(isolated_engine).get_foreign_keys("detection_record")
+            if foreign_key["constrained_columns"] == ["run_id"]
+        )
+        assert downgraded_run_foreign_key["options"].get("ondelete") == "CASCADE"
+        with isolated_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM monitoring_run WHERE id = :run_id"),
+                {"run_id": run_id},
+            )
+            remaining = connection.execute(
+                text(
+                    "SELECT count(*) FROM detection_record "
+                    "WHERE id IN (:complete_id, :missing_deviation_id)"
+                ),
+                {
+                    "complete_id": complete_id,
+                    "missing_deviation_id": missing_deviation_id,
+                },
+            ).scalar_one()
+        assert remaining == 0
+
+
+def test_0004_refuses_conflicting_fixed_rule_seed_without_overwriting_it() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0003 = _run_alembic(
+            database_url,
+            "upgrade",
+            "0003_tax_master_governance",
+        )
+        assert upgrade_0003.returncode == 0, upgrade_0003.stderr
+        forged_definition = {"owner": "preexisting", "formula": "forged"}
+        with isolated_engine.begin() as connection:
+            forged_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO rule_version (
+                        rule_code, version, status, effective_from, definition,
+                        change_reason, published_at, approved_by
+                    ) VALUES (
+                        'QUARTERLY_V1', 'phase-1-reviewed', 'PUBLISHED',
+                        DATE '1999-01-01', CAST(:definition AS jsonb),
+                        'preexisting forged row', now(), 'preexisting-owner'
+                    ) RETURNING id
+                    """
+                ),
+                {"definition": json.dumps(forged_definition)},
+            ).scalar_one()
+
+        upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+
+        assert upgrade_0004.returncode != 0
+        with isolated_engine.connect() as connection:
+            preserved = connection.execute(
+                text(
+                    """
+                    SELECT id, definition, change_reason FROM rule_version
+                    WHERE rule_code = 'QUARTERLY_V1'
+                      AND version = 'phase-1-reviewed'
+                    """
+                )
+            ).mappings().one()
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+
+        assert preserved == {
+            "id": forged_id,
+            "definition": forged_definition,
+            "change_reason": "preexisting forged row",
+        }
+        assert revision == "0003_tax_master_governance"
+
+
+def test_0004_downgrade_preserves_same_key_row_without_its_provenance() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade_0004.returncode == 0, upgrade_0004.stderr
+        preexisting_definition = {"owner": "preexisting-after-upgrade"}
+        with isolated_engine.begin() as connection:
+            fixed_rule_id = connection.execute(
+                text(
+                    """
+                    UPDATE rule_version
+                    SET definition = CAST(:definition AS jsonb),
+                        change_reason = 'preexisting replacement'
+                    WHERE rule_code = 'QUARTERLY_V1'
+                      AND version = 'phase-1-reviewed'
+                    RETURNING id
+                    """
+                ),
+                {"definition": json.dumps(preexisting_definition)},
+            ).scalar_one()
+
+        downgrade_0003 = _run_alembic(
+            database_url,
+            "downgrade",
+            "0003_tax_master_governance",
+        )
+
+        assert downgrade_0003.returncode == 0, downgrade_0003.stderr
+        with isolated_engine.connect() as connection:
+            preserved = connection.execute(
+                text(
+                    """
+                    SELECT id, definition, change_reason FROM rule_version
+                    WHERE rule_code = 'QUARTERLY_V1'
+                      AND version = 'phase-1-reviewed'
+                    """
+                )
+            ).mappings().one()
+        assert preserved == {
+            "id": fixed_rule_id,
+            "definition": preexisting_definition,
+            "change_reason": "preexisting replacement",
+        }
+
+
+def test_0004_downgrade_deletes_its_unreferenced_rule_seed() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade_0004.returncode == 0, upgrade_0004.stderr
+
+        downgrade_0003 = _run_alembic(
+            database_url,
+            "downgrade",
+            "0003_tax_master_governance",
+        )
+
+        assert downgrade_0003.returncode == 0, downgrade_0003.stderr
+        with isolated_engine.connect() as connection:
+            remaining = connection.execute(
+                text(
+                    """
+                    SELECT count(*) FROM rule_version
+                    WHERE rule_code = 'QUARTERLY_V1'
+                      AND version = 'phase-1-reviewed'
+                    """
+                )
+            ).scalar_one()
+        assert remaining == 0
+
+
+def test_0004_reuses_its_referenced_seed_after_downgrade_and_reupgrade() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade_0004.returncode == 0, upgrade_0004.stderr
+        with isolated_engine.begin() as connection:
+            fixed_rule_id = connection.execute(
+                text(
+                    """
+                    SELECT id FROM rule_version
+                    WHERE rule_code = 'QUARTERLY_V1'
+                      AND version = 'phase-1-reviewed'
+                    """
+                )
+            ).scalar_one()
+            snapshot_set_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO snapshot_set (
+                        set_key, period, status, expected_member_count
+                    ) VALUES (
+                        :key, DATE '2026-03-31', 'DRAFT', 100
+                    ) RETURNING id
+                    """
+                ),
+                {"key": f"referenced-seed-{uuid4().hex}"},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO monitoring_run (
+                        run_key, run_type, snapshot_set_id, rule_version_id, status,
+                        fiscal_year, quarter, requested_company_count
+                    ) VALUES (
+                        :key, 'QUARTERLY', :snapshot_set_id, :rule_id, 'PENDING',
+                        2026, 1, 0
+                    )
+                    """
+                ),
+                {
+                    "key": f"referenced-seed-run-{uuid4().hex}",
+                    "snapshot_set_id": snapshot_set_id,
+                    "rule_id": fixed_rule_id,
+                },
+            )
+
+        downgrade_0003 = _run_alembic(
+            database_url,
+            "downgrade",
+            "0003_tax_master_governance",
+        )
+        assert downgrade_0003.returncode == 0, downgrade_0003.stderr
+        reupgrade_0004 = _run_alembic(database_url, "upgrade", "head")
+
+        assert reupgrade_0004.returncode == 0, reupgrade_0004.stderr
+        with isolated_engine.connect() as connection:
+            retained_ids = connection.execute(
+                text(
+                    """
+                    SELECT id FROM rule_version
+                    WHERE rule_code = 'QUARTERLY_V1'
+                      AND version = 'phase-1-reviewed'
+                    """
+                )
+            ).scalars().all()
+        assert retained_ids == [fixed_rule_id]
 
 
 def test_0003_backfills_legacy_approval_audit_then_removes_insert_defaults() -> None:

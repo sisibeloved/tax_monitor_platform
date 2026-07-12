@@ -8,6 +8,7 @@ from decimal import Decimal, ROUND_DOWN, getcontext
 from functools import partial
 from hashlib import sha256
 import json
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
@@ -54,6 +55,8 @@ class QuarterlySeed:
     rule_version_id: UUID
     tax_master_version_id: UUID
     run_id: UUID
+    secondary_company_id: UUID
+    secondary_snapshot_id: UUID
 
 
 @pytest.fixture
@@ -191,7 +194,7 @@ def _seed_quarterly_case(
             {"set_key": f"quarterly-set-{token}", "period": PERIOD},
         ).scalar_one()
 
-        target: tuple[UUID, str, UUID, UUID] | None = None
+        targets: list[tuple[UUID, str, UUID, UUID]] = []
         for index in range(100):
             company_code = f"QR-{token}-{index:03d}"
             company_id = connection.execute(
@@ -249,7 +252,7 @@ def _seed_quarterly_case(
                     loss_carryforward=loss_carryforward,
                     average_tax_burden=average_tax_burden,
                 )
-                if index == 0
+                if index < 2
                 else {"metrics": []}
             )
             snapshot_id = connection.execute(
@@ -273,9 +276,9 @@ def _seed_quarterly_case(
                     "master_id": master_id,
                     "period": PERIOD,
                     "source_hash": _digest(f"snapshot-sources:{token}:{index}"),
-                    "record_count": len(METRICS) if index == 0 else 0,
+                    "record_count": len(METRICS) if index < 2 else 0,
                     "control_total": (
-                        sum(target_values.values(), Decimal("0")) if index == 0 else 0
+                        sum(target_values.values(), Decimal("0")) if index < 2 else 0
                     ),
                     "checksum": _digest(f"snapshot:{token}:{index}"),
                     "lineage": json.dumps(lineage),
@@ -296,15 +299,16 @@ def _seed_quarterly_case(
                     "snapshot_id": snapshot_id,
                 },
             )
-            if index == 0:
-                target = (company_id, company_code, master_id, snapshot_id)
+            if index < 2:
+                targets.append((company_id, company_code, master_id, snapshot_id))
 
         connection.execute(
             text("UPDATE snapshot_set SET status = 'PUBLISHED' WHERE id = :set_id"),
             {"set_id": snapshot_set_id},
         )
-        assert target is not None
-        company_id, company_code, master_id, snapshot_id = target
+        assert len(targets) == 2
+        company_id, company_code, master_id, snapshot_id = targets[0]
+        secondary_company_id, _, _, secondary_snapshot_id = targets[1]
         run_id = _insert_run(
             connection,
             token=token,
@@ -319,6 +323,8 @@ def _seed_quarterly_case(
         rule_version_id=rule_version_id,
         tax_master_version_id=master_id,
         run_id=run_id,
+        secondary_company_id=secondary_company_id,
+        secondary_snapshot_id=secondary_snapshot_id,
     )
 
 
@@ -359,6 +365,102 @@ def _new_run(engine: Engine, seed: QuarterlySeed) -> UUID:
             snapshot_set_id=seed.snapshot_set_id,
             rule_version_id=seed.rule_version_id,
         )
+
+
+def _new_snapshot_run(
+    engine: Engine,
+    seed: QuarterlySeed,
+    *,
+    values: Mapping[str, Decimal],
+) -> tuple[UUID, UUID]:
+    token = uuid4().hex
+    target_values = DEFAULT_VALUES | dict(values)
+    with engine.begin() as connection:
+        frozen = connection.execute(
+            text("SELECT lineage FROM accounting_snapshot WHERE id = :snapshot_id"),
+            {"snapshot_id": seed.snapshot_id},
+        ).scalar_one()
+        amounts = {metric["metric_code"]: metric for metric in frozen["metrics"]}
+        for metric_code, amount in target_values.items():
+            amounts[metric_code]["amount"] = format(amount, "f")
+        frozen["sources"] = [{"source": "SAP", "version": token}]
+        snapshot_id = connection.execute(
+            text(
+                """
+                INSERT INTO accounting_snapshot (
+                    company_id, tax_master_version_id, period,
+                    source_version_set_hash, status, currency, amount_scale,
+                    record_count, control_total, checksum, lineage, published_at
+                )
+                VALUES (
+                    :company_id, :master_id, :period, :source_hash,
+                    'PUBLISHED', 'CNY', 2, :record_count, :control_total,
+                    :checksum, CAST(:lineage AS jsonb), now()
+                )
+                RETURNING id
+                """
+            ),
+            {
+                "company_id": seed.company_id,
+                "master_id": seed.tax_master_version_id,
+                "period": PERIOD,
+                "source_hash": _digest(f"snapshot-sources:{token}"),
+                "record_count": len(METRICS),
+                "control_total": sum(target_values.values(), Decimal("0")),
+                "checksum": _digest(f"snapshot:{token}"),
+                "lineage": json.dumps(frozen),
+            },
+        ).scalar_one()
+        snapshot_set_id = connection.execute(
+            text(
+                """
+                INSERT INTO snapshot_set (set_key, period, status, expected_member_count)
+                VALUES (:set_key, :period, 'DRAFT', 100)
+                RETURNING id
+                """
+            ),
+            {"set_key": f"quarterly-set-{token}", "period": PERIOD},
+        ).scalar_one()
+        connection.execute(
+            text(
+                """
+                INSERT INTO snapshot_set_member (snapshot_set_id, company_id, snapshot_id)
+                VALUES (:set_id, :company_id, :snapshot_id)
+                """
+            ),
+            {
+                "set_id": snapshot_set_id,
+                "company_id": seed.company_id,
+                "snapshot_id": snapshot_id,
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO snapshot_set_member (snapshot_set_id, company_id, snapshot_id)
+                SELECT :new_set_id, company_id, snapshot_id
+                FROM snapshot_set_member
+                WHERE snapshot_set_id = :old_set_id
+                  AND company_id <> :target_company_id
+                """
+            ),
+            {
+                "new_set_id": snapshot_set_id,
+                "old_set_id": seed.snapshot_set_id,
+                "target_company_id": seed.company_id,
+            },
+        )
+        connection.execute(
+            text("UPDATE snapshot_set SET status = 'PUBLISHED' WHERE id = :set_id"),
+            {"set_id": snapshot_set_id},
+        )
+        run_id = _insert_run(
+            connection,
+            token=token,
+            snapshot_set_id=snapshot_set_id,
+            rule_version_id=seed.rule_version_id,
+        )
+    return run_id, snapshot_id
 
 
 def _rows(engine: Engine, table: str, run_id: UUID) -> list[dict[str, object]]:
@@ -578,6 +680,213 @@ def test_same_run_is_idempotent_and_new_run_reuses_cases_without_resetting_statu
     assert {row["latest_detection_id"] for row in case_rows} == set(second.detection_ids)
 
 
+@pytest.mark.parametrize("status", ["SUCCEEDED", "PARTIAL_SUCCESS", "FAILED"])
+def test_complete_detection_set_replays_after_run_reaches_a_terminal_status(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+    status: str,
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    first = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE monitoring_run SET status = :status WHERE id = :run_id"),
+            {"status": status, "run_id": seed.run_id},
+        )
+
+    replay = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert replay.replayed is True
+    assert replay.detection_ids == first.detection_ids
+    assert replay.case_ids == first.case_ids
+
+
+def test_pending_run_cannot_replay_an_existing_detection_set(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE monitoring_run SET status = 'PENDING' WHERE id = :run_id"),
+            {"run_id": seed.run_id},
+        )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert caught.value.error_code == "MONITORING_RUN_NOT_RUNNING"
+
+
+def test_replay_rejects_detection_evidence_from_a_different_identity(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE detection_record DISABLE TRIGGER trg_detection_record_immutable")
+        )
+        connection.execute(
+            text(
+                "UPDATE detection_record SET currency = 'USD' "
+                "WHERE run_id = :run_id AND monitor_type = 'TAX_BURDEN'"
+            ),
+            {"run_id": seed.run_id},
+        )
+        connection.execute(
+            text("ALTER TABLE detection_record ENABLE TRIGGER trg_detection_record_immutable")
+        )
+        connection.execute(
+            text("UPDATE monitoring_run SET status = 'SUCCEEDED' WHERE id = :run_id"),
+            {"run_id": seed.run_id},
+        )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert caught.value.error_code == "DETECTION_IDENTITY_MISMATCH"
+
+
+def test_newer_run_refreshes_case_summary_without_resetting_workflow(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    service = QuarterlyRunService(uow_factory)
+    first = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE risk_case SET status = 'ASSIGNED', assignee = 'case-owner' "
+                "WHERE company_id = :company_id"
+            ),
+            {"company_id": seed.company_id},
+        )
+    new_run_id, new_snapshot_id = _new_snapshot_run(
+        engine,
+        seed,
+        values={
+            "cumulative_profit": Decimal("120"),
+            "current_quarter_current_tax": Decimal("50"),
+            "cumulative_revenue": Decimal("1000"),
+            "other_payables_accrual": Decimal("-100"),
+        },
+    )
+
+    second = service.execute(run_id=new_run_id, snapshot_id=new_snapshot_id)
+
+    assert second.case_ids == first.case_ids
+    with engine.connect() as connection:
+        cases = list(
+            connection.execute(
+                text(
+                    """
+                    SELECT risk_case.monitor_type, risk_case.status, risk_case.assignee,
+                           risk_case.risk_amount, risk_case.risk_rate,
+                           risk_case.risk_direction, risk_case.currency,
+                           risk_case.amount_scale, risk_case.lineage,
+                           risk_case.latest_detection_id, risk_case.row_version
+                    FROM risk_case
+                    WHERE risk_case.company_id = :company_id
+                    """
+                ),
+                {"company_id": seed.company_id},
+            ).mappings()
+        )
+    by_monitor = {row["monitor_type"]: row for row in cases}
+    assert set(by_monitor) == {
+        "ACCRUAL_ACCURACY",
+        "TAX_BURDEN",
+        "POTENTIAL_TAX_COST",
+    }
+    assert by_monitor["ACCRUAL_ACCURACY"]["risk_amount"] == Decimal("20.000000000000")
+    assert by_monitor["ACCRUAL_ACCURACY"]["risk_direction"] == "OVER"
+    assert by_monitor["TAX_BURDEN"]["risk_rate"] == Decimal("0.050000000000")
+    assert by_monitor["TAX_BURDEN"]["risk_direction"] == "LOW"
+    assert by_monitor["POTENTIAL_TAX_COST"]["risk_amount"] == Decimal("25.000000000000")
+    assert by_monitor["POTENTIAL_TAX_COST"]["risk_direction"] == "DECREASE"
+    assert {row["status"] for row in cases} == {"ASSIGNED"}
+    assert {row["assignee"] for row in cases} == {"case-owner"}
+    assert {row["currency"] for row in cases} == {"CNY"}
+    assert {row["amount_scale"] for row in cases} == {2}
+    assert {row["latest_detection_id"] for row in cases} == set(second.detection_ids)
+    assert {row["row_version"] for row in cases} == {2}
+    assert {row["lineage"]["snapshot"]["id"] for row in cases} == {str(new_snapshot_id)}
+
+
+def test_older_run_arriving_late_cannot_overwrite_a_newer_case_summary(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    new_run_id, new_snapshot_id = _new_snapshot_run(
+        engine,
+        seed,
+        values={
+            "cumulative_profit": Decimal("120"),
+            "current_quarter_current_tax": Decimal("50"),
+            "cumulative_revenue": Decimal("1000"),
+            "other_payables_accrual": Decimal("-100"),
+        },
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE monitoring_run SET created_at = '2026-01-01 00:00:00+00' WHERE id = :run_id"
+            ),
+            {"run_id": seed.run_id},
+        )
+        connection.execute(
+            text(
+                "UPDATE monitoring_run SET created_at = '2026-01-02 00:00:00+00' WHERE id = :run_id"
+            ),
+            {"run_id": new_run_id},
+        )
+    service = QuarterlyRunService(uow_factory)
+    newer = service.execute(run_id=new_run_id, snapshot_id=new_snapshot_id)
+
+    with engine.connect() as connection:
+        before = list(
+            connection.execute(
+                text(
+                    """
+                    SELECT monitor_type, latest_detection_id, risk_amount, risk_rate,
+                           risk_direction, lineage, row_version
+                    FROM risk_case WHERE company_id = :company_id
+                    ORDER BY monitor_type
+                    """
+                ),
+                {"company_id": seed.company_id},
+            ).mappings()
+        )
+    older = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.connect() as connection:
+        after = list(
+            connection.execute(
+                text(
+                    """
+                    SELECT monitor_type, latest_detection_id, risk_amount, risk_rate,
+                           risk_direction, lineage, row_version
+                    FROM risk_case WHERE company_id = :company_id
+                    ORDER BY monitor_type
+                    """
+                ),
+                {"company_id": seed.company_id},
+            ).mappings()
+        )
+
+    assert older.case_ids == newer.case_ids
+    assert [dict(row) for row in after] == [dict(row) for row in before]
+    assert {row["latest_detection_id"] for row in after} == set(newer.detection_ids)
+    assert {row["row_version"] for row in after} == {1}
+
+
 def test_failure_rolls_back_all_detections_and_cases(
     resources: tuple[Callable[[], UnitOfWork], Engine],
 ) -> None:
@@ -637,6 +946,38 @@ def test_concurrent_same_run_serializes_to_one_detection_set(
             ).scalar_one()
             == 3
         )
+
+
+def test_same_run_different_snapshots_execute_concurrently(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(engine)
+    barrier = Barrier(2)
+
+    def execute_once(snapshot_id: UUID):
+        reached_first_detection = False
+
+        def synchronize(stage: str) -> None:
+            nonlocal reached_first_detection
+            if stage == "detection_persisted" and not reached_first_detection:
+                reached_first_detection = True
+                barrier.wait(timeout=5)
+
+        return QuarterlyRunService(
+            uow_factory,
+            failure_injector=synchronize,
+        ).execute(run_id=seed.run_id, snapshot_id=snapshot_id)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(execute_once, seed.snapshot_id),
+            pool.submit(execute_once, seed.secondary_snapshot_id),
+        ]
+        results = [future.result() for future in futures]
+
+    assert all(result.replayed is False for result in results)
+    assert len(_rows(engine, "detection_record", seed.run_id)) == 6
 
 
 def test_detection_records_are_database_immutable(
@@ -782,7 +1123,10 @@ def test_run_rejects_current_master_drift_from_frozen_snapshot_lineage(
     assert _rows(engine, "detection_record", seed.run_id) == []
 
 
-@pytest.mark.parametrize("status", ["PENDING", "SUCCEEDED", "FAILED"])
+@pytest.mark.parametrize(
+    "status",
+    ["PENDING", "SUCCEEDED", "PARTIAL_SUCCESS", "FAILED"],
+)
 def test_run_executes_only_while_status_is_running(
     resources: tuple[Callable[[], UnitOfWork], Engine],
     status: str,
