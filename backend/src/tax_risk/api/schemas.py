@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from tax_risk.persistence.ingest_models import IngestBatchStatus, IngestMode
+from tax_risk.persistence.master_models import VersionStatus
 
 
 class IngestBatchCreate(BaseModel):
@@ -74,4 +75,61 @@ class IngestBatchResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-__all__ = ["IngestBatchCreate", "IngestBatchResponse", "IngestErrorResponse"]
+class TaxMasterImportResponse(BaseModel):
+    batch_id: UUID
+    checksum: str
+    source_filename: str
+    uploaded_by: str
+    currency: str
+    amount_scale: int
+    version_ids: tuple[UUID, ...]
+    imported_at: datetime
+    replayed: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TaxMasterApproveRequest(BaseModel):
+    reviewed_by: str = Field(min_length=1, max_length=256)
+
+    @field_validator("reviewed_by")
+    @classmethod
+    def require_nonblank_reviewer(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reviewed_by must not be blank")
+        return value
+
+
+class TaxMasterResponse(BaseModel):
+    id: UUID
+    source_batch_id: UUID
+    company_code: str
+    company_name: str
+    valid_from: date
+    valid_to: date | None
+    version: str
+    status: VersionStatus
+    tax_rate: Decimal
+    loss_carryforward: Decimal
+    three_year_average_tax_burden: Decimal
+    currency: str
+    amount_scale: int
+    source_filename: str | None
+    source_checksum: str | None
+    source_row_number: int
+    uploaded_by: str
+    imported_at: datetime
+    published_at: datetime | None
+    approved_by: str | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+__all__ = [
+    "IngestBatchCreate",
+    "IngestBatchResponse",
+    "IngestErrorResponse",
+    "TaxMasterApproveRequest",
+    "TaxMasterImportResponse",
+    "TaxMasterResponse",
+]

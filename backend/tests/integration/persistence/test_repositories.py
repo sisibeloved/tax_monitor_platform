@@ -83,18 +83,20 @@ def test_published_tax_master_prefers_latest_publication_over_version_text(
             INSERT INTO tax_master_version (
                 company_id, source_batch_id, valid_from, version, status, tax_rate,
                 loss_carryforward, average_tax_burden_rate_3y, currency, amount_scale,
-                data, published_at
+                data, published_at, approved_by, uploaded_by, source_row_number
             )
             VALUES
                 (
                     :company_id, :batch_id, DATE '2026-01-01', 'v9', 'PUBLISHED',
                     0.25, 0, 0.10, 'CNY', 2, '{}'::jsonb,
-                    TIMESTAMPTZ '2026-01-09 00:00:00+00'
+                    TIMESTAMPTZ '2026-01-09 00:00:00+00',
+                    'reviewer-v9', 'maker-v9', 2
                 ),
                 (
                     :company_id, :batch_id, DATE '2026-01-01', 'v10', 'PUBLISHED',
                     0.25, 0, 0.10, 'CNY', 2, '{}'::jsonb,
-                    TIMESTAMPTZ '2026-01-10 00:00:00+00'
+                    TIMESTAMPTZ '2026-01-10 00:00:00+00',
+                    'reviewer-v10', 'maker-v10', 3
                 )
             """
         ),

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from decimal import Decimal
 import os
 from pathlib import Path
 import re
@@ -55,7 +58,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0002_company_master_freshness"
+    assert revision == "0003_tax_master_governance"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -203,6 +206,26 @@ def test_numeric_and_json_lineage_contracts_are_exact(engine: Engine) -> None:
         ("detection_record", "formula_substitution"),
     }:
         assert isinstance(_column(engine, table_name, column_name)["type"], JSONB)
+
+
+def test_tax_master_governance_has_strict_state_loss_and_no_legacy_defaults(
+    engine: Engine,
+) -> None:
+    source_row = _column(engine, "tax_master_version", "source_row_number")
+    uploaded_by = _column(engine, "tax_master_version", "uploaded_by")
+    checks = {
+        constraint["name"]: constraint["sqltext"]
+        for constraint in inspect(engine).get_check_constraints("tax_master_version")
+    }
+
+    assert source_row["nullable"] is False
+    assert source_row["default"] is None
+    assert uploaded_by["nullable"] is False
+    assert uploaded_by["default"] is None
+    assert any("loss_carryforward >= 0" in sql for sql in checks.values())
+    state_sql = next(sql for name, sql in checks.items() if "published_at_state" in name)
+    assert "approved_by IS NOT NULL" in state_sql
+    assert "approved_by IS NULL" in state_sql
 
 
 def test_foreign_keys_cover_lineage_and_control_plane_relationships(engine: Engine) -> None:
@@ -366,6 +389,97 @@ def _run_alembic(database_url: str, *arguments: str) -> subprocess.CompletedProc
     )
 
 
+@contextmanager
+def _owned_migration_schema() -> Iterator[tuple[str, Engine]]:
+    base_url = make_url(Settings().database_url)
+    schema_name = f"tax_risk_pytest_{uuid4().hex}"
+    admin_engine = create_engine(base_url, poolclass=NullPool)
+    isolated_engine: Engine | None = None
+    try:
+        with admin_engine.begin() as connection:
+            connection.execute(CreateSchema(schema_name))
+            quoted = connection.dialect.identifier_preparer.quote(schema_name)
+            connection.exec_driver_sql(
+                f"COMMENT ON SCHEMA {quoted} IS '{PYTEST_SCHEMA_MARKER}'"
+            )
+        database_url = base_url.update_query_dict(
+            {"options": f"-csearch_path={schema_name}"}
+        ).render_as_string(hide_password=False)
+        isolated_engine = create_engine(database_url, poolclass=NullPool)
+        yield database_url, isolated_engine
+    finally:
+        if isolated_engine is not None:
+            isolated_engine.dispose()
+        with admin_engine.begin() as connection:
+            marker = connection.execute(
+                text(
+                    """
+                    SELECT obj_description(oid, 'pg_namespace')
+                    FROM pg_namespace WHERE nspname = :schema_name
+                    """
+                ),
+                {"schema_name": schema_name},
+            ).scalar_one_or_none()
+            assert marker == PYTEST_SCHEMA_MARKER
+            connection.execute(DropSchema(schema_name, cascade=True))
+        admin_engine.dispose()
+
+
+def _insert_pre_0003_tax_master(
+    engine: Engine,
+    *,
+    loss: str,
+    status: str,
+    published_at_sql: str,
+) -> None:
+    with engine.begin() as connection:
+        company_id = connection.execute(
+            text(
+                """
+                INSERT INTO company (company_code, company_name)
+                VALUES (:code, 'Legacy Company') RETURNING id
+                """
+            ),
+            {"code": f"LEGACY-{uuid4().hex}"},
+        ).scalar_one()
+        batch_id = connection.execute(
+            text(
+                """
+                INSERT INTO ingest_batch (
+                    source, source_batch_key, dataset_code, status, extraction_time,
+                    period, mode, schema_version, currency, amount_scale,
+                    record_count, accepted_count, rejected_count, control_total, checksum
+                ) VALUES (
+                    'TAX_MASTER', :key, 'tax_master', 'SUCCEEDED', now(),
+                    DATE '2026-03-31', 'FULL', '1', 'CNY', 2,
+                    1, 1, 0, 0, repeat('a', 64)
+                ) RETURNING id
+                """
+            ),
+            {"key": f"legacy-{uuid4().hex}"},
+        ).scalar_one()
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO tax_master_version (
+                    company_id, source_batch_id, valid_from, version, status,
+                    tax_rate, loss_carryforward, average_tax_burden_rate_3y,
+                    currency, amount_scale, data, published_at
+                ) VALUES (
+                    :company_id, :batch_id, DATE '2026-01-01', 'legacy-v1', :status,
+                    0.25, :loss, 0.10, 'CNY', 2, '{{}}'::jsonb, {published_at_sql}
+                )
+                """
+            ),
+            {
+                "company_id": company_id,
+                "batch_id": batch_id,
+                "status": status,
+                "loss": loss,
+            },
+        )
+
+
 def test_alembic_current_accepts_a_percent_encoded_database_url(
     isolated_database_url: str,
 ) -> None:
@@ -379,7 +493,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0002_company_master_freshness (head)" in completed.stdout
+    assert "0003_tax_master_governance (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -402,7 +516,88 @@ def test_database_is_at_control_plane_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0002_company_master_freshness"
+    assert revision == "0003_tax_master_governance"
+
+
+def test_0003_backfills_legacy_approval_audit_then_removes_insert_defaults() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0002 = _run_alembic(
+            database_url,
+            "upgrade",
+            "0002_company_master_freshness",
+        )
+        assert upgrade_0002.returncode == 0, upgrade_0002.stderr
+        _insert_pre_0003_tax_master(
+            isolated_engine,
+            loss="0",
+            status="PUBLISHED",
+            published_at_sql="now()",
+        )
+
+        upgrade_0003 = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade_0003.returncode == 0, upgrade_0003.stderr
+        with isolated_engine.connect() as connection:
+            governed = connection.execute(
+                text(
+                    """
+                    SELECT approved_by, uploaded_by, source_row_number
+                    FROM tax_master_version WHERE version = 'legacy-v1'
+                    """
+                )
+            ).mappings().one()
+        columns = {
+            column["name"]: column
+            for column in inspect(isolated_engine).get_columns("tax_master_version")
+        }
+
+        assert governed == {
+            "approved_by": "legacy-migration",
+            "uploaded_by": "legacy-migration",
+            "source_row_number": 2,
+        }
+        assert columns["uploaded_by"]["default"] is None
+        assert columns["source_row_number"]["default"] is None
+
+        downgrade = _run_alembic(
+            database_url,
+            "downgrade",
+            "0002_company_master_freshness",
+        )
+        assert downgrade.returncode == 0, downgrade.stderr
+        reupgrade = _run_alembic(database_url, "upgrade", "head")
+        assert reupgrade.returncode == 0, reupgrade.stderr
+
+
+def test_0003_refuses_historical_negative_loss_without_modifying_it() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0002 = _run_alembic(
+            database_url,
+            "upgrade",
+            "0002_company_master_freshness",
+        )
+        assert upgrade_0002.returncode == 0, upgrade_0002.stderr
+        _insert_pre_0003_tax_master(
+            isolated_engine,
+            loss="-0.01",
+            status="DRAFT",
+            published_at_sql="NULL",
+        )
+
+        upgrade_0003 = _run_alembic(database_url, "upgrade", "head")
+
+        assert upgrade_0003.returncode != 0
+        with isolated_engine.connect() as connection:
+            loss = connection.execute(
+                text(
+                    "SELECT loss_carryforward FROM tax_master_version "
+                    "WHERE version = 'legacy-v1'"
+                )
+            ).scalar_one()
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+        assert loss == Decimal("-0.010000000000")
+        assert revision == "0002_company_master_freshness"
 
 
 def test_0002_backfills_existing_company_from_historical_lifecycle_timestamp() -> None:

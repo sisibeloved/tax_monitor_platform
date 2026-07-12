@@ -124,17 +124,69 @@ def _insert_tax_master(
             INSERT INTO tax_master_version (
                 company_id, source_batch_id, valid_from, version, status, tax_rate,
                 loss_carryforward, average_tax_burden_rate_3y, currency, amount_scale,
-                data, published_at
+                data, published_at, approved_by, uploaded_by, source_row_number
             )
             VALUES (
                 :company_id, :batch_id, DATE '2026-01-01', 'v1', 'PUBLISHED', 0.25,
-                0, 0.10, 'CNY', 2, '{}'::jsonb, now()
+                0, 0.10, 'CNY', 2, '{}'::jsonb, now(),
+                'legacy-test-reviewer', 'legacy-test-maker', 2
             )
             RETURNING id
             """
         ),
         {"company_id": company_id, "batch_id": source_batch_id},
     ).scalar_one()
+
+
+@pytest.mark.parametrize(
+    ("status", "loss", "published_at", "approved_by"),
+    [
+        ("DRAFT", "-0.01", None, None),
+        ("PUBLISHED", "0", "2026-01-01T00:00:00+00:00", None),
+        ("DRAFT", "0", None, "premature-reviewer"),
+    ],
+)
+def test_tax_master_rejects_negative_loss_and_inconsistent_approval_state(
+    connection: Connection,
+    status: str,
+    loss: str,
+    published_at: str | None,
+    approved_by: str | None,
+) -> None:
+    company_id = _insert_company(connection, code=f"MASTER-GOV-{uuid4().hex}")
+    batch_id = _insert_batch(
+        connection,
+        source="TAX_MASTER",
+        source_batch_key=f"master-gov-{uuid4().hex}",
+    )
+
+    with pytest.raises(IntegrityError):
+        connection.execute(
+            text(
+                """
+                INSERT INTO tax_master_version (
+                    company_id, source_batch_id, valid_from, version, status,
+                    tax_rate, loss_carryforward, average_tax_burden_rate_3y,
+                    currency, amount_scale, data, published_at, approved_by,
+                    uploaded_by, source_row_number
+                )
+                VALUES (
+                    :company_id, :batch_id, DATE '2026-01-01', :version, :status,
+                    0.25, :loss, 0.10, 'CNY', 2, '{}'::jsonb,
+                    CAST(:published_at AS timestamptz), :approved_by, 'maker', 2
+                )
+                """
+            ),
+            {
+                "company_id": company_id,
+                "batch_id": batch_id,
+                "version": uuid4().hex,
+                "status": status,
+                "loss": loss,
+                "published_at": published_at,
+                "approved_by": approved_by,
+            },
+        )
 
 
 def _insert_snapshot(
@@ -511,11 +563,12 @@ def test_tax_master_company_valid_from_and_version_are_unique(connection: Connec
         """
         INSERT INTO tax_master_version (
             company_id, source_batch_id, valid_from, version, status, tax_rate,
-            loss_carryforward, average_tax_burden_rate_3y, currency, amount_scale, data
+            loss_carryforward, average_tax_burden_rate_3y, currency, amount_scale,
+            data, uploaded_by, source_row_number
         )
         VALUES (
             :company_id, :batch_id, DATE '2026-01-01', 'v1', 'DRAFT', 0.25,
-            0, 0.10, 'CNY', 2, '{}'::jsonb
+            0, 0.10, 'CNY', 2, '{}'::jsonb, 'unique-test-maker', 2
         )
         """
     )
