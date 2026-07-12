@@ -4,7 +4,24 @@ from typing import Any
 import pytest
 
 from tax_risk.domain.money import Money, Rate
-from tax_risk.domain.quarterly import QuarterlyInputs, calculate_quarterly
+from tax_risk.domain.quarterly import (
+    CalculationStatus,
+    QuarterlyInputs,
+    calculate_quarterly,
+)
+
+
+MONEY_FIELDS = (
+    "cumulative_profit",
+    "received_dividends",
+    "fair_value_change",
+    "loss_carryforward",
+    "prior_quarter_current_tax",
+    "current_quarter_current_tax",
+    "cumulative_revenue",
+    "other_payables_accrual",
+    "hesi_no_invoice",
+)
 
 
 def _money(
@@ -106,3 +123,60 @@ def test_inputs_reject_values_that_cannot_cross_the_persistence_boundary(
 
     with pytest.raises(ValueError, match=message):
         QuarterlyInputs(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("money_kwargs", "message"),
+    [
+        ({"currency": "CNYY"}, "three uppercase letters"),
+        ({"scale": 13}, "scale must not exceed 12"),
+    ],
+)
+def test_inputs_reject_consistently_invalid_money_metadata(
+    money_kwargs: dict[str, object],
+    message: str,
+) -> None:
+    values = _valid_values()
+    for field in MONEY_FIELDS:
+        values[field] = _money(**money_kwargs)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=message):
+        QuarterlyInputs(**values)  # type: ignore[arg-type]
+
+
+def test_inputs_reject_a_money_value_corrupted_after_construction() -> None:
+    corrupted_money = _money()
+    # Exercise QuarterlyInputs' own persistence-boundary defence. This cannot be
+    # constructed through Money's public API, but may arrive from unsafe hydration.
+    object.__setattr__(corrupted_money, "amount", Decimal("NaN"))
+    values = _valid_values()
+    values["cumulative_profit"] = corrupted_money
+
+    with pytest.raises(ValueError, match="NUMERIC"):
+        QuarterlyInputs(**values)  # type: ignore[arg-type]
+
+
+def test_nonfinite_tax_burden_result_fails_only_that_monitor() -> None:
+    corrupted_historical_average = Rate.from_fraction("0.10")
+    # Model a damaged master-data object hydrated without Rate.__init__. The
+    # calculator must contain the Decimal failure to the tax-burden monitor.
+    object.__setattr__(
+        corrupted_historical_average,
+        "value",
+        Decimal("NaN"),
+    )
+    values = _valid_values()
+    values["historical_average_tax_burden"] = corrupted_historical_average
+    values["cumulative_profit"] = _money("100")
+
+    result = calculate_quarterly(QuarterlyInputs(**values))  # type: ignore[arg-type]
+
+    assert result.accrual_status is CalculationStatus.CALCULATED
+    assert result.tax_burden_status is CalculationStatus.FAILED
+    assert result.potential_status is CalculationStatus.CALCULATED
+    assert result.current_tax_burden is None
+    assert result.tax_burden_deviation is None
+    assert result.tax_burden_alert_flag is False
+    assert result.tax_burden_alert_code is None
+    assert result.tax_burden_not_calculated_reason == "DECIMAL_CALCULATION_FAILED"
+    assert result.not_calculated_reason == "DECIMAL_CALCULATION_FAILED"
