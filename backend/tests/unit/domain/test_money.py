@@ -27,6 +27,11 @@ def test_money_rejects_binary_float() -> None:
         Money.unrounded(0.1, currency="CNY", scale=2)
 
 
+def test_money_rejects_malformed_decimal_string() -> None:
+    with pytest.raises(ValueError, match="amount must be a valid Decimal-compatible string"):
+        Money.unrounded("not-a-decimal", currency="CNY", scale=2)
+
+
 @pytest.mark.parametrize("value", [1, True, None])
 def test_money_rejects_other_non_decimal_inputs(value: object) -> None:
     with pytest.raises(TypeError, match="Decimal-compatible string"):
@@ -121,3 +126,10 @@ def test_rate_multiplication_keeps_the_full_unrounded_amount() -> None:
     assert result.amount == Decimal("2.50125")
     assert result.currency == "CNY"
     assert result.scale == 2
+
+
+def test_money_multiplication_rejects_non_rate_operand() -> None:
+    money = Money.unrounded("10.00", currency="CNY", scale=2)
+
+    with pytest.raises(TypeError, match="Money can only be multiplied by Rate"):
+        money * Decimal("0.25")  # type: ignore[operator]
