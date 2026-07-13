@@ -23,6 +23,8 @@ from tax_risk.config import Settings
 
 
 EXPECTED_TABLES = {
+    "business_entertainment_scope_company",
+    "business_entertainment_scope_version",
     "company",
     "ingest_batch",
     "ingest_error",
@@ -61,7 +63,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0006_review_action_assignee"
+    assert revision == "0007_entertainment_scope"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -797,7 +799,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0006_review_action_assignee (head)" in completed.stdout
+    assert "0007_entertainment_scope (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -816,11 +818,11 @@ def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
     assert after.returncode == 0, after.stderr
 
 
-def test_database_is_at_control_plane_revision(engine: Engine) -> None:
+def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0006_review_action_assignee"
+    assert revision == "0007_entertainment_scope"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

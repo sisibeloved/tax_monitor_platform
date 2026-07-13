@@ -13,13 +13,20 @@ def register_models() -> None:
     """Load every focused model module into the canonical Base registry."""
 
     from tax_risk.persistence import (
+        business_entertainment_models,
         ingest_models,
         master_models,
         risk_models,
         snapshot_models,
     )
 
-    _ = (ingest_models, master_models, risk_models, snapshot_models)
+    _ = (
+        business_entertainment_models,
+        ingest_models,
+        master_models,
+        risk_models,
+        snapshot_models,
+    )
 
 
 register_models()
