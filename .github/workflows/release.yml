@@ -1,0 +1,72 @@
+name: 签名发布候选
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_version:
+        description: 发布候选版本
+        required: true
+      application_image_digest:
+        description: 已构建应用镜像的 sha256 摘要
+        required: true
+      environment:
+        description: 目标环境
+        required: true
+        type: choice
+        options: [pilot, production]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  replay-and-sign:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: 安装后端依赖
+        run: uv venv backend/.venv && uv pip install --python backend/.venv/bin/python -e 'backend[dev]'
+      - name: 重放候选并生成待签清单
+        env:
+          RELEASE_CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          APPLICATION_IMAGE_DIGEST: ${{ inputs.application_image_digest }}
+        run: make verify-release
+      - name: 获取 GitHub OIDC 工作负载令牌
+        id: workload_identity
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('tax-risk-release');
+            core.setSecret(token);
+            return token;
+          result-encoding: string
+      - name: 获取工作负载身份并由 KMS/HSM 签名
+        env:
+          KMS_SIGNING_ENDPOINT: ${{ secrets.KMS_SIGNING_ENDPOINT }}
+          KMS_RELEASE_KEY_ID: ${{ vars.KMS_RELEASE_KEY_ID }}
+          KMS_ALLOWED_KEY_IDS: ${{ vars.KMS_ALLOWED_KEY_IDS }}
+          WORKLOAD_IDENTITY_TOKEN: ${{ steps.workload_identity.outputs.result }}
+        run: >-
+          backend/.venv/bin/python -m tax_risk.adapters.signing.kms_ed25519_signer
+          --sign
+          --manifest artifacts/acceptance/phase-4/release-manifest.json
+          --output-dir artifacts/acceptance/phase-4
+      - name: 上传待晋级签名制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-candidate
+          path: artifacts/acceptance/phase-4
+      - name: 清除工作目录副本
+        run: rm -rf artifacts/acceptance/phase-4
+      - name: 重新下载签名制品
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-release-candidate
+          path: artifacts/acceptance/phase-4
+      - name: 晋级前重新验证下载制品
+        run: >-
+          backend/.venv/bin/python -m tax_risk.adapters.signing.kms_ed25519_signer
+          --verify-only
+          --bundle artifacts/acceptance/phase-4/signed-manifest.json

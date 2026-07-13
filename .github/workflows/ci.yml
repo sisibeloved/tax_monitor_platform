@@ -1,0 +1,61 @@
+name: 第四阶段持续集成
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: tax_risk
+          POSTGRES_USER: tax_risk
+          POSTGRES_PASSWORD: tax_risk_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tax_risk -d tax_risk"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql+psycopg://tax_risk:tax_risk_ci@localhost:5432/tax_risk
+      REDIS_URL: redis://localhost:6379/0
+      ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 安装后端依赖
+        run: uv venv backend/.venv && uv pip install --python backend/.venv/bin/python -e 'backend[dev]'
+      - name: 安装前端依赖和浏览器
+        run: cd web && npm ci && npx playwright install --with-deps chromium
+      - name: 授权、隔离与安全门禁
+        run: make verify-governance security-check
+      - name: 数据库迁移门禁
+        run: make verify-migrations
+      - name: 后端与前端单元验证
+        run: make test-backend && cd web && npm test -- --run && npm run build
+      - name: 发布重放与容量门禁
+        run: make verify-release verify-capacity
+      - name: 上传验收证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-4-acceptance
+          path: artifacts/acceptance
+
