@@ -8,6 +8,7 @@ from tax_risk.application.business_entertainment.service import (
     BusinessEntertainmentRunRequest,
     PublishedCompanyInput,
 )
+from tax_risk.domain.semantic.contracts import SemanticDetection
 from tax_risk.config import Settings
 from tax_risk.workers.business_entertainment import (
     RUN_COMPANY_TASK,
@@ -50,6 +51,16 @@ class RecordingPipeline:
             standalone_sap_keys=("sap-only-1",),
         )
 
+    def link_company_input(
+        self,
+        request: BusinessEntertainmentRunRequest,
+        inputs: PublishedCompanyInput,
+        *,
+        idempotency_key: str,
+    ) -> PublishedCompanyInput:
+        self.calls.append(("link", request.company_code))
+        return inputs
+
     def persist_coverages(
         self,
         request: BusinessEntertainmentRunRequest,
@@ -77,9 +88,19 @@ class RecordingPipeline:
         *,
         candidate_keys: tuple[str, ...],
         idempotency_key: str,
-    ) -> tuple[int, int, int]:
+    ) -> tuple[SemanticDetection, ...]:
         self.calls.append(("agent", candidate_keys))
-        return len(candidate_keys), 1, 1
+        return ()
+
+    def route_detections(
+        self,
+        request: BusinessEntertainmentRunRequest,
+        *,
+        detections: tuple[SemanticDetection, ...],
+        idempotency_key: str,
+    ) -> tuple[int, int, int]:
+        self.calls.append(("router", request.company_code))
+        return 2, 1, 1
 
 
 def _settings() -> Settings:
@@ -100,6 +121,10 @@ def _request(*, company_code: str = "C001") -> BusinessEntertainmentRunRequest:
         snapshot_set_id=uuid4(),
         rule_version_id="business-entertainment-rule-v1",
         lexicon_version="business-entertainment-candidates-v1",
+        model_version_id="model-v1",
+        prompt_version_id="prompt-v1",
+        case_library_version_id="cases-v1",
+        account_dictionary_version_id="accounts-v1",
     )
 
 
@@ -125,14 +150,16 @@ def test_worker_checks_scope_and_snapshot_then_covers_before_agent() -> None:
     assert [name for name, _ in pipeline.calls] == [
         "scope",
         "snapshot",
+        "link",
         "coverage",
         "candidate",
         "agent",
+        "router",
     ]
-    assert pipeline.calls[2][1] == ("linked-1", "sap-only-1")
-    assert pipeline.calls[3][1] == ("linked-1", "business-1")
+    assert pipeline.calls[3][1] == ("linked-1", "sap-only-1")
     assert pipeline.calls[4][1] == ("linked-1", "business-1")
-    assert "sap-only-1" not in pipeline.calls[4][1]
+    assert pipeline.calls[5][1] == ("linked-1", "business-1")
+    assert "sap-only-1" not in pipeline.calls[5][1]
     assert result["sap_coverage_count"] == 2
     assert result["detection_count"] == 2
     assert result["evidence_task_count"] == 1
@@ -168,7 +195,7 @@ def test_only_published_snapshot_with_utc_publication_time_can_run() -> None:
     assert missing_publication["error_code"] == "SNAPSHOT_SET_PUBLICATION_TIME_MISSING"
 
 
-def test_task_arguments_are_ids_and_controlled_versions_only() -> None:
+def test_worker_passes_snapshot_and_published_versions() -> None:
     request = _request()
     task_kwargs = request.to_task_kwargs()
 
@@ -179,6 +206,10 @@ def test_task_arguments_are_ids_and_controlled_versions_only() -> None:
         "snapshot_set_id",
         "rule_version_id",
         "lexicon_version",
+        "model_version_id",
+        "prompt_version_id",
+        "case_library_version_id",
+        "account_dictionary_version_id",
     }
     UUID(task_kwargs["run_id"])
     UUID(task_kwargs["snapshot_set_id"])

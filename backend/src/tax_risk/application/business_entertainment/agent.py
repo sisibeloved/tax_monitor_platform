@@ -8,6 +8,7 @@ from tax_risk.application.business_entertainment.evidence_review import (
     BusinessEntertainmentEvidencePack,
 )
 from tax_risk.application.semantic.model_client import StructuredModelClient
+from tax_risk.application.semantic.prompt_safety import minimize_model_input
 from tax_risk.domain.semantic.contracts import (
     SemanticModelJudgment,
     SemanticVersionSet,
@@ -36,7 +37,7 @@ class BusinessEntertainmentProfessionalAgent:
             {
                 "evidence_id": field.evidence_id,
                 "field_name": field.field_name,
-                "value": field.value,
+                "value": _safe_evidence_text(field.value),
             }
             for field in evidence_pack.fields
         ]
@@ -50,6 +51,17 @@ class BusinessEntertainmentProfessionalAgent:
             },
             output_model=SemanticModelJudgment,
         )
+
+
+def _safe_evidence_text(value: str) -> str:
+    minimized = minimize_model_input(
+        {"evidence_text": value},
+        allowed_fields=frozenset({"evidence_text"}),
+    )
+    safe_value = minimized.get("evidence_text")
+    if not isinstance(safe_value, str):
+        raise ValueError("evidence text could not be minimized")
+    return safe_value
 
 
 __all__ = ["BusinessEntertainmentProfessionalAgent"]

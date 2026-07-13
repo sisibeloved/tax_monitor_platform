@@ -68,6 +68,21 @@ def resources(
         yield partial(UnitOfWork, factory), database_engine
     finally:
         with database_engine.begin() as connection:
+            connection.execute(text("DELETE FROM business_entertainment_case_detail"))
+            connection.execute(text("DELETE FROM semantic_evidence_task"))
+            connection.execute(
+                text(
+                    "ALTER TABLE semantic_detection_record "
+                    "DISABLE TRIGGER trg_semantic_detection_immutable"
+                )
+            )
+            connection.execute(text("DELETE FROM semantic_detection_record"))
+            connection.execute(
+                text(
+                    "ALTER TABLE semantic_detection_record "
+                    "ENABLE TRIGGER trg_semantic_detection_immutable"
+                )
+            )
             connection.execute(text("DELETE FROM risk_case"))
             connection.execute(
                 text("ALTER TABLE detection_record DISABLE TRIGGER trg_detection_record_immutable")

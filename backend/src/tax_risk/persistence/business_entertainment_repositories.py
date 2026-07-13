@@ -12,6 +12,7 @@ from tax_risk.domain.business_entertainment.company_scope import ScopeVersionSta
 from tax_risk.domain.business_entertainment.evaluation import SapLinkCoverageItem
 from tax_risk.persistence.business_entertainment_models import (
     BusinessEntertainmentCaseDetail,
+    BusinessEntertainmentEvaluation,
     BusinessEntertainmentScopeCompany,
     BusinessEntertainmentScopeVersion,
     BusinessEntertainmentSourceObservation,
@@ -49,6 +50,176 @@ class BusinessEntertainmentScopeRepository:
 
     def add_evidence_link(self, evidence_link: EvidenceLink) -> None:
         self._session.add(evidence_link)
+
+    def persist_exact_evidence_links(
+        self,
+        links: Sequence[EvidenceLink],
+    ) -> list[EvidenceLink]:
+        ordered = tuple(
+            sorted(
+                links,
+                key=lambda item: (
+                    str(item.snapshot_id),
+                    str(item.source_record_id),
+                    str(item.target_record_id),
+                    item.relation_kind,
+                ),
+            )
+        )
+        identities = [
+            (
+                item.snapshot_id,
+                item.source_record_id,
+                item.target_record_id,
+                item.relation_kind,
+            )
+            for item in ordered
+        ]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate evidence-link identity in one request")
+        if not ordered:
+            return []
+        self._session.execute(
+            insert(EvidenceLink)
+            .values(
+                [
+                    {
+                        "company_code": item.company_code,
+                        "source_record_id": item.source_record_id,
+                        "target_record_id": item.target_record_id,
+                        "relation_kind": item.relation_kind,
+                        "relation_quality": item.relation_quality,
+                        "matched_field": item.matched_field,
+                        "snapshot_id": item.snapshot_id,
+                    }
+                    for item in ordered
+                ]
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    "snapshot_id",
+                    "source_record_id",
+                    "target_record_id",
+                    "relation_kind",
+                ]
+            )
+        )
+        persisted = list(
+            self._session.scalars(
+                select(EvidenceLink)
+                .where(
+                    tuple_(
+                        EvidenceLink.snapshot_id,
+                        EvidenceLink.source_record_id,
+                        EvidenceLink.target_record_id,
+                        EvidenceLink.relation_kind,
+                    ).in_(identities)
+                )
+                .order_by(
+                    EvidenceLink.snapshot_id,
+                    EvidenceLink.source_record_id,
+                    EvidenceLink.target_record_id,
+                    EvidenceLink.relation_kind,
+                )
+            )
+        )
+        expected = {
+            (
+                item.snapshot_id,
+                item.source_record_id,
+                item.target_record_id,
+                item.relation_kind,
+            ): (
+                item.company_code,
+                item.relation_quality,
+                item.matched_field,
+            )
+            for item in ordered
+        }
+        for row in persisted:
+            identity = (
+                row.snapshot_id,
+                row.source_record_id,
+                row.target_record_id,
+                row.relation_kind,
+            )
+            if expected[identity] != (
+                row.company_code,
+                row.relation_quality,
+                row.matched_field,
+            ):
+                raise ValueError("idempotent evidence-link replay changed values")
+        return persisted
+
+    def persist_evaluations(
+        self,
+        evaluations: Sequence[BusinessEntertainmentEvaluation],
+    ) -> list[BusinessEntertainmentEvaluation]:
+        ordered = tuple(
+            sorted(evaluations, key=lambda item: (str(item.snapshot_id), item.candidate_key))
+        )
+        identities = [(item.snapshot_id, item.candidate_key) for item in ordered]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate evaluation identity in one request")
+        if not ordered:
+            return []
+        self._session.execute(
+            insert(BusinessEntertainmentEvaluation)
+            .values(
+                [
+                    {
+                        "candidate_key": item.candidate_key,
+                        "company_code": item.company_code,
+                        "fiscal_year": item.fiscal_year,
+                        "period": item.period,
+                        "source_mode": item.source_mode,
+                        "canonical_record_type": item.canonical_record_type,
+                        "canonical_source_record_id": item.canonical_source_record_id,
+                        "sap_observation_id": item.sap_observation_id,
+                        "amount": item.amount,
+                        "amount_source": item.amount_source,
+                        "snapshot_id": item.snapshot_id,
+                    }
+                    for item in ordered
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=["snapshot_id", "candidate_key"])
+        )
+        persisted = list(
+            self._session.scalars(
+                select(BusinessEntertainmentEvaluation)
+                .where(
+                    tuple_(
+                        BusinessEntertainmentEvaluation.snapshot_id,
+                        BusinessEntertainmentEvaluation.candidate_key,
+                    ).in_(identities)
+                )
+                .order_by(
+                    BusinessEntertainmentEvaluation.snapshot_id,
+                    BusinessEntertainmentEvaluation.candidate_key,
+                )
+            )
+        )
+        expected = {
+            (item.snapshot_id, item.candidate_key): (
+                item.company_code,
+                item.source_mode,
+                item.canonical_source_record_id,
+                item.sap_observation_id,
+                item.amount,
+            )
+            for item in ordered
+        }
+        for row in persisted:
+            if expected[(row.snapshot_id, row.candidate_key)] != (
+                row.company_code,
+                row.source_mode,
+                row.canonical_source_record_id,
+                row.sap_observation_id,
+                row.amount,
+            ):
+                raise ValueError("idempotent evaluation replay changed values")
+        return persisted
 
     def add_case_detail(self, detail: BusinessEntertainmentCaseDetail) -> None:
         self._session.add(detail)

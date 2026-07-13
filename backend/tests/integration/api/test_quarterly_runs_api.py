@@ -376,7 +376,13 @@ def test_development_principal_rejects_a_tampered_signature(
     "settings",
     [
         Settings(environment="development", development_principal_enabled=False),
-        Settings(environment="production", development_principal_enabled=False),
+        Settings(
+            environment="production",
+            development_principal_enabled=False,
+            semantic_model_endpoint="https://model.internal.example/generate",
+            semantic_model_deployment="income-tax-test",
+            semantic_model_credential_ref="secret://test-only-reference",
+        ),
     ],
     ids=["development-disabled", "production"],
 )

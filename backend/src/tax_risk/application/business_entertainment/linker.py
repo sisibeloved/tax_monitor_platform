@@ -331,10 +331,11 @@ class ExactEvidenceLinker:
             snapshot_id=snapshot_id,
         )
         with self._uow_factory() as uow:
+            links: list[EvidenceLink] = []
             for decision in result.exact_links:
                 if decision.snapshot_id != snapshot_id:
                     raise ValueError("all exact relations must belong to the requested snapshot")
-                uow.business_entertainment_scope.add_evidence_link(
+                links.append(
                     EvidenceLink(
                         company_code=decision.company_code,
                         source_record_id=decision.source_record_id,
@@ -345,6 +346,7 @@ class ExactEvidenceLinker:
                         snapshot_id=snapshot_id,
                     )
                 )
+            uow.business_entertainment_scope.persist_exact_evidence_links(links)
             uow.commit()
         return result
 

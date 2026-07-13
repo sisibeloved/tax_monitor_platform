@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from seed_quarterly_scenario import ScenarioClient, seed_quarterly_scenario
+from tests.e2e.seed_quarterly_scenario import ScenarioClient, seed_quarterly_scenario
 from tax_risk.application.quarterly_batches import QuarterlyBatchService
 from tax_risk.config import Settings
 from tax_risk.main import create_app

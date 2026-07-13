@@ -13,7 +13,7 @@ import httpx
 import pytest
 from sqlalchemy import create_engine
 
-from seed_quarterly_scenario import (
+from tests.e2e.seed_quarterly_scenario import (
     QuarterlyScenarioSeed,
     ScenarioClient,
     seed_quarterly_scenario,

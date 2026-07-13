@@ -46,6 +46,13 @@ EXPECTED_TABLES = {
     "sap_expense_voucher_observation",
     "sap_expense_voucher_snapshot_projection",
     "sap_link_coverage",
+    "suggested_account_dictionary_version",
+    "suggested_account_entry",
+    "semantic_artifact_version",
+    "semantic_model_call_audit",
+    "semantic_detection_record",
+    "semantic_evidence_task",
+    "business_entertainment_case_detail",
     "audit_event",
 }
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -69,7 +76,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0008b_ent_coverage_fields"
+    assert revision == "0010_semantic_artifacts"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -149,7 +156,12 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
         ("snapshot_status", ["DRAFT", "VALIDATED", "PUBLISHED"]),
         (
             "monitor_type",
-            ["ACCRUAL_ACCURACY", "TAX_BURDEN", "POTENTIAL_TAX_COST"],
+            [
+                "ACCRUAL_ACCURACY",
+                "TAX_BURDEN",
+                "POTENTIAL_TAX_COST",
+                "BUSINESS_ENTERTAINMENT",
+            ],
         ),
         (
             "monitoring_run_company_status",
@@ -817,7 +829,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0008b_ent_coverage_fields (head)" in completed.stdout
+    assert "0010_semantic_artifacts (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -840,7 +852,7 @@ def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0008b_ent_coverage_fields"
+    assert revision == "0010_semantic_artifacts"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

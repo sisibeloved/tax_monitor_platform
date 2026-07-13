@@ -25,6 +25,9 @@ from tax_risk.application.quarterly_batches import QuarterlyBatchService
 from tax_risk.config import Settings
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.security.principal import PrincipalProvider
+from tax_risk.api.business_entertainment_dependencies import (
+    bind_structured_model_client,
+)
 
 
 def create_app(
@@ -34,6 +37,7 @@ def create_app(
     settings: Settings | None = None,
     principal_provider: PrincipalProvider | None = None,
     quarterly_dispatcher: Callable[..., None] | None = None,
+    semantic_credential_resolver: Callable[[str], str] | None = None,
 ) -> FastAPI:
     """Create the tax risk monitoring API."""
 
@@ -47,6 +51,11 @@ def create_app(
         app.state.uow_factory
     )
     app.state.quarterly_dispatcher = quarterly_dispatcher or _dispatch_quarterly_batch
+    app.state.structured_model_client = bind_structured_model_client(
+        resolved_settings,
+        credential_resolver=semantic_credential_resolver or (lambda _reference: ""),
+        uow_factory=app.state.uow_factory,
+    )
     app.state.ingest_max_upload_bytes = resolved_settings.ingest_max_upload_bytes
     app.state.ingest_upload_semaphore = BoundedSemaphore(
         resolved_settings.ingest_max_concurrent_uploads

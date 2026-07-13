@@ -10,6 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from tax_risk.domain.semantic.contracts import SemanticDetection
+
 
 class BusinessEntertainmentRunError(Exception):
     def __init__(self, error_code: str, message: str, *, retryable: bool = False) -> None:
@@ -27,6 +29,10 @@ class BusinessEntertainmentRunRequest(BaseModel):
     snapshot_set_id: UUID
     rule_version_id: str = Field(min_length=1, max_length=128)
     lexicon_version: str = Field(min_length=1, max_length=128)
+    model_version_id: str = Field(min_length=1, max_length=128)
+    prompt_version_id: str = Field(min_length=1, max_length=128)
+    case_library_version_id: str = Field(min_length=1, max_length=128)
+    account_dictionary_version_id: str = Field(min_length=1, max_length=128)
 
     @field_validator("period_end")
     @classmethod
@@ -44,6 +50,10 @@ class BusinessEntertainmentRunRequest(BaseModel):
             str(self.snapshot_set_id),
             self.rule_version_id,
             self.lexicon_version,
+            self.model_version_id,
+            self.prompt_version_id,
+            self.case_library_version_id,
+            self.account_dictionary_version_id,
         )
         return sha256("\0".join(components).encode()).hexdigest()
 
@@ -55,6 +65,10 @@ class BusinessEntertainmentRunRequest(BaseModel):
             "snapshot_set_id": str(self.snapshot_set_id),
             "rule_version_id": self.rule_version_id,
             "lexicon_version": self.lexicon_version,
+            "model_version_id": self.model_version_id,
+            "prompt_version_id": self.prompt_version_id,
+            "case_library_version_id": self.case_library_version_id,
+            "account_dictionary_version_id": self.account_dictionary_version_id,
         }
 
 
@@ -80,6 +94,14 @@ class BusinessEntertainmentPipeline(Protocol):
         request: BusinessEntertainmentRunRequest,
     ) -> PublishedCompanyInput: ...
 
+    def link_company_input(
+        self,
+        request: BusinessEntertainmentRunRequest,
+        inputs: PublishedCompanyInput,
+        *,
+        idempotency_key: str,
+    ) -> PublishedCompanyInput: ...
+
     def persist_coverages(
         self,
         request: BusinessEntertainmentRunRequest,
@@ -102,6 +124,14 @@ class BusinessEntertainmentPipeline(Protocol):
         request: BusinessEntertainmentRunRequest,
         *,
         candidate_keys: tuple[str, ...],
+        idempotency_key: str,
+    ) -> tuple[SemanticDetection, ...]: ...
+
+    def route_detections(
+        self,
+        request: BusinessEntertainmentRunRequest,
+        *,
+        detections: tuple[SemanticDetection, ...],
         idempotency_key: str,
     ) -> tuple[int, int, int]: ...
 
@@ -143,6 +173,11 @@ class BusinessEntertainmentMonthlyService:
             )
 
         key = request.idempotency_key
+        inputs = self._pipeline.link_company_input(
+            request,
+            inputs,
+            idempotency_key=key,
+        )
         coverage_count = self._pipeline.persist_coverages(
             request,
             linked_candidate_keys=inputs.sap_linked_candidate_keys,
@@ -157,10 +192,15 @@ class BusinessEntertainmentMonthlyService:
             evaluation_candidate_keys=evaluation_keys,
             idempotency_key=key,
         )
+        detections = self._pipeline.evaluate_candidates(
+            request,
+            candidate_keys=candidate_keys,
+            idempotency_key=key,
+        )
         detection_count, evidence_task_count, risk_case_count = (
-            self._pipeline.evaluate_candidates(
+            self._pipeline.route_detections(
                 request,
-                candidate_keys=candidate_keys,
+                detections=detections,
                 idempotency_key=key,
             )
         )
@@ -189,18 +229,37 @@ class BusinessEntertainmentMonthlyService:
         }
 
 
-class UnwiredBusinessEntertainmentPipeline:
-    """Fail-closed placeholder until the production dependencies are bound."""
-
-    def __getattr__(self, name: str) -> object:
-        raise BusinessEntertainmentRunError(
-            "BUSINESS_ENTERTAINMENT_PIPELINE_NOT_CONFIGURED",
-            f"pipeline dependency {name} is not configured",
-        )
-
-
 def build_default_business_entertainment_service() -> BusinessEntertainmentMonthlyService:
-    return BusinessEntertainmentMonthlyService(UnwiredBusinessEntertainmentPipeline())  # type: ignore[arg-type]
+    import os
+
+    from tax_risk.api.business_entertainment_dependencies import (
+        BusinessEntertainmentDependencyError,
+        bind_structured_model_client,
+    )
+    from tax_risk.application.business_entertainment.production_pipeline import (
+        DatabaseBusinessEntertainmentPipeline,
+    )
+    from tax_risk.config import Settings
+    from tax_risk.persistence.repositories import UnitOfWork
+
+    settings = Settings()
+    try:
+        model_client = bind_structured_model_client(
+            settings,
+            credential_resolver=lambda reference: os.environ.get(reference, ""),
+            uow_factory=UnitOfWork,
+        )
+    except BusinessEntertainmentDependencyError as error:
+        raise BusinessEntertainmentRunError(
+            "SEMANTIC_MODEL_CONFIGURATION_INVALID",
+            str(error),
+        ) from error
+    return BusinessEntertainmentMonthlyService(
+        DatabaseBusinessEntertainmentPipeline(
+            uow_factory=UnitOfWork,
+            model_client=model_client,
+        )
+    )
 
 
 __all__ = [

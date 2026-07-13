@@ -122,6 +122,16 @@ def _validate_authoritative_lineage(
         raise ValueError("canonical source does not belong to the detection company")
     if snapshot is None or snapshot.company_id != company_id:
         raise ValueError("snapshot does not belong to the detection company")
+    for evidence_ref in detection.evidence_refs:
+        evidence_source = uow.session.get(SourceRecord, evidence_ref.source_record_id)
+        if (
+            evidence_source is None
+            or evidence_source.company_id != company_id
+            or evidence_ref.snapshot_id != detection.snapshot_id
+        ):
+            raise ValueError(
+                "evidence reference does not belong to the detection company and snapshot"
+            )
     if detection.source_mode == "SAP_LINKED":
         sap = uow.session.get(SapExpenseVoucherObservation, detection.sap_observation_id)
         if sap is None or sap.company_code != detection.company_code:

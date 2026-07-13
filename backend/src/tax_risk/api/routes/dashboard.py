@@ -37,6 +37,11 @@ from tax_risk.security.principal import Principal
 
 router = APIRouter(tags=["dashboard"])
 _ZERO_AMOUNT = Decimal("0.000000000000")
+_QUARTERLY_MONITOR_TYPES = (
+    MonitorType.ACCRUAL_ACCURACY,
+    MonitorType.TAX_BURDEN,
+    MonitorType.POTENTIAL_TAX_COST,
+)
 
 
 @router.get("/api/v1/dashboard/quarterly", response_model=QuarterlyDashboardResponse)
@@ -127,7 +132,9 @@ def get_quarterly_dashboard(
             .where(*risk_conditions)
             .group_by(RiskCase.monitor_type)
         ).all()
-        monitoring_type_counts = {monitor_type: 0 for monitor_type in MonitorType}
+        monitoring_type_counts = {
+            monitor_type: 0 for monitor_type in _QUARTERLY_MONITOR_TYPES
+        }
         for monitor_type, count in type_rows:
             monitoring_type_counts[monitor_type] = count
 

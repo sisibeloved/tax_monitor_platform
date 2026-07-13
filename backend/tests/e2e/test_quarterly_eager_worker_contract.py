@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from seed_quarterly_scenario import (
+from tests.e2e.seed_quarterly_scenario import (
     QuarterlyScenarioSeed,
     ScenarioClient,
     seed_quarterly_scenario,

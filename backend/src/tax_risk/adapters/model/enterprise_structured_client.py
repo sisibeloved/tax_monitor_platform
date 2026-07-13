@@ -138,6 +138,17 @@ class EnterpriseStructuredModelClient:
         self._audit_sink = audit_sink or InMemoryModelCallAuditSink()
         self._context = context or ModelCallContext()
 
+    def with_context(self, context: ModelCallContext) -> EnterpriseStructuredModelClient:
+        """Return an isolated view that shares transport/audit but owns call metadata."""
+
+        return EnterpriseStructuredModelClient(
+            self._configuration,
+            credential_resolver=self._credential_resolver,
+            transport=self._transport,
+            audit_sink=self._audit_sink,
+            context=context,
+        )
+
     async def generate(
         self,
         *,

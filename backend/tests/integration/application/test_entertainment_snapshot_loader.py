@@ -18,8 +18,11 @@ from tax_risk.application.business_entertainment.source_loader import (
 from tax_risk.application.ingest import IngestService
 from tax_risk.application.snapshots import ExpectedSnapshotMember, SnapshotService
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
-from test_business_entertainment_ingest import _csv, _metadata
-from test_snapshot_publication import (
+from tests.integration.application.test_business_entertainment_ingest import (
+    _csv,
+    _metadata,
+)
+from tests.integration.application.test_snapshot_publication import (
     PERIOD,
     _seed_quality_case,
     _validate,

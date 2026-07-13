@@ -6,6 +6,7 @@ from functools import partial
 from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, text
+import pytest
 
 from tax_risk.application.semantic.detection_router import (
     RoutingOutcome,
@@ -217,7 +218,7 @@ def test_transactional_routing_selects_one_outcome_and_keeps_cases_idempotent(
 ) -> None:
     engine, factory = create_session_factory(isolated_database_url)
     try:
-        company_code, _, snapshot_id, source_id, sap_id, link_id = _seed_graph(engine)
+        company_code, company_id, snapshot_id, source_id, sap_id, link_id = _seed_graph(engine)
         router = SemanticCaseRouter(partial(UnitOfWork, factory))
         suspicious = frozenset({"MEETING_EXPENSE", "EMPLOYEE_EDUCATION", "EMPLOYEE_WELFARE"})
 
@@ -289,22 +290,36 @@ def test_transactional_routing_selects_one_outcome_and_keeps_cases_idempotent(
                 text(
                     """
                     SELECT
-                      (SELECT count(*) FROM semantic_detection_record) AS detections,
-                      (SELECT count(*) FROM semantic_evidence_task) AS tasks,
+                      (SELECT count(*) FROM semantic_detection_record
+                       WHERE company_code = :company_code
+                         AND snapshot_id = :snapshot_id) AS detections,
+                      (SELECT count(*) FROM semantic_evidence_task
+                       WHERE company_code = :company_code) AS tasks,
                       (SELECT count(*) FROM risk_case
-                       WHERE monitor_type = 'BUSINESS_ENTERTAINMENT') AS cases
+                       WHERE monitor_type = 'BUSINESS_ENTERTAINMENT'
+                         AND company_id = :company_id) AS cases
                     """
-                )
+                ),
+                {
+                    "company_code": company_code,
+                    "company_id": company_id,
+                    "snapshot_id": snapshot_id,
+                },
             ).mappings().one()
             details = connection.execute(
                 text(
                     """
-                    SELECT source_mode, sap_link_status, sap_observation_id,
-                           risk_amount_source, workflow_note
-                    FROM business_entertainment_case_detail
-                    ORDER BY source_mode
+                    SELECT d.source_mode, d.sap_link_status, d.sap_observation_id,
+                           d.risk_amount_source, d.workflow_note
+                    FROM business_entertainment_case_detail AS d
+                    JOIN semantic_detection_record AS r
+                      ON r.id = d.semantic_detection_id
+                    WHERE r.company_code = :company_code
+                      AND r.snapshot_id = :snapshot_id
+                    ORDER BY d.source_mode
                     """
-                )
+                ),
+                {"company_code": company_code, "snapshot_id": snapshot_id},
             ).mappings().all()
         assert counts == {"detections": 5, "tasks": 1, "cases": 2}
         unlinked_detail = next(
@@ -314,5 +329,68 @@ def test_transactional_routing_selects_one_outcome_and_keeps_cases_idempotent(
         assert unlinked_detail["sap_observation_id"] is None
         assert unlinked_detail["risk_amount_source"] == "BUSINESS_DOCUMENT"
         assert unlinked_detail["workflow_note"] == "待定位SAP凭证"
+    finally:
+        engine.dispose()
+
+
+def test_router_rejects_cross_company_evidence_references(
+    isolated_database_url: str,
+) -> None:
+    engine, factory = create_session_factory(isolated_database_url)
+    try:
+        company_code, _, snapshot_id, source_id, _, _ = _seed_graph(engine)
+        with engine.begin() as connection:
+            other_company_id = connection.execute(
+                text(
+                    "INSERT INTO company (company_code, company_name, lifecycle) "
+                    "VALUES (:code, 'Other Company', 'ACTIVE') RETURNING id"
+                ),
+                {"code": f"OTHER-{uuid4().hex}"},
+            ).scalar_one()
+            batch_id = connection.execute(
+                text("SELECT batch_id FROM source_record WHERE id = :source_id"),
+                {"source_id": source_id},
+            ).scalar_one()
+            foreign_source_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO source_record (
+                        batch_id, source_record_key, company_id, dataset_code, period,
+                        currency, amount_scale, amount, payload, lineage, extracted_at
+                    ) VALUES (
+                        :batch_id, :key, :company_id, 'oa_business_entertainment',
+                        '2032-03-31', 'CNY', 2, 10, '{}'::jsonb, '{}'::jsonb, now()
+                    ) RETURNING id
+                    """
+                ),
+                {
+                    "batch_id": batch_id,
+                    "key": f"FOREIGN-{uuid4().hex}",
+                    "company_id": other_company_id,
+                },
+            ).scalar_one()
+        payload = _detection(
+            company_code=company_code,
+            snapshot_id=snapshot_id,
+            source_id=source_id,
+            label="MEETING_EXPENSE",
+            model_version="cross-company-v1",
+        ).model_dump(mode="json")
+        payload["evidence_refs"] = [
+            {
+                "evidence_id": "foreign-evidence",
+                "field_name": "申请事由",
+                "quoted_text": "内部会议餐",
+                "source_record_id": str(foreign_source_id),
+                "snapshot_id": str(snapshot_id),
+            }
+        ]
+        detection = SemanticDetection.model_validate(payload)
+
+        with pytest.raises(ValueError, match="evidence reference"):
+            SemanticCaseRouter(partial(UnitOfWork, factory)).route(
+                detection,
+                suspicious_labels=frozenset({"MEETING_EXPENSE"}),
+            )
     finally:
         engine.dispose()

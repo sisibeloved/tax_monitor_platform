@@ -149,8 +149,9 @@ def test_persistence_writes_exact_relations_but_never_fuzzy_hints() -> None:
     persisted: list[object] = []
 
     class FakeRepository:
-        def add_evidence_link(self, link: object) -> None:
-            persisted.append(link)
+        def persist_exact_evidence_links(self, links: list[object]) -> list[object]:
+            persisted.extend(links)
+            return links
 
     class FakeUow:
         business_entertainment_scope = FakeRepository()

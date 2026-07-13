@@ -60,6 +60,10 @@ def register_business_entertainment_tasks(
         snapshot_set_id: str,
         rule_version_id: str,
         lexicon_version: str,
+        model_version_id: str,
+        prompt_version_id: str,
+        case_library_version_id: str,
+        account_dictionary_version_id: str,
     ) -> dict[str, object]:
         task_id = str(task.request.id or "")
         if not task_id:
@@ -73,6 +77,10 @@ def register_business_entertainment_tasks(
                 snapshot_set_id=UUID(snapshot_set_id),
                 rule_version_id=rule_version_id,
                 lexicon_version=lexicon_version,
+                model_version_id=model_version_id,
+                prompt_version_id=prompt_version_id,
+                case_library_version_id=case_library_version_id,
+                account_dictionary_version_id=account_dictionary_version_id,
             )
             return service_factory().run_company(request, task_id=task_id)
         except BusinessEntertainmentRunError as error:

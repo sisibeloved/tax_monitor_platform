@@ -124,7 +124,12 @@ def control_plane_clients(
     engine, factory = create_session_factory(isolated_database_url)
     production_app = create_app(
         uow_factory=partial(UnitOfWork, factory),
-        settings=Settings(environment="production"),
+        settings=Settings(
+            environment="production",
+            semantic_model_endpoint="https://model.internal.example/generate",
+            semantic_model_deployment="income-tax-test",
+            semantic_model_credential_ref="secret://test-only-reference",
+        ),
     )
     development_app = create_app(
         uow_factory=partial(UnitOfWork, factory),
