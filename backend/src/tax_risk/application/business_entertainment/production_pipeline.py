@@ -12,10 +12,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from tax_risk.adapters.model.enterprise_structured_client import (
-    EnterpriseStructuredModelClient,
-    ModelCallContext,
-)
 from tax_risk.application.business_entertainment.agent import (
     BusinessEntertainmentProfessionalAgent,
 )
@@ -59,7 +55,11 @@ from tax_risk.application.semantic.detection_router import (
     RoutingOutcome,
     SemanticCaseRouter,
 )
-from tax_risk.application.semantic.model_client import StructuredModelClient
+from tax_risk.application.semantic.model_client import (
+    ContextualStructuredModelClient,
+    ModelCallContext,
+    StructuredModelClient,
+)
 from tax_risk.domain.business_entertainment.evaluation import (
     BusinessEntertainmentEvaluationItem,
     SapLinkCoverageItem,
@@ -742,7 +742,7 @@ def _contextual_client(
     request: BusinessEntertainmentRunRequest,
     candidate_key: str,
 ) -> StructuredModelClient:
-    if isinstance(client, EnterpriseStructuredModelClient):
+    if isinstance(client, ContextualStructuredModelClient):
         return client.with_context(
             ModelCallContext(
                 candidate_key=candidate_key,

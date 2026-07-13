@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from tax_risk.adapters.model.enterprise_structured_client import (
-    EnterpriseModelConfiguration,
-    EnterpriseStructuredModelClient,
-    ModelCallAuditSink,
-    SqlModelCallAuditSink,
-)
 from tax_risk.adapters.model.fake_structured_client import FakeStructuredModelClient
 from tax_risk.application.semantic.model_client import StructuredModelClient
 from tax_risk.config import Settings
+from tax_risk.model_gateway.policy import ProviderPolicy
+from tax_risk.model_gateway.service import (
+    ModelCallAuditSink,
+    build_enterprise_gateway,
+    protect_client,
+    sql_model_call_audit_sink,
+)
 from tax_risk.persistence.repositories import UnitOfWork
 
 
@@ -32,18 +33,25 @@ def bind_structured_model_client(
             raise BusinessEntertainmentDependencyError(
                 "fake model client is allowed only in an explicit test environment"
             )
-        return FakeStructuredModelClient(
-            [
-                {
-                    "semantic_label": "INSUFFICIENT_EVIDENCE",
-                    "confidence_tier": "LOW",
-                    "evidence_citations": [],
-                    "recommended_account_ids": ["MANUAL_REVIEW"],
-                    "rationale_summary": "现有证据不足，建议人工复核。",
-                    "missing_evidence": ["需补充业务证据"],
-                }
-            ],
-            environment="test",
+        return protect_client(
+            FakeStructuredModelClient(
+                [
+                    {
+                        "semantic_label": "INSUFFICIENT_EVIDENCE",
+                        "confidence_tier": "LOW",
+                        "evidence_citations": [],
+                        "recommended_account_ids": ["MANUAL_REVIEW"],
+                        "rationale_summary": "现有证据不足，建议人工复核。",
+                        "missing_evidence": ["需补充业务证据"],
+                    }
+                ],
+                environment="test",
+            ),
+            ProviderPolicy(
+                environment=settings.environment,
+                no_public_training=True,
+                retention_mode="zero",
+            ),
         )
 
     required = {
@@ -62,6 +70,10 @@ def bind_structured_model_client(
         raise BusinessEntertainmentDependencyError(
             "enterprise model zero-retention configuration is incomplete"
         )
+    if settings.semantic_model_no_public_training is not True:
+        raise BusinessEntertainmentDependencyError(
+            "enterprise model public-training prohibition is required"
+        )
     endpoint = settings.semantic_model_endpoint
     deployment = settings.semantic_model_deployment
     credential_ref = settings.semantic_model_credential_ref
@@ -71,16 +83,18 @@ def bind_structured_model_client(
         )
     resolved_audit_sink = audit_sink
     if resolved_audit_sink is None and uow_factory is not None:
-        resolved_audit_sink = SqlModelCallAuditSink(uow_factory)
-    return EnterpriseStructuredModelClient(
-        EnterpriseModelConfiguration(
-            endpoint=endpoint,
-            deployment=deployment,
-            timeout_seconds=settings.semantic_model_timeout_seconds,
-            credential_ref=credential_ref,
-            zero_retention_required=True,
-        ),
+        resolved_audit_sink = sql_model_call_audit_sink(uow_factory)
+    return build_enterprise_gateway(
+        endpoint=endpoint,
+        deployment=deployment,
+        timeout_seconds=settings.semantic_model_timeout_seconds,
+        credential_ref=credential_ref,
         credential_resolver=credential_resolver,
+        provider_policy=ProviderPolicy(
+            environment=settings.environment,
+            no_public_training=settings.semantic_model_no_public_training,
+            retention_mode=settings.semantic_model_retention_mode,
+        ),
         audit_sink=resolved_audit_sink,
     )
 

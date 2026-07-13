@@ -2,24 +2,21 @@ from __future__ import annotations
 
 import pytest
 
-from tax_risk.adapters.model.enterprise_structured_client import (
-    EnterpriseStructuredModelClient,
-)
-from tax_risk.adapters.model.fake_structured_client import FakeStructuredModelClient
 from tax_risk.api.business_entertainment_dependencies import (
     BusinessEntertainmentDependencyError,
     bind_structured_model_client,
 )
 from tax_risk.config import Settings
+from tax_risk.model_gateway.service import ProtectedModelGateway
 
 
-def test_only_explicit_test_configuration_binds_fake_client() -> None:
+def test_only_explicit_test_configuration_binds_protected_fake_gateway() -> None:
     client = bind_structured_model_client(
         Settings(environment="test", semantic_model_provider="fake"),
         credential_resolver=lambda _reference: "unused",
     )
 
-    assert isinstance(client, FakeStructuredModelClient)
+    assert isinstance(client, ProtectedModelGateway)
 
 
 def test_production_never_falls_back_to_fake_and_fails_closed_when_incomplete() -> None:
@@ -35,7 +32,7 @@ def test_production_never_falls_back_to_fake_and_fails_closed_when_incomplete() 
         )
 
 
-def test_complete_production_configuration_binds_enterprise_client() -> None:
+def test_complete_production_configuration_binds_protected_enterprise_gateway() -> None:
     client = bind_structured_model_client(
         Settings(
             environment="production",
@@ -48,5 +45,19 @@ def test_complete_production_configuration_binds_enterprise_client() -> None:
         credential_resolver=lambda _reference: "token",
     )
 
-    assert isinstance(client, EnterpriseStructuredModelClient)
-    assert not isinstance(client, FakeStructuredModelClient)
+    assert isinstance(client, ProtectedModelGateway)
+
+
+def test_production_rejects_provider_that_may_train_on_enterprise_data() -> None:
+    with pytest.raises(BusinessEntertainmentDependencyError, match="public-training"):
+        bind_structured_model_client(
+            Settings(
+                environment="production",
+                semantic_model_provider="enterprise",
+                semantic_model_endpoint="https://model.internal.example/generate",
+                semantic_model_deployment="income-tax-v1",
+                semantic_model_credential_ref="secret://income-tax-model",
+                semantic_model_no_public_training=False,
+            ),
+            credential_resolver=lambda _reference: "token",
+        )

@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from tax_risk.application.semantic.model_client import ModelCallContext
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.persistence.semantic_models import SemanticModelCallAudit
 
@@ -44,18 +45,6 @@ class EnterpriseModelConfiguration(BaseModel):
         if value is not True:
             raise ValueError("zero_retention_required must be true")
         return value
-
-
-class ModelCallContext(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
-
-    candidate_key: str = "unknown"
-    company_code: str = "unknown"
-    model_version_id: str = "unknown"
-    prompt_version_id: str = "unknown"
-    case_library_version_id: str = "unknown"
-    operator_id: str = "system"
-    run_id: str = "unknown"
 
 
 class ModelCallAuditRecord(BaseModel):

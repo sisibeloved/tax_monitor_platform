@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     semantic_model_timeout_seconds: float = Field(default=30, gt=0, le=300)
     semantic_model_credential_ref: str | None = None
     semantic_model_zero_retention_required: bool = True
+    semantic_model_no_public_training: bool = True
+    semantic_model_retention_mode: Literal["zero", "approved"] = "zero"
     export_storage_path: str = "./var/exports"
     export_retention_hours: int = Field(default=24, gt=0, le=24 * 30)
     export_download_ttl_seconds: int = Field(default=300, gt=0, le=3_600)
