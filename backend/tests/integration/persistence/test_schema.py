@@ -69,7 +69,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0008a_ent_snapshot_guard"
+    assert revision == "0008b_ent_coverage_fields"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -817,7 +817,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0008a_ent_snapshot_guard (head)" in completed.stdout
+    assert "0008b_ent_coverage_fields (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -840,7 +840,7 @@ def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0008a_ent_snapshot_guard"
+    assert revision == "0008b_ent_coverage_fields"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

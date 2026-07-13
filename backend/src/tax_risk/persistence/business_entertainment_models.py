@@ -212,6 +212,7 @@ class SapLinkCoverage(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     __tablename__ = "sap_link_coverage"
     __table_args__ = (
         UniqueConstraint("snapshot_id", "sap_observation_id", name="uq_sap_coverage_snapshot_obs"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
         Index("ix_sap_coverage_company", "company_code"),
         Index("ix_sap_coverage_snapshot", "snapshot_id"),
     )
@@ -226,6 +227,10 @@ class SapLinkCoverage(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         ),
         nullable=False,
     )
+    document_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    line_item: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     link_status: Mapped[str] = mapped_column(String(64), nullable=False)
     exact_evidence_link_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("evidence_link.id", name="fk_sap_coverage_link", ondelete="RESTRICT")

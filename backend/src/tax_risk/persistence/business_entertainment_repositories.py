@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, tuple_
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from tax_risk.domain.business_entertainment.company_scope import ScopeVersionStatus
+from tax_risk.domain.business_entertainment.evaluation import SapLinkCoverageItem
 from tax_risk.persistence.business_entertainment_models import (
     BusinessEntertainmentScopeCompany,
     BusinessEntertainmentScopeVersion,
     BusinessEntertainmentSourceObservation,
     EvidenceLink,
+    SapLinkCoverage,
 )
 from tax_risk.persistence.ingest_models import Company
+from tax_risk.persistence.semantic_models import (
+    SapExpenseVoucherObservation,
+    SapExpenseVoucherSnapshotProjection,
+)
+
+
+class SapCoverageConflictError(Exception):
+    pass
 
 
 class BusinessEntertainmentScopeRepository:
@@ -48,6 +60,160 @@ class BusinessEntertainmentScopeRepository:
                 )
             )
         )
+
+    def persist_sap_link_coverages(
+        self,
+        items: Sequence[SapLinkCoverageItem],
+    ) -> list[SapLinkCoverage]:
+        ordered = tuple(
+            sorted(items, key=lambda item: (str(item.snapshot_id), str(item.sap_observation_id)))
+        )
+        keys = [(item.snapshot_id, item.sap_observation_id) for item in ordered]
+        if len(keys) != len(set(keys)):
+            raise SapCoverageConflictError("duplicate SAP coverage key in one request")
+        if not ordered:
+            return []
+
+        observations = {
+            row.id: row
+            for row in self._session.scalars(
+                select(SapExpenseVoucherObservation).where(
+                    SapExpenseVoucherObservation.id.in_(
+                        item.sap_observation_id for item in ordered
+                    )
+                )
+            )
+        }
+        projections = set(
+            self._session.execute(
+                select(
+                    SapExpenseVoucherSnapshotProjection.snapshot_id,
+                    SapExpenseVoucherSnapshotProjection.observation_id,
+                    SapExpenseVoucherSnapshotProjection.period,
+                ).where(
+                    tuple_(
+                        SapExpenseVoucherSnapshotProjection.snapshot_id,
+                        SapExpenseVoucherSnapshotProjection.observation_id,
+                    ).in_(keys)
+                )
+            ).all()
+        )
+        link_ids = {
+            item.exact_evidence_link_id
+            for item in ordered
+            if item.exact_evidence_link_id is not None
+        }
+        links = {
+            row.id: row
+            for row in self._session.scalars(
+                select(EvidenceLink).where(EvidenceLink.id.in_(link_ids))
+            )
+        }
+        for item in ordered:
+            observation = observations.get(item.sap_observation_id)
+            if observation is None:
+                raise SapCoverageConflictError("SAP coverage observation is missing")
+            projection_identity = (
+                item.snapshot_id,
+                item.sap_observation_id,
+                item.period_end,
+            )
+            if projection_identity not in projections:
+                raise SapCoverageConflictError("SAP observation is not bound to this snapshot")
+            source_identity = (
+                observation.company_code,
+                observation.document_number,
+                observation.line_item,
+                observation.amount,
+                observation.currency,
+            )
+            item_identity = (
+                item.company_code,
+                item.document_number,
+                item.line_item,
+                item.amount,
+                item.currency,
+            )
+            if source_identity != item_identity:
+                raise SapCoverageConflictError("SAP coverage fields differ from the observation")
+            if item.exact_evidence_link_id is not None:
+                link = links.get(item.exact_evidence_link_id)
+                if (
+                    link is None
+                    or link.snapshot_id != item.snapshot_id
+                    or link.target_record_id != observation.source_record_id
+                    or link.relation_quality != "EXACT"
+                ):
+                    raise SapCoverageConflictError("exact evidence does not match SAP coverage")
+
+        self._session.execute(
+            insert(SapLinkCoverage)
+            .values(
+                [
+                    {
+                        "company_code": item.company_code,
+                        "period": item.period_end,
+                        "sap_observation_id": item.sap_observation_id,
+                        "document_number": item.document_number,
+                        "line_item": item.line_item,
+                        "amount": item.amount,
+                        "currency": item.currency,
+                        "link_status": item.link_status.value,
+                        "exact_evidence_link_id": item.exact_evidence_link_id,
+                        "evaluated_via_business_document": (
+                            item.evaluated_via_business_document
+                        ),
+                        "snapshot_id": item.snapshot_id,
+                    }
+                    for item in ordered
+                ]
+            )
+            .on_conflict_do_nothing(
+                index_elements=["snapshot_id", "sap_observation_id"]
+            )
+        )
+        persisted = list(
+            self._session.scalars(
+                select(SapLinkCoverage)
+                .where(
+                    tuple_(
+                        SapLinkCoverage.snapshot_id,
+                        SapLinkCoverage.sap_observation_id,
+                    ).in_(keys)
+                )
+                .order_by(SapLinkCoverage.snapshot_id, SapLinkCoverage.sap_observation_id)
+            )
+        )
+        expected_by_key = {
+            (item.snapshot_id, item.sap_observation_id): item for item in ordered
+        }
+        for row in persisted:
+            expected = expected_by_key[(row.snapshot_id, row.sap_observation_id)]
+            actual = (
+                row.company_code,
+                row.period,
+                row.document_number,
+                row.line_item,
+                row.amount,
+                row.currency,
+                row.link_status,
+                row.exact_evidence_link_id,
+                row.evaluated_via_business_document,
+            )
+            desired = (
+                expected.company_code,
+                expected.period_end,
+                expected.document_number,
+                expected.line_item,
+                expected.amount,
+                expected.currency,
+                expected.link_status.value,
+                expected.exact_evidence_link_id,
+                expected.evaluated_via_business_document,
+            )
+            if actual != desired:
+                raise SapCoverageConflictError("idempotent SAP coverage replay changed values")
+        return persisted
 
     def source_observations_for_batch(
         self,
@@ -153,4 +319,4 @@ class BusinessEntertainmentScopeRepository:
         )
 
 
-__all__ = ["BusinessEntertainmentScopeRepository"]
+__all__ = ["BusinessEntertainmentScopeRepository", "SapCoverageConflictError"]
