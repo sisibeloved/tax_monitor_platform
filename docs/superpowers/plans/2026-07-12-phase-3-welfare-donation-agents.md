@@ -44,7 +44,7 @@ backend/src/tax_risk/
   api/routes/cases.py                       # 仅增加监测类型筛选
   api/schemas.py                            # 增加运行请求/响应及风险字段
   main.py                                   # 注册月度语义路由
-backend/migrations/versions/0003_welfare_donation_agents.py
+backend/migrations/versions/0011_welfare_donation_agents.py
 backend/tests/
   unit/semantic/test_limited_scope.py
   unit/semantic/test_account_dictionary.py
@@ -637,7 +637,7 @@ git commit -m "feat(agents): classify welfare and donation SAP lines"
 - 修改：`backend/src/tax_risk/persistence/models.py`
 - 修改：`backend/src/tax_risk/persistence/semantic_models.py`
 - 修改：`backend/src/tax_risk/persistence/semantic_repositories.py`
-- 新建：`backend/migrations/versions/0003_welfare_donation_agents.py`
+- 新建：`backend/migrations/versions/0011_welfare_donation_agents.py`
 - 测试：`backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py`
 - 测试：`backend/tests/integration/persistence/test_monthly_semantic_repository.py`
 - 测试：`backend/tests/integration/persistence/test_phase_3_schema.py`
@@ -750,7 +750,7 @@ DATASET_ACCOUNT_FAMILY = {
 }
 ```
 
-扩展 `application/snapshots.py`，使现有发布事务通过 SourceRecord 解析新科目类别观测记录，插入相应投影，校验完整性，之后才能以数据库 UTC `published_at` 将 SnapshotSet 设为 PUBLISHED；任何失败都必须同时回退投影及发布。使用 `backend/migrations/versions/0003_welfare_donation_agents.py` 将现有科目类别检查/枚举扩展至 `WELFARE` 和 `DONATION`，并为任务 6 扩展阶段 1 现有运行控制面。将 `NOT_RUN` 添加到按公司状态枚举中，并在 `monitoring_run` 上增加可空的语义版本集合外键及经过校验的 `monitoring_type`；数据库检查要求 `MONTHLY_SEMANTIC` 运行同时具备二者，同时保持季度运行记录兼容。不可变版本集合外键将规则、模型、提示词、案例库及科目字典版本冻结为一个已批准组合。设置 `down_revision = "0002d_semantic_artifacts_calls"`；不得增加第二张运行表、观测/投影表、字典版本列或影子快照 ID。
+扩展 `application/snapshots.py`，使现有发布事务通过 SourceRecord 解析新科目类别观测记录，插入相应投影，校验完整性，之后才能以数据库 UTC `published_at` 将 SnapshotSet 设为 PUBLISHED；任何失败都必须同时回退投影及发布。使用 `backend/migrations/versions/0011_welfare_donation_agents.py` 将现有科目类别检查/枚举扩展至 `WELFARE` 和 `DONATION`，并为任务 6 扩展阶段 1 现有运行控制面。将 `NOT_RUN` 添加到按公司状态枚举中，并在 `monitoring_run` 上增加可空的语义版本集合外键及经过校验的 `monitoring_type`；数据库检查要求 `MONTHLY_SEMANTIC` 运行同时具备二者，同时保持季度运行记录兼容。不可变版本集合外键将规则、模型、提示词、案例库及科目字典版本冻结为一个已批准组合。设置 `revision = "0011_welfare_donation"`、`down_revision = "0010_semantic_artifacts"`；不得增加第二张运行表、观测/投影表、字典版本列或影子快照 ID。
 
 - [ ] **步骤 4：实现本期范围及本年累计 SAP 查询**
 
@@ -821,7 +821,7 @@ class MonthlySemanticRepository:
 - [ ] **步骤 6：提交共享数据采集及查询扩展**
 
 ```bash
-git add backend/src/tax_risk/domain/semantic/sap_voucher.py backend/src/tax_risk/adapters/ingest/sap_expense.py backend/src/tax_risk/application/snapshots.py backend/src/tax_risk/persistence/models.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0003_welfare_donation_agents.py backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py backend/tests/integration/persistence/test_monthly_semantic_repository.py backend/tests/integration/persistence/test_phase_3_schema.py
+git add backend/src/tax_risk/domain/semantic/sap_voucher.py backend/src/tax_risk/adapters/ingest/sap_expense.py backend/src/tax_risk/application/snapshots.py backend/src/tax_risk/persistence/models.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0011_welfare_donation_agents.py backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py backend/tests/integration/persistence/test_monthly_semantic_repository.py backend/tests/integration/persistence/test_phase_3_schema.py
 git commit -m "feat(sap): extend versioned expense observations"
 ```
 
@@ -1236,7 +1236,7 @@ it('emits the welfare monitor filter', () => {
 4. 持久化阶段 1 现有 `MonitoringRun` 及按公司记录，并使用唯一运行键 `MONTHLY_SEMANTIC:{period}:{snapshot_set_id}:{semantic_version_set_id}:{monitoring_type}`；
 5. 在分派工作任务画布前提交事务。
 
-使用任务 4 `0003_welfare_donation_agents.py` 在现有控制面表中增加的列，不得添加第二套运行框架。运行的不可变语义版本集合外键是权威来源；状态响应可将其展开为五个便于阅读的版本，但工作任务必须按 ID 重新加载同一条记录。
+使用任务 4 `0011_welfare_donation_agents.py` 在现有控制面表中增加的列，不得添加第二套运行框架。运行的不可变语义版本集合外键是权威来源；状态响应可将其展开为五个便于阅读的版本，但工作任务必须按 ID 重新加载同一条记录。
 
 如果提交后消息代理分派失败，复用阶段 1 现有 `FAILED` 运行状态，并在第二个事务中持久化 `reason_code="BROKER_DISPATCH_FAILED"`；不得为传输细节扩展状态枚举。GET 返回该原因，重试分派时复用此运行 ID/键，而不是创建其他运行。将该场景加入 API 集成测试。
 

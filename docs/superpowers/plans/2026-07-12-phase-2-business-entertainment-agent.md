@@ -128,13 +128,15 @@ npm --prefix web test -- --run
 - `backend/migrations/env.py`
 - `web/src/App.tsx`
 
-迁移链：
+迁移链以当前阶段1真实迁移头 `0006_review_action_assignee` 为起点，禁止从早期 `0001_control_plane` 分叉：
 
-- `0002a_business_entertainment_scope.py`：`down_revision =` 阶段1的 `0001_control_plane`。
-- `0002b_business_entertainment_observations.py`：`down_revision = 0002a_business_entertainment_scope`。
-- `0002c_semantic_contracts_accounts.py`：`down_revision = 0002b_business_entertainment_observations`。
-- `0002d_semantic_artifacts_calls.py`：`down_revision = 0002c_semantic_contracts_accounts`。
-- 阶段3的 `0003_welfare_donation_agents.py` 必须将 `down_revision` 设为 `0002d_semantic_artifacts_calls`。
+| 文件 | `revision` | `down_revision` |
+|---|---|---|
+| `0007_business_entertainment_scope.py` | `0007_entertainment_scope` | `0006_review_action_assignee` |
+| `0008_business_entertainment_observations.py` | `0008_entertainment_observations` | `0007_entertainment_scope` |
+| `0009_semantic_contracts_accounts.py` | `0009_semantic_accounts` | `0008_entertainment_observations` |
+| `0010_semantic_artifacts_calls.py` | `0010_semantic_artifacts` | `0009_semantic_accounts` |
+| 阶段3 `0011_welfare_donation_agents.py` | `0011_welfare_donation` | `0010_semantic_artifacts` |
 
 ## 工作块1：受控数据源、精确证据与高召回候选
 
@@ -148,7 +150,7 @@ npm --prefix web test -- --run
 - 修改：`backend/src/tax_risk/application/ingest.py`
 - 新建：`backend/src/tax_risk/persistence/business_entertainment_models.py`
 - 新建：`backend/src/tax_risk/persistence/business_entertainment_repositories.py`
-- 新建：`backend/migrations/versions/0002a_business_entertainment_scope.py`
+- 新建：`backend/migrations/versions/0007_business_entertainment_scope.py`
 - 修改：`backend/migrations/env.py`
 - 测试：`backend/tests/unit/adapters/test_business_entertainment_company_list_xlsx.py`
 - 测试：`backend/tests/integration/application/test_business_entertainment_company_scope.py`
@@ -201,7 +203,7 @@ XLSX适配器首先创建阶段1 IngestBatch/SourceRecord血缘，随后门禁�
 - [ ] **步骤6：提交任务1**
 
 ~~~bash
-git add backend/src/tax_risk/domain/business_entertainment/company_scope.py backend/src/tax_risk/adapters/ingest/business_entertainment_company_list_xlsx.py backend/src/tax_risk/application/business_entertainment/company_scope.py backend/src/tax_risk/application/ingest.py backend/src/tax_risk/persistence/business_entertainment_models.py backend/src/tax_risk/persistence/business_entertainment_repositories.py backend/migrations/versions/0002a_business_entertainment_scope.py backend/migrations/env.py backend/tests
+git add backend/src/tax_risk/domain/business_entertainment/company_scope.py backend/src/tax_risk/adapters/ingest/business_entertainment_company_list_xlsx.py backend/src/tax_risk/application/business_entertainment/company_scope.py backend/src/tax_risk/application/ingest.py backend/src/tax_risk/persistence/business_entertainment_models.py backend/src/tax_risk/persistence/business_entertainment_repositories.py backend/migrations/versions/0007_business_entertainment_scope.py backend/migrations/env.py backend/tests
 git commit -m "feat: govern entertainment company scope"
 ~~~
 
@@ -216,7 +218,7 @@ git commit -m "feat: govern entertainment company scope"
 - 新建：`backend/src/tax_risk/persistence/semantic_models.py`
 - 新建：`backend/src/tax_risk/persistence/semantic_repositories.py`
 - 修改：`backend/src/tax_risk/persistence/business_entertainment_models.py`
-- 新建：`backend/migrations/versions/0002b_business_entertainment_observations.py`
+- 新建：`backend/migrations/versions/0008_business_entertainment_observations.py`
 - 修改：`backend/migrations/env.py`
 - 测试：`backend/tests/unit/adapters/test_business_entertainment_source_adapters.py`
 - 测试：`backend/tests/integration/application/test_business_entertainment_ingest.py`
@@ -272,7 +274,7 @@ git commit -m "feat: govern entertainment company scope"
 - [ ] **步骤9：提交任务2**
 
 ~~~bash
-git add backend/src/tax_risk/domain backend/src/tax_risk/adapters/ingest backend/src/tax_risk/application/ingest.py backend/src/tax_risk/persistence backend/tests/unit/adapters/test_business_entertainment_source_adapters.py backend/tests/integration/application/test_business_entertainment_ingest.py
+git add backend/src/tax_risk/domain backend/src/tax_risk/adapters/ingest backend/src/tax_risk/application/ingest.py backend/src/tax_risk/persistence backend/migrations/versions/0008_business_entertainment_observations.py backend/migrations/env.py backend/tests/unit/adapters/test_business_entertainment_source_adapters.py backend/tests/integration/application/test_business_entertainment_ingest.py
 git commit -m "feat: ingest entertainment evidence with lineage"
 ~~~
 
@@ -474,7 +476,7 @@ git commit -m "feat: generate versioned entertainment candidates"
 - 修改：`backend/src/tax_risk/application/ingest.py`
 - 修改：`backend/src/tax_risk/persistence/semantic_models.py`
 - 修改：`backend/src/tax_risk/persistence/semantic_repositories.py`
-- 新建：`backend/migrations/versions/0002c_semantic_contracts_accounts.py`
+- 新建：`backend/migrations/versions/0009_semantic_contracts_accounts.py`
 - 测试：`backend/tests/unit/semantic/test_contract_separation.py`
 - 测试：`backend/tests/unit/semantic/test_sap_voucher_evidence_pack.py`
 - 测试：`backend/tests/integration/application/test_account_dictionary_governance.py`
@@ -563,7 +565,7 @@ class StructuredModelClient(Protocol):
 - [ ] **步骤13：提交任务6**
 
 ~~~bash
-git add backend/src/tax_risk/domain/semantic backend/src/tax_risk/application/semantic backend/src/tax_risk/application/ingest.py backend/src/tax_risk/adapters/ingest/suggested_account_dictionary_xlsx.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0002c_semantic_contracts_accounts.py backend/tests
+git add backend/src/tax_risk/domain/semantic backend/src/tax_risk/application/semantic backend/src/tax_risk/application/ingest.py backend/src/tax_risk/adapters/ingest/suggested_account_dictionary_xlsx.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0009_semantic_contracts_accounts.py backend/tests
 git commit -m "feat: govern semantic decisions and accounts"
 ~~~
 
@@ -579,7 +581,7 @@ git commit -m "feat: govern semantic decisions and accounts"
 - 修改：`backend/src/tax_risk/config.py`
 - 修改：`backend/src/tax_risk/persistence/semantic_models.py`
 - 修改：`backend/src/tax_risk/persistence/semantic_repositories.py`
-- 新建：`backend/migrations/versions/0002d_semantic_artifacts_calls.py`
+- 新建：`backend/migrations/versions/0010_semantic_artifacts_calls.py`
 - 修改：`backend/src/tax_risk/api/schemas.py`
 - 修改：`backend/src/tax_risk/main.py`
 - 修改：`backend/pyproject.toml`
@@ -634,7 +636,7 @@ git commit -m "feat: govern semantic decisions and accounts"
 - [ ] **步骤10：提交任务7**
 
 ~~~bash
-git add backend/src/tax_risk/application/semantic backend/src/tax_risk/adapters/model backend/src/tax_risk/api/routes/semantic_governance.py backend/src/tax_risk/api/schemas.py backend/src/tax_risk/main.py backend/src/tax_risk/config.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0002d_semantic_artifacts_calls.py backend/pyproject.toml backend/tests
+git add backend/src/tax_risk/application/semantic backend/src/tax_risk/adapters/model backend/src/tax_risk/api/routes/semantic_governance.py backend/src/tax_risk/api/schemas.py backend/src/tax_risk/main.py backend/src/tax_risk/config.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0010_semantic_artifacts_calls.py backend/pyproject.toml backend/tests
 git commit -m "feat: govern enterprise semantic model calls"
 ~~~
 
@@ -975,7 +977,7 @@ npm --prefix web run build
 npm --prefix web run test:e2e -- business-entertainment.spec.ts
 ~~~
 
-预期：所有命令均通过（PASS）；迁移链为 `0001→0002a→0002b→0002c→0002d`；范围/导入/血缘/schema/安全/合并/聚合测试通过；发布指标达到已审批阈值。
+预期：所有命令均通过（PASS）；迁移链为 `0006→0007→0008→0009→0010`，且只有一个Alembic迁移头；范围/导入/血缘/schema/安全/合并/聚合测试通过；发布指标达到已审批阈值。
 
 - [ ] **步骤22：提交任务11**
 
