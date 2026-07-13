@@ -1,0 +1,37 @@
+{
+  "manifest": {
+    "application_image_digest": "sha256:7ba2e3ecd52d861bcff3eec74d3633a9026c9edde1beb381b2553292d8582bcb",
+    "artifacts": {
+      "account_dictionary_sha256": "2c3029a5fc8ce20df205675ca27693ef945eb9f0c6ebe4bd5307dceec2f6f90f",
+      "case_library_sha256": "2532960ebe7ccd2864cb2c9c4c5d8ef08f4dc8bfba828ce4b56c4cc489cc915f",
+      "evaluation_report_sha256": "34045c72e1fd2053433c5370395306c39228aa0874740e77090922ffa95a01db",
+      "model_adapter_config_sha256": "ae3e2aff596b059af62241254f7a109ceadc6ef1d57418adda80e4eb92872e2b",
+      "prompt_package_sha256": "4e19029fb4459a5383bd91a9a1746d1a683ded608963b899952db538a7ee5674",
+      "replay_report_sha256": "171a5715d39140ca231b801db516b0a2b2d0c62f12dd193c01c84eca7535d2fb",
+      "rule_package_sha256": "ae1b6ee922e60f1f7d8acdb5e5e8c7120f825a7a53741b565e87f2dd9d506dcd"
+    },
+    "candidate_version": "phase-4-local-previous",
+    "created_at": "2026-07-13T12:58:54.408356Z",
+    "git_commit": "12a522654a5f494eb715c4c08355d0e4bbecfab1",
+    "migration_head": "0017_strict_rls_runtime"
+  },
+  "manifest_sha256": "1d41c98675521027cfda3b2cb04c06a91c86c50d6c1bf22d5bcf8affcfc35027",
+  "signature": {
+    "algorithm": "ED25519",
+    "key_id": "ci-ephemeral-release-key",
+    "key_version": "single-run",
+    "manifest_sha256": "1d41c98675521027cfda3b2cb04c06a91c86c50d6c1bf22d5bcf8affcfc35027",
+    "signature_base64": "OQsMryBqFFUomCiObT0HDAHzJdkbOFKtOk7FLYcEYGJVTHs4oiSjcmi0yK2NKImj3x2J72hwJNFq7VNS+XYFAQ==",
+    "signed_at": "2026-07-13T12:58:54.408356Z"
+  },
+  "signing_mode": "CI_EPHEMERAL_NOT_FOR_PRODUCTION",
+  "trusted_public_key": {
+    "key_id": "ci-ephemeral-release-key",
+    "key_version": "single-run",
+    "public_key_base64": "5OcxYpE8RO/NhcrRxqOOhTI9IgmKQ5ZNsazeBhisrhY=",
+    "retained_until": null,
+    "state": "CURRENT",
+    "valid_from": "2026-07-13T12:58:54.408356Z"
+  },
+  "verification_passed": true
+}

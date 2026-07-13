@@ -1,0 +1,93 @@
+{
+  "approvals": {},
+  "evaluated_at": "2026-07-13T12:59:14.423152Z",
+  "evidence": {
+    "audit_immutability": {
+      "reference": "artifacts/acceptance/phase-4/security.json",
+      "sha256": "a550ef812207aaa9154319862941da2ab9b6634a1d1db726bb69595a86aeb3a3",
+      "verified": true
+    },
+    "authorization_isolation": {
+      "reference": "artifacts/acceptance/phase-4/governance.xml",
+      "sha256": "f508500a8be8ec47add721b607477ab854376717dcdad26d9970bd1cbfe86a5d",
+      "verified": true
+    },
+    "delivery_timeliness": {
+      "reference": "artifacts/acceptance/phase-4/capacity-report.json",
+      "sha256": "758014cfbc76f1342c155ae63472b89dceccb291dfdb9258bc362b53cb39eb7c",
+      "verified": true
+    },
+    "external_index_control": {
+      "reference": "artifacts/acceptance/phase-4/security.json",
+      "sha256": "a550ef812207aaa9154319862941da2ab9b6634a1d1db726bb69595a86aeb3a3",
+      "verified": true
+    },
+    "formula_accuracy": {
+      "reference": "artifacts/acceptance/phase-4/replay-report.json",
+      "sha256": "171a5715d39140ca231b801db516b0a2b2d0c62f12dd193c01c84eca7535d2fb",
+      "verified": true
+    },
+    "group_capacity": {
+      "reference": "artifacts/acceptance/phase-4/capacity-report.json",
+      "sha256": "758014cfbc76f1342c155ae63472b89dceccb291dfdb9258bc362b53cb39eb7c",
+      "verified": true
+    },
+    "master_data_blocking": {
+      "reference": "artifacts/acceptance/phase-4/replay-report.json",
+      "sha256": "171a5715d39140ca231b801db516b0a2b2d0c62f12dd193c01c84eca7535d2fb",
+      "verified": true
+    },
+    "recovery": {
+      "reference": "artifacts/acceptance/phase-4/rollback-report.json",
+      "sha256": "b23c350ecd3cde716fbd75f725625387b06baf1d2608c19e154b03deec3b9a7e",
+      "verified": true
+    },
+    "rollback": {
+      "reference": "artifacts/acceptance/phase-4/rollback-report.json",
+      "sha256": "b23c350ecd3cde716fbd75f725625387b06baf1d2608c19e154b03deec3b9a7e",
+      "verified": true
+    },
+    "semantic_quality": {
+      "reference": "artifacts/acceptance/phase-4/replay-report.json",
+      "sha256": "171a5715d39140ca231b801db516b0a2b2d0c62f12dd193c01c84eca7535d2fb",
+      "verified": true
+    },
+    "signature_verification": {
+      "reference": "artifacts/acceptance/phase-4/signed-manifest.json",
+      "sha256": "858ca61819047ce357cabdc4b557127db0e0bc42ecb22e99932beba09d9906e8",
+      "verified": true
+    },
+    "traceability": {
+      "reference": "artifacts/acceptance/phase-4/replay-report.json",
+      "sha256": "171a5715d39140ca231b801db516b0a2b2d0c62f12dd193c01c84eca7535d2fb",
+      "verified": true
+    }
+  },
+  "evidence_scope": "LOCAL_SYNTHETIC",
+  "failed_gates": [
+    "NON_PRODUCTION_EVIDENCE_SCOPE",
+    "MISSING_APPROVAL_TAX_OWNER",
+    "MISSING_APPROVAL_DATA_OWNER",
+    "MISSING_APPROVAL_SECURITY_OWNER",
+    "MISSING_APPROVAL_OPERATIONS_OWNER"
+  ],
+  "metrics": {
+    "audit_immutability_passed": true,
+    "authorization_isolation_passed": true,
+    "external_semantic_index_configured": false,
+    "formula_accuracy": 1.0,
+    "high_confidence_accuracy": 0.82,
+    "known_semantic_misses": 0,
+    "master_data_block_rate": 1.0,
+    "maximum_delivery_hours": 48.0,
+    "recovery_verified": true,
+    "rollback_verified": true,
+    "semantic_recall": 0.96,
+    "signature_verified": true,
+    "traceability_rate": 1.0,
+    "valid_company_success_rate": 1.0
+  },
+  "production_ready": false,
+  "snapshot_set_id": "pilot-2026q2",
+  "technical_ready": true
+}

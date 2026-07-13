@@ -1,0 +1,320 @@
+{
+  "audit_events": [
+    {
+      "action": "ROLLBACK_REQUESTED",
+      "occurred_at": "2026-07-13T12:59:05.047846+00:00",
+      "payload": {
+        "affected_batch_ids": [
+          "acceptance-quarterly-2026q2",
+          "acceptance-monthly-2026-06"
+        ],
+        "approved_change_id": "CHG-LOCAL-PHASE4-ROLLBACK",
+        "environment": "acceptance",
+        "requested_by": "local-release-operator"
+      },
+      "payload_sha256": "cee3308e963d6eb9f520d91e76d1129b8f27c1c4207a89f539518e0ade482b22"
+    },
+    {
+      "action": "ROLLBACK_APPROVED",
+      "occurred_at": "2026-07-13T12:59:05.047859+00:00",
+      "payload": {
+        "approved_by": "local-operations-owner",
+        "approved_change_id": "CHG-LOCAL-PHASE4-ROLLBACK"
+      },
+      "payload_sha256": "d64375937c1fbd0021756d43d82abc6675cc76d8c28e103bdd4399b82cf35873"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.050069+00:00",
+      "payload": {
+        "evidence_sha256": "51c84f2a2a5b64ba03297c219a77ff2b9a93dafde520eff4a6c8e24d9339b291",
+        "stage": "PRECHECK_SIGNATURES"
+      },
+      "payload_sha256": "fd51566cf1be392feb13fb06eebe22ace3ce0ba7d5e2011fe814c97392eb840b"
+    },
+    {
+      "action": "ROLLBACK_SIGNATURES_VERIFIED",
+      "occurred_at": "2026-07-13T12:59:05.050077+00:00",
+      "payload": {
+        "approved_change_id": "CHG-LOCAL-PHASE4-ROLLBACK",
+        "candidate_manifest_sha256": "ecb24b6fe7ce6fc251455f089fd80ed410beb3efa4e3d111631e79d6107a61d6",
+        "candidate_signature_valid": true,
+        "candidate_signing_mode": "CI_EPHEMERAL_NOT_FOR_PRODUCTION",
+        "previous_manifest_sha256": "1d41c98675521027cfda3b2cb04c06a91c86c50d6c1bf22d5bcf8affcfc35027",
+        "previous_signature_valid": true,
+        "previous_signing_mode": "CI_EPHEMERAL_NOT_FOR_PRODUCTION",
+        "stage": "PRECHECK_SIGNATURES"
+      },
+      "payload_sha256": "4e74d3f93b14ef8abfded3709712ea3eb0383d9e1b5b4959f65b9bbe23f04e0c"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.050401+00:00",
+      "payload": {
+        "evidence_sha256": "c7be9aaf4593112da5fe1528bbca37c53aa8237a4103499bd76d82b1f500fec9",
+        "stage": "DRAIN_OR_REVOKE_TASKS"
+      },
+      "payload_sha256": "318e1336dc43127a9596403edcdc44b342805ca870482a744c840e7342cecf4a"
+    },
+    {
+      "action": "ROLLBACK_TASKS_DRAINED",
+      "occurred_at": "2026-07-13T12:59:05.050406+00:00",
+      "payload": {
+        "affected_batch_ids": [
+          "acceptance-quarterly-2026q2",
+          "acceptance-monthly-2026-06"
+        ],
+        "drained_task_count": 2,
+        "new_task_dispatch_blocked": true,
+        "stage": "DRAIN_OR_REVOKE_TASKS",
+        "terminated_inflight_task_count": 1
+      },
+      "payload_sha256": "b9b09cff8e4f738e336b806e8aaf47b1e932d8c4f36ba3f6d7cbe493f0d7ad90"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.050700+00:00",
+      "payload": {
+        "evidence_sha256": "49116eec55b12d2f15aac3bb7346b20437404b4668b74cd6f75de74eeef2b39f",
+        "stage": "REVOKE_EXPORT_DOWNLOADS"
+      },
+      "payload_sha256": "65daa166ee3d5c235c36c3aa1c09dbe31defc2c1ddb65fc9b9423f818a82bf7f"
+    },
+    {
+      "action": "ROLLBACK_EXPORTS_REVOKED",
+      "occurred_at": "2026-07-13T12:59:05.050705+00:00",
+      "payload": {
+        "authorization_rechecked": true,
+        "revoked_download_count": 1,
+        "stage": "REVOKE_EXPORT_DOWNLOADS"
+      },
+      "payload_sha256": "a98bf2d1f01b6f99b79c083553e67719e498aa6e3e9f9136fbf2611b3f9c5cca"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.050993+00:00",
+      "payload": {
+        "evidence_sha256": "f58db8e8f27863b2cafc74e1aed346aaa3d2ac32a0a0f7aecf530fbccee41202",
+        "stage": "RESTORE_ISOLATED_BACKUP"
+      },
+      "payload_sha256": "0c4038a565f407e7e22a8cb5daf08be2c86d75752a30adc60f4c0cc3721e53eb"
+    },
+    {
+      "action": "ROLLBACK_BACKUP_RESTORED",
+      "occurred_at": "2026-07-13T12:59:05.050998+00:00",
+      "payload": {
+        "backup_id": "acceptance-backup-2026q2-001",
+        "isolated_target_verified": true,
+        "restore_id": "5a1a616a8f28be415f7bd59cd775e363b89b0cec200fa814756cacb9997ab93e",
+        "restore_target": "isolated-phase4-restore",
+        "stage": "RESTORE_ISOLATED_BACKUP"
+      },
+      "payload_sha256": "5b88dfd9a3747608c3048f2b92b69738423162b9da24c37a58db6acf3a120818"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.051300+00:00",
+      "payload": {
+        "evidence_sha256": "f6489b545b64e1bc50aac76cef91c43e93e8e0a77ed65fe826a2d8c0bdb26ac1",
+        "stage": "TEST_MIGRATION_DOWNGRADE"
+      },
+      "payload_sha256": "dc20fc268f1c4e690a79c0b3afd29cf495d09c213ccbd1f5adc98e2de70a352a"
+    },
+    {
+      "action": "ROLLBACK_MIGRATION_VERIFIED",
+      "occurred_at": "2026-07-13T12:59:05.051304+00:00",
+      "payload": {
+        "downgrade_executed_on_live_database": false,
+        "downgrade_reupgrade_passed": true,
+        "stage": "TEST_MIGRATION_DOWNGRADE",
+        "target": "isolated-phase4-restore"
+      },
+      "payload_sha256": "b5a7a4349587bbcfb181f5eee9c52a867274e2d7eebcf2c3171ea4461fd65c33"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.051923+00:00",
+      "payload": {
+        "evidence_sha256": "9abb803755215226a391b5112587ca6f1b9e917d673d2f3d8a18320720ed3095",
+        "stage": "DEPLOY_PREVIOUS_MANIFEST"
+      },
+      "payload_sha256": "e8ed9685e9560a6784c4a762a5981204edf9860b90e37cf5abf11b51da04d8dd"
+    },
+    {
+      "action": "ROLLBACK_MANIFEST_SWITCHED",
+      "occurred_at": "2026-07-13T12:59:05.051927+00:00",
+      "payload": {
+        "deployed_manifest_sha256": "1d41c98675521027cfda3b2cb04c06a91c86c50d6c1bf22d5bcf8affcfc35027",
+        "deployment_count": 1,
+        "stage": "DEPLOY_PREVIOUS_MANIFEST"
+      },
+      "payload_sha256": "5aa752e5e98f77bb4771db3f240f7265be7ab2449030274284dab783634658de"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.052255+00:00",
+      "payload": {
+        "evidence_sha256": "9f56ded90c544c72ee021645f2f0f3d830646a0a38918d02bf76edffeab45793",
+        "stage": "VERIFY_DATA_CHECKSUMS"
+      },
+      "payload_sha256": "ad1f4b0b726bb57ae68550604b042c305680225e7194515c429864bb6873e8ad"
+    },
+    {
+      "action": "ROLLBACK_CHECKSUM_VERIFIED",
+      "occurred_at": "2026-07-13T12:59:05.052260+00:00",
+      "payload": {
+        "checksums_match": true,
+        "restored_checksum": "dd6dbbc230f18c77117372bd559ab79a2a7168e49a585b0b5ee9b48fb80ad007",
+        "snapshot_and_risk_counts_match": true,
+        "source_checksum": "dd6dbbc230f18c77117372bd559ab79a2a7168e49a585b0b5ee9b48fb80ad007",
+        "stage": "VERIFY_DATA_CHECKSUMS"
+      },
+      "payload_sha256": "f666f1417599c782d967776bf635b8fba0ec945b061383c3ad2cefff4236262f"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.052666+00:00",
+      "payload": {
+        "evidence_sha256": "bf88ac76a856b31faaa146913b479e8e2a87cca9c89fca9ddf7db86005133ff0",
+        "stage": "RERUN_REPRESENTATIVE_COMPANY"
+      },
+      "payload_sha256": "66eaaa4a6d48553f32f65610242f12407d2fac7305ba640f81763302638466ed"
+    },
+    {
+      "action": "ROLLBACK_REPRESENTATIVE_RERUN",
+      "occurred_at": "2026-07-13T12:59:05.052671+00:00",
+      "payload": {
+        "company_code": "C001",
+        "duplicate_risk_exposures": 0,
+        "rerun_status": "SUCCEEDED",
+        "stable_risk_fingerprints": true,
+        "stage": "RERUN_REPRESENTATIVE_COMPANY"
+      },
+      "payload_sha256": "9e0ef17c699fa6737fc577709abdc217025aba1a7bb55b32969e4c5ab7bbc85d"
+    },
+    {
+      "action": "ROLLBACK_CHECKPOINT_SUCCEEDED",
+      "occurred_at": "2026-07-13T12:59:05.053034+00:00",
+      "payload": {
+        "evidence_sha256": "758a01243cfef1a80016393fd383b26a63bf1c6bb4aa21da36167f50c12b7f1f",
+        "stage": "RECORD_RECOVERY_DECISION"
+      },
+      "payload_sha256": "3eb1a8e35c3c818c96d34ca61753597fabe8348db3ed958261367b123a99bffc"
+    },
+    {
+      "action": "ROLLBACK_RECOVERY_DECIDED",
+      "occurred_at": "2026-07-13T12:59:05.053038+00:00",
+      "payload": {
+        "decision": "RECOVERY_VERIFIED",
+        "decision_owner": "operations-owner-pending-production-signoff",
+        "recovery_verified": true,
+        "stage": "RECORD_RECOVERY_DECISION"
+      },
+      "payload_sha256": "0a9b979ee704a86a0e47d4bbca94f8e653d582438b9f4ef6ccaaf06a11146f75"
+    }
+  ],
+  "drill_id": "7c2cebb3-bdca-5b38-88a0-718eb26b899b",
+  "input_sha256": "d55f03f0d28833e545f8562bc9b7096f8354ba97ff228d72fc90ea019959f45d",
+  "schema_version": "phase-4.rollback-checkpoint.v1",
+  "stages": {
+    "DEPLOY_PREVIOUS_MANIFEST": {
+      "completed_at": "2026-07-13T12:59:05.051916+00:00",
+      "evidence": {
+        "deployed_manifest_sha256": "1d41c98675521027cfda3b2cb04c06a91c86c50d6c1bf22d5bcf8affcfc35027",
+        "deployment_count": 1
+      },
+      "evidence_sha256": "9abb803755215226a391b5112587ca6f1b9e917d673d2f3d8a18320720ed3095",
+      "status": "SUCCEEDED"
+    },
+    "DRAIN_OR_REVOKE_TASKS": {
+      "completed_at": "2026-07-13T12:59:05.050393+00:00",
+      "evidence": {
+        "affected_batch_ids": [
+          "acceptance-quarterly-2026q2",
+          "acceptance-monthly-2026-06"
+        ],
+        "drained_task_count": 2,
+        "new_task_dispatch_blocked": true,
+        "terminated_inflight_task_count": 1
+      },
+      "evidence_sha256": "c7be9aaf4593112da5fe1528bbca37c53aa8237a4103499bd76d82b1f500fec9",
+      "status": "SUCCEEDED"
+    },
+    "PRECHECK_SIGNATURES": {
+      "completed_at": "2026-07-13T12:59:05.050058+00:00",
+      "evidence": {
+        "approved_change_id": "CHG-LOCAL-PHASE4-ROLLBACK",
+        "candidate_manifest_sha256": "ecb24b6fe7ce6fc251455f089fd80ed410beb3efa4e3d111631e79d6107a61d6",
+        "candidate_signature_valid": true,
+        "candidate_signing_mode": "CI_EPHEMERAL_NOT_FOR_PRODUCTION",
+        "previous_manifest_sha256": "1d41c98675521027cfda3b2cb04c06a91c86c50d6c1bf22d5bcf8affcfc35027",
+        "previous_signature_valid": true,
+        "previous_signing_mode": "CI_EPHEMERAL_NOT_FOR_PRODUCTION"
+      },
+      "evidence_sha256": "51c84f2a2a5b64ba03297c219a77ff2b9a93dafde520eff4a6c8e24d9339b291",
+      "status": "SUCCEEDED"
+    },
+    "RECORD_RECOVERY_DECISION": {
+      "completed_at": "2026-07-13T12:59:05.053027+00:00",
+      "evidence": {
+        "decision": "RECOVERY_VERIFIED",
+        "decision_owner": "operations-owner-pending-production-signoff",
+        "recovery_verified": true
+      },
+      "evidence_sha256": "758a01243cfef1a80016393fd383b26a63bf1c6bb4aa21da36167f50c12b7f1f",
+      "status": "SUCCEEDED"
+    },
+    "RERUN_REPRESENTATIVE_COMPANY": {
+      "completed_at": "2026-07-13T12:59:05.052659+00:00",
+      "evidence": {
+        "company_code": "C001",
+        "duplicate_risk_exposures": 0,
+        "rerun_status": "SUCCEEDED",
+        "stable_risk_fingerprints": true
+      },
+      "evidence_sha256": "bf88ac76a856b31faaa146913b479e8e2a87cca9c89fca9ddf7db86005133ff0",
+      "status": "SUCCEEDED"
+    },
+    "RESTORE_ISOLATED_BACKUP": {
+      "completed_at": "2026-07-13T12:59:05.050985+00:00",
+      "evidence": {
+        "backup_id": "acceptance-backup-2026q2-001",
+        "isolated_target_verified": true,
+        "restore_id": "5a1a616a8f28be415f7bd59cd775e363b89b0cec200fa814756cacb9997ab93e",
+        "restore_target": "isolated-phase4-restore"
+      },
+      "evidence_sha256": "f58db8e8f27863b2cafc74e1aed346aaa3d2ac32a0a0f7aecf530fbccee41202",
+      "status": "SUCCEEDED"
+    },
+    "REVOKE_EXPORT_DOWNLOADS": {
+      "completed_at": "2026-07-13T12:59:05.050693+00:00",
+      "evidence": {
+        "authorization_rechecked": true,
+        "revoked_download_count": 1
+      },
+      "evidence_sha256": "49116eec55b12d2f15aac3bb7346b20437404b4668b74cd6f75de74eeef2b39f",
+      "status": "SUCCEEDED"
+    },
+    "TEST_MIGRATION_DOWNGRADE": {
+      "completed_at": "2026-07-13T12:59:05.051293+00:00",
+      "evidence": {
+        "downgrade_executed_on_live_database": false,
+        "downgrade_reupgrade_passed": true,
+        "target": "isolated-phase4-restore"
+      },
+      "evidence_sha256": "f6489b545b64e1bc50aac76cef91c43e93e8e0a77ed65fe826a2d8c0bdb26ac1",
+      "status": "SUCCEEDED"
+    },
+    "VERIFY_DATA_CHECKSUMS": {
+      "completed_at": "2026-07-13T12:59:05.052248+00:00",
+      "evidence": {
+        "checksums_match": true,
+        "restored_checksum": "dd6dbbc230f18c77117372bd559ab79a2a7168e49a585b0b5ee9b48fb80ad007",
+        "snapshot_and_risk_counts_match": true,
+        "source_checksum": "dd6dbbc230f18c77117372bd559ab79a2a7168e49a585b0b5ee9b48fb80ad007"
+      },
+      "evidence_sha256": "9f56ded90c544c72ee021645f2f0f3d830646a0a38918d02bf76edffeab45793",
+      "status": "SUCCEEDED"
+    }
+  }
+}

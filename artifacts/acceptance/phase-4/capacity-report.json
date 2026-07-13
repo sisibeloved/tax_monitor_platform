@@ -1,0 +1,109 @@
+{
+  "checks": {
+    "capacity": {
+      "company_count": 126,
+      "cpu_count": 8,
+      "elapsed_hours": 0.15555555555555556,
+      "elapsed_seconds": 560.0,
+      "execution_mode": "DETERMINISTIC_ACCEPTANCE_SIMULATION",
+      "line_count": 126000,
+      "maximum_queue_wait_seconds": 540.0,
+      "memory_gib": 16,
+      "passed": true,
+      "simulated_finished_at": "2026-07-01T08:09:20Z",
+      "simulated_started_at": "2026-07-01T08:00:00Z",
+      "task_count": 504,
+      "worker_count": 16
+    },
+    "failure_isolation": {
+      "blocked_companies": 2,
+      "blocked_error_codes": [
+        "REQUIRED_SOURCE_MISSING",
+        "MASTER_DATA_MISSING"
+      ],
+      "isolated_failure_count": 3,
+      "passed": true,
+      "recovered_error_codes": [
+        "PROVIDER_TIMEOUT"
+      ],
+      "retry_count": 1,
+      "succeeded_companies": 124,
+      "success_rate": 1.0,
+      "technical_failures": 0,
+      "total_companies": 126,
+      "valid_companies": 124
+    },
+    "replay_idempotency": {
+      "controlled_version_change_creates_new_run": true,
+      "effective_amount_duplicates": 0,
+      "passed": true,
+      "replay_count": 2,
+      "risk_fingerprint_duplicates": 0,
+      "stable_risk_fingerprint_unchanged": true,
+      "task_key_duplicates": 0
+    },
+    "t_plus_2": {
+      "data_ready_at": "2026-07-01T08:00:00Z",
+      "deadline": "2026-07-03T08:00:00Z",
+      "false_ready_company_count": 0,
+      "late_companies": [],
+      "missing_output_companies": [],
+      "on_time_company_count": 124,
+      "passed": true,
+      "succeeded_company_count": 124,
+      "success_rate": 1.0,
+      "valid_company_count": 124
+    }
+  },
+  "production_ready": true,
+  "profile": {
+    "company_count": 126,
+    "execution_mode": "DETERMINISTIC_ACCEPTANCE_SIMULATION",
+    "failure_injections": [
+      {
+        "class": "DATA_SOURCE",
+        "company": "C0124",
+        "error_code": "REQUIRED_SOURCE_MISSING",
+        "retryable": false
+      },
+      {
+        "class": "MASTER_DATA",
+        "company": "C0125",
+        "error_code": "MASTER_DATA_MISSING",
+        "retryable": false
+      },
+      {
+        "class": "PROVIDER",
+        "company": "C0126",
+        "error_code": "PROVIDER_TIMEOUT",
+        "retryable": true
+      }
+    ],
+    "monthly_lines_per_company": {
+      "business_entertainment": 400,
+      "donation": 250,
+      "total": 1000,
+      "welfare": 350
+    },
+    "quarterly_snapshots_per_company": 1,
+    "reference_runner": {
+      "cpu_count": 8,
+      "memory_gib": 16,
+      "worker_count": 16
+    },
+    "schema_version": "phase-4-capacity-v1",
+    "synthetic_duration_seconds": {
+      "business_entertainment_line": 0.05,
+      "donation_line": 0.05,
+      "quarterly_company": 20,
+      "welfare_line": 0.05
+    },
+    "thresholds": {
+      "maximum_capacity_hours": 24,
+      "maximum_delivery_hours": 48,
+      "minimum_valid_company_success_rate": 0.98
+    }
+  },
+  "pytest_exit_status": 0,
+  "schema_version": "phase-4-capacity-report-v1"
+}

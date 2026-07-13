@@ -1,0 +1,10 @@
+{
+  "static_analysis": true,
+  "type_check": true,
+  "dependency_consistency": true,
+  "adversarial_tests": true,
+  "authorization_rls_isolation": true,
+  "audit_immutability": true,
+  "external_semantic_index_configured": false,
+  "unresolved_high_severity_findings": 0
+}

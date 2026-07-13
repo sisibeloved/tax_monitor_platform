@@ -1,0 +1,231 @@
+{
+  "config": {
+    "argv": [
+      "/usr/local/bin/node",
+      "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/node_modules/.bin/playwright",
+      "test",
+      "--reporter=json"
+    ],
+    "configFile": "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/playwright.config.ts",
+    "rootDir": "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 120000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 1,
+    "webServer": {
+      "command": "npm run dev -- --host 127.0.0.1 --port 8080",
+      "url": "http://127.0.0.1:8080",
+      "reuseExistingServer": true,
+      "timeout": 120000
+    }
+  },
+  "suites": [
+    {
+      "title": "business-entertainment.spec.ts",
+      "file": "business-entertainment.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3299,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-07-13T12:54:37.110Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "fc1236e58a5cbb207e49-fbce755701c7a31a27de",
+          "file": "business-entertainment.spec.ts",
+          "line": 8,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "phase-3-welfare-donation.spec.ts",
+      "file": "phase-3-welfare-donation.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "筛选并复核福利费和公益性捐赠风险",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2182,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-07-13T12:54:40.685Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "c96c53d99321ab6af76c-d052fb685ccacebc6bc9",
+          "file": "phase-3-welfare-donation.spec.ts",
+          "line": 7,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "quarterly-dashboard.spec.ts",
+      "file": "quarterly-dashboard.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "季度所得税风险看板",
+          "file": "quarterly-dashboard.spec.ts",
+          "line": 22,
+          "column": 6,
+          "specs": [
+            {
+              "title": "展示105家公司监测结果并可追溯标准公司的计提公式",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 120000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "需要先由外部后端E2E注入唯一的105家公司验收数据",
+                      "location": {
+                        "file": "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/e2e/quarterly-dashboard.spec.ts",
+                        "line": 23,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": -1,
+                      "parallelIndex": -1,
+                      "status": "skipped",
+                      "duration": 0,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-07-13T12:54:42.873Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "需要先由外部后端E2E注入唯一的105家公司验收数据",
+                          "location": {
+                            "file": "/Users/luchen/Agents-Repo/Codex/tax_monitor_platform/.worktrees/phase-4-governance-hardening/web/e2e/quarterly-dashboard.spec.ts",
+                            "line": 23,
+                            "column": 8
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "3c74a7895915f83f0ca0-e81eadaa08c5143d5d4a",
+              "file": "quarterly-dashboard.spec.ts",
+              "line": 28,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-07-13T12:54:34.047Z",
+    "duration": 8878.953,
+    "expected": 2,
+    "skipped": 1,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

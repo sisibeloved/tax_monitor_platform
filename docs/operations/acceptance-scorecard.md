@@ -33,3 +33,17 @@
 | 安全负责人 | 待真实试点填写 |  |  |
 | 运维负责人 | 待真实试点填写 |  |  |
 
+## 本地证据链接
+
+- [后端 JUnit](../../artifacts/acceptance/backend.xml)
+- [前端 Playwright JSON](../../artifacts/acceptance/web-test-results/results.json)
+- [治理 JUnit](../../artifacts/acceptance/phase-4/governance.xml)
+- [安全检查](../../artifacts/acceptance/phase-4/security.json)
+- [迁移检查](../../artifacts/acceptance/phase-4/migrations.json)
+- [重放报告](../../artifacts/acceptance/phase-4/replay-report.json)
+- [签名清单](../../artifacts/acceptance/phase-4/signed-manifest.json)
+- [126 家容量报告](../../artifacts/acceptance/phase-4/capacity-report.json)
+- [回滚报告](../../artifacts/acceptance/phase-4/rollback-report.json)
+- [UAT 评分卡](../../artifacts/acceptance/phase-4/uat-scorecard.json)
+
+以上是本地生成的验收制品，其中签名和业务数据均为非生产范围。真实试点须将受控制品复制到批准的证据库，记录不可变对象版本、保留策略和四方批准，不得只引用开发工作区文件。

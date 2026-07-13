@@ -1,0 +1,6 @@
+{
+  "empty_database_upgrade": true,
+  "legacy_upgrade": true,
+  "downgrade_reupgrade": true,
+  "migration_head": "0017_strict_rls_runtime"
+}

@@ -1,0 +1,8 @@
+{
+  "algorithm": "ED25519",
+  "key_id": "ci-ephemeral-release-key",
+  "key_version": "single-run",
+  "manifest_sha256": "ecb24b6fe7ce6fc251455f089fd80ed410beb3efa4e3d111631e79d6107a61d6",
+  "signature_base64": "Z8PA72Sr3EAJdSYMNYpsrgrFk54XTdyBGEcCrmXhmjIl7iZzZ7ZucRGzpxVAgwehgbch2IZcwVNQJrfuKeALBQ==",
+  "signed_at": "2026-07-13T12:58:54.408356Z"
+}
