@@ -5,11 +5,13 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     SmallInteger,
     String,
@@ -172,9 +174,83 @@ class SuggestedAccountEntry(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
+class SemanticArtifactVersion(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "semantic_artifact_version"
+    __table_args__ = (
+        UniqueConstraint("artifact_type", "version", name="uq_semantic_artifact_version"),
+        CheckConstraint(
+            "artifact_type IN ('MODEL', 'PROMPT', 'CASE_LIBRARY')",
+            name="artifact_type",
+        ),
+        CheckConstraint(
+            "status IN ('DRAFT', 'APPROVED', 'PUBLISHED', 'RETIRED')",
+            name="status",
+        ),
+        CheckConstraint("effective_to >= effective_from", name="effective_period"),
+        CheckConstraint("length(checksum) = 64", name="checksum_length"),
+        CheckConstraint(
+            "(status = 'DRAFT' AND reviewer_id IS NULL AND approved_at IS NULL "
+            "AND published_at IS NULL) OR "
+            "(status = 'APPROVED' AND reviewer_id IS NOT NULL AND approved_at IS NOT NULL "
+            "AND published_at IS NULL) OR "
+            "(status = 'PUBLISHED' AND reviewer_id IS NOT NULL AND approved_at IS NOT NULL "
+            "AND published_at IS NOT NULL AND published_by IS NOT NULL) OR "
+            "status = 'RETIRED'",
+            name="lifecycle",
+        ),
+        Index("ix_semantic_artifact_effective", "artifact_type", "status", "effective_from"),
+    )
+
+    artifact_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    deployment_id: Mapped[str | None] = mapped_column(String(256))
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    reviewer_id: Mapped[str | None] = mapped_column(String(256))
+    published_by: Mapped[str | None] = mapped_column(String(256))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SemanticModelCallAudit(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "semantic_model_call_audit"
+    __table_args__ = (
+        CheckConstraint("length(request_checksum) = 64", name="request_checksum_length"),
+        CheckConstraint("length(output_checksum) = 64", name="output_checksum_length"),
+        CheckConstraint("token_count >= 0", name="nonnegative_tokens"),
+        CheckConstraint("latency_ms >= 0", name="nonnegative_latency"),
+        CheckConstraint("retry_count >= 0", name="nonnegative_retries"),
+        Index("ix_model_call_candidate", "candidate_key"),
+        Index("ix_model_call_run", "run_id"),
+    )
+
+    candidate_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    company_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    case_library_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    allowed_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    retention_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    operator_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 __all__ = [
     "SapExpenseVoucherObservation",
     "SapExpenseVoucherSnapshotProjection",
     "SuggestedAccountDictionaryVersion",
     "SuggestedAccountEntry",
+    "SemanticArtifactVersion",
+    "SemanticModelCallAudit",
 ]

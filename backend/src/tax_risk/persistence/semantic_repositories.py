@@ -13,6 +13,8 @@ from tax_risk.domain.semantic.sap_voucher import (
 from tax_risk.persistence.semantic_models import (
     SapExpenseVoucherObservation,
     SapExpenseVoucherSnapshotProjection,
+    SemanticArtifactVersion,
+    SemanticModelCallAudit,
     SuggestedAccountDictionaryVersion,
     SuggestedAccountEntry,
 )
@@ -51,6 +53,57 @@ class SemanticRepository:
 
     def add_suggested_account(self, entry: SuggestedAccountEntry) -> None:
         self._session.add(entry)
+
+    def add_semantic_artifact(self, artifact: SemanticArtifactVersion) -> None:
+        self._session.add(artifact)
+
+    def get_semantic_artifact(
+        self,
+        artifact_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> SemanticArtifactVersion | None:
+        statement = select(SemanticArtifactVersion).where(
+            SemanticArtifactVersion.id == artifact_id
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return self._session.scalar(statement)
+
+    def overlapping_published_semantic_artifacts(
+        self,
+        artifact: SemanticArtifactVersion,
+    ) -> list[SemanticArtifactVersion]:
+        return list(
+            self._session.scalars(
+                select(SemanticArtifactVersion).where(
+                    SemanticArtifactVersion.id != artifact.id,
+                    SemanticArtifactVersion.artifact_type == artifact.artifact_type,
+                    SemanticArtifactVersion.status == "PUBLISHED",
+                    SemanticArtifactVersion.effective_from <= artifact.effective_to,
+                    SemanticArtifactVersion.effective_to >= artifact.effective_from,
+                )
+            )
+        )
+
+    def active_semantic_artifacts(
+        self,
+        effective_on: date,
+    ) -> list[SemanticArtifactVersion]:
+        return list(
+            self._session.scalars(
+                select(SemanticArtifactVersion)
+                .where(
+                    SemanticArtifactVersion.status == "PUBLISHED",
+                    SemanticArtifactVersion.effective_from <= effective_on,
+                    SemanticArtifactVersion.effective_to >= effective_on,
+                )
+                .order_by(SemanticArtifactVersion.artifact_type)
+            )
+        )
+
+    def add_model_call_audit(self, audit: SemanticModelCallAudit) -> None:
+        self._session.add(audit)
 
     def get_account_dictionary_version(
         self,

@@ -29,6 +29,10 @@ from tax_risk.snapshot_limits import (
     MAX_SNAPSHOT_SET_MEMBERS,
     MAX_SNAPSHOT_SOURCE_BATCHES,
 )
+from tax_risk.application.semantic.version_registry import (
+    ArtifactStatus,
+    ArtifactType,
+)
 
 
 class IngestBatchCreate(BaseModel):
@@ -65,6 +69,39 @@ class IngestErrorResponse(BaseModel):
     message: str
     details: dict[str, Any]
     retryable: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SemanticArtifactCreateRequest(BaseModel):
+    artifact_type: ArtifactType
+    version: str = Field(min_length=1, max_length=128)
+    checksum: str = Field(min_length=64, max_length=64)
+    storage_ref: str = Field(min_length=1, max_length=512)
+    deployment_id: str | None = Field(default=None, max_length=256)
+    effective_from: date
+    effective_to: date
+
+
+class SemanticArtifactActionRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class SemanticArtifactResponse(BaseModel):
+    artifact_id: UUID
+    artifact_type: ArtifactType
+    version: str
+    checksum: str
+    storage_ref: str
+    deployment_id: str | None
+    effective_from: date
+    effective_to: date
+    status: ArtifactStatus
+    uploaded_by: str
+    reviewer_id: str | None
+    published_by: str | None
+    approved_at: datetime | None
+    published_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
 

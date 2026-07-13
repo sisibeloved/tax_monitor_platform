@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     quarterly_task_time_limit_seconds: int = Field(default=330, gt=0)
     quarterly_task_max_retries: int = Field(default=3, ge=0)
     quarterly_task_retry_backoff_seconds: int = Field(default=5, gt=0)
+    semantic_model_provider: Literal["enterprise", "fake"] = "enterprise"
+    semantic_model_endpoint: str | None = None
+    semantic_model_deployment: str | None = None
+    semantic_model_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    semantic_model_credential_ref: str | None = None
+    semantic_model_zero_retention_required: bool = True
 
     @model_validator(mode="after")
     def validate_quarterly_worker_timeouts(self) -> Self:
