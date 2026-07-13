@@ -5,6 +5,9 @@ from functools import partial
 import pytest
 from sqlalchemy import text
 
+from tax_risk.application.business_entertainment.reporting import (
+    BusinessEntertainmentReportingService,
+)
 from tax_risk.application.semantic.detection_router import SemanticCaseRouter
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
 from tests.integration.application.test_semantic_case_routing import (
@@ -52,6 +55,13 @@ def test_rerun_upserts_the_same_sap_line_case(
         replay = router.route(detection, suspicious_labels=frozenset({label}))
 
         assert first.risk_case_id == replay.risk_case_id
+        detail = BusinessEntertainmentReportingService(
+            partial(UnitOfWork, factory)
+        ).get_case(first.risk_case_id, company_scope=None)
+        assert detail.sap_fiscal_year == 2032
+        assert detail.current_account_code == "660203"
+        assert detail.current_account_name == "业务招待费"
+        assert detail.signed_amount == 100
         with engine.connect() as connection:
             row = connection.execute(
                 text(

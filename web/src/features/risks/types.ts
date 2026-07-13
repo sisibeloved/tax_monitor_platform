@@ -1,9 +1,17 @@
+export type MonitorType =
+  | "ACCRUAL_ACCURACY"
+  | "TAX_BURDEN"
+  | "POTENTIAL_TAX_COST"
+  | "BUSINESS_ENTERTAINMENT"
+  | "WELFARE"
+  | "DONATION";
+
 export interface BusinessEntertainmentRiskCase {
   id: string;
   company_id: string;
   company_code: string;
   company_name: string;
-  monitoring_type: "BUSINESS_ENTERTAINMENT";
+  monitoring_type: MonitorType;
   risk_amount: string;
   currency: string;
   status: string;
@@ -44,6 +52,9 @@ export interface BusinessEntertainmentRiskDetail {
   company_id: string;
   company_code: string;
   company_name: string;
+  monitoring_type: MonitorType;
+  fiscal_year: number;
+  period: number;
   status: string;
   merged_into_case_id: string | null;
   canonical_source_record_id: string;
@@ -51,6 +62,10 @@ export interface BusinessEntertainmentRiskDetail {
   sap_link_status: "LINKED" | "PENDING_LOCATION";
   sap_document_number: string | null;
   sap_line_item: string | null;
+  sap_fiscal_year: number | null;
+  current_account_code: string | null;
+  current_account_name: string | null;
+  signed_amount: string | null;
   risk_amount: string;
   currency: string;
   risk_amount_source: string;
@@ -77,10 +92,20 @@ export interface ResolveCaseResponse {
   merged: boolean;
 }
 
+export type RiskReviewOutcome = "CONFIRM" | "REJECT" | "REQUEST_EVIDENCE";
+
+export interface RiskCaseActionResponse {
+  id: string;
+  status: string;
+  assignee: string | null;
+  row_version: number;
+}
+
 export interface RiskFilters {
   fiscalYear: number;
   period: number;
   sourceMode?: string;
   sapLinkStatus?: string;
   confidence?: string;
+  monitoringType?: MonitorType;
 }

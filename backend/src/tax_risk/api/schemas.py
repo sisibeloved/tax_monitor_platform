@@ -106,6 +106,63 @@ class SemanticArtifactResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MonthlyRunRequest(BaseModel):
+    monitoring_type: MonitorType
+    period: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    company_codes: list[str] = Field(min_length=1)
+    snapshot_set_id: UUID
+    semantic_version_set_id: UUID
+
+
+class FrozenSemanticVersionsResponse(BaseModel):
+    rule_version: str
+    model_version: str
+    prompt_version: str
+    case_library_version: str
+    account_dictionary_version: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MonthlyRunCompanyResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    company_code: str
+    snapshot_id: UUID
+    status: str
+    selected: bool | None
+    adjustment_amount: Decimal | None
+    processed_line_count: int
+    risk_case_count: int
+    issue_code: str | None
+    attempt_count: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("adjustment_amount")
+    def serialize_adjustment(self, value: Decimal | None) -> str | None:
+        return None if value is None else format(value, "f")
+
+
+class MonthlyRunResponse(BaseModel):
+    run_id: UUID
+    run_key: str
+    monitoring_type: MonitorType
+    period: str
+    status: str
+    snapshot_set_id: UUID
+    semantic_version_set_id: UUID
+    frozen_versions: FrozenSemanticVersionsResponse
+    requested_company_count: int
+    succeeded_company_count: int
+    failed_company_count: int
+    not_run_company_count: int
+    failure_reason: str | None
+    companies: tuple[MonthlyRunCompanyResponse, ...]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class IngestBatchResponse(BaseModel):
     id: UUID
     source: str
@@ -364,6 +421,9 @@ class BusinessEntertainmentCaseDetailResponse(BaseModel):
     company_id: UUID
     company_code: str
     company_name: str
+    monitoring_type: MonitorType
+    fiscal_year: int
+    period: int
     status: RiskCaseStatus
     merged_into_case_id: UUID | None
     canonical_source_record_id: UUID
@@ -371,6 +431,10 @@ class BusinessEntertainmentCaseDetailResponse(BaseModel):
     sap_link_status: str
     sap_document_number: str | None
     sap_line_item: str | None
+    sap_fiscal_year: int | None
+    current_account_code: str | None
+    current_account_name: str | None
+    signed_amount: Decimal | None
     risk_amount: Decimal
     currency: str
     risk_amount_source: str
@@ -394,6 +458,10 @@ class BusinessEntertainmentCaseDetailResponse(BaseModel):
     @field_serializer("risk_amount")
     def serialize_risk_amount(self, value: Decimal) -> str:
         return format(value, "f")
+
+    @field_serializer("signed_amount")
+    def serialize_signed_amount(self, value: Decimal | None) -> str | None:
+        return None if value is None else format(value, "f")
 
 
 class SapLinkCoverageItemResponse(BaseModel):
@@ -564,6 +632,8 @@ __all__ = [
     "IngestBatchCreate",
     "IngestBatchResponse",
     "IngestErrorResponse",
+    "MonthlyRunRequest",
+    "MonthlyRunResponse",
     "DashboardCompanyPageResponse",
     "DashboardCompanyResponse",
     "DetectionDetailResponse",

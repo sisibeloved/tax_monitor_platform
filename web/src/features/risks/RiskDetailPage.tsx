@@ -18,14 +18,27 @@ import { useEffect, useState } from "react";
 import {
   businessEntertainmentCaseKey,
   businessEntertainmentRiskListKey,
+  applyRiskReview,
   resolveCaseToSap,
   riskDetailQueryOptions,
 } from "./api";
+import type { RiskReviewOutcome } from "./types";
 
 interface RiskDetailPageProps {
   caseId: string | null;
   onClose: () => void;
 }
+
+const statusLabels: Record<string, string> = {
+  NEW: "新建",
+  ASSIGNED: "已分派",
+  PENDING_COMPANY_CONFIRMATION: "待公司确认",
+  PENDING_ADJUSTMENT: "待改账",
+  ADJUSTED_PENDING_REVIEW: "改账待复核",
+  GROUP_REVIEW: "集团复核中",
+  EVIDENCE_REQUIRED: "待补充证据",
+  CLOSED: "已关闭",
+};
 
 export function RiskDetailPage({ caseId, onClose }: RiskDetailPageProps) {
   const queryClient = useQueryClient();
@@ -51,6 +64,20 @@ export function RiskDetailPage({ caseId, onClose }: RiskDetailPageProps) {
       ]);
     },
   });
+  const reviewMutation = useMutation({
+    mutationFn: async (outcome: RiskReviewOutcome) => {
+      if (caseId === null) {
+        throw new Error("风险事项ID不能为空");
+      }
+      return applyRiskReview(caseId, outcome);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: businessEntertainmentRiskListKey }),
+        queryClient.invalidateQueries({ queryKey: businessEntertainmentCaseKey(caseId) }),
+      ]);
+    },
+  });
 
   useEffect(() => {
     const first = detail.data?.resolution_evidence_links[0];
@@ -60,7 +87,7 @@ export function RiskDetailPage({ caseId, onClose }: RiskDetailPageProps) {
   const data = detail.data;
   return (
     <Drawer
-      title="业务招待费风险详情"
+      title="所得税风险详情"
       width={720}
       open={caseId !== null}
       onClose={onClose}
@@ -74,7 +101,31 @@ export function RiskDetailPage({ caseId, onClose }: RiskDetailPageProps) {
             <Descriptions.Item label="公司">
               {data.company_code} {data.company_name}
             </Descriptions.Item>
-            <Descriptions.Item label="状态">{data.status}</Descriptions.Item>
+            <Descriptions.Item label="状态">
+              {statusLabels[data.status] ?? data.status}
+            </Descriptions.Item>
+            <Descriptions.Item label="监测类型">
+              {data.monitoring_type}
+            </Descriptions.Item>
+            <Descriptions.Item label="期间">
+              {data.fiscal_year}-{String(data.period).padStart(2, "0")}
+            </Descriptions.Item>
+            <Descriptions.Item label="SAP凭证/行">
+              {data.sap_document_number ?? "-"} / {data.sap_line_item ?? "-"}
+            </Descriptions.Item>
+            <Descriptions.Item label="SAP会计年度">
+              {data.sap_fiscal_year ?? "-"}
+            </Descriptions.Item>
+            <Descriptions.Item label="当前科目">
+              {data.current_account_code && data.current_account_name
+                ? `${data.current_account_code} ${data.current_account_name}`
+                : "-"}
+            </Descriptions.Item>
+            <Descriptions.Item label="当前行金额">
+              {data.signed_amount === null
+                ? "-"
+                : `${data.signed_amount} ${data.currency}`}
+            </Descriptions.Item>
             <Descriptions.Item label="来源模式">{data.source_mode}</Descriptions.Item>
             <Descriptions.Item label="SAP关联状态">
               {data.sap_link_status === "PENDING_LOCATION"
@@ -121,13 +172,67 @@ export function RiskDetailPage({ caseId, onClose }: RiskDetailPageProps) {
             <Typography.Paragraph>{data.rationale_summary}</Typography.Paragraph>
           </section>
 
+          <section aria-label="冻结版本">
+            <Typography.Title level={5}>冻结版本</Typography.Title>
+            <Descriptions column={2} bordered size="small">
+              <Descriptions.Item label="规则版本">
+                {data.rule_version_id}
+              </Descriptions.Item>
+              <Descriptions.Item label="模型版本">
+                {data.model_version_id}
+              </Descriptions.Item>
+              <Descriptions.Item label="提示词版本">
+                {data.prompt_version_id}
+              </Descriptions.Item>
+              <Descriptions.Item label="案例库版本">
+                {data.case_library_version_id}
+              </Descriptions.Item>
+              <Descriptions.Item label="科目字典版本">
+                {data.account_dictionary_version}
+              </Descriptions.Item>
+            </Descriptions>
+          </section>
+
+          {data.status === "PENDING_COMPANY_CONFIRMATION" ? (
+            <section aria-label="复核操作">
+              <Typography.Title level={5}>复核操作</Typography.Title>
+              <Space wrap>
+                <Button
+                  type="primary"
+                  loading={reviewMutation.isPending}
+                  onClick={() => reviewMutation.mutate("CONFIRM")}
+                >
+                  确认风险
+                </Button>
+                <Button
+                  danger
+                  loading={reviewMutation.isPending}
+                  onClick={() => reviewMutation.mutate("REJECT")}
+                >
+                  驳回风险
+                </Button>
+                <Button
+                  loading={reviewMutation.isPending}
+                  onClick={() => reviewMutation.mutate("REQUEST_EVIDENCE")}
+                >
+                  要求补充证据
+                </Button>
+              </Space>
+              {reviewMutation.isError ? (
+                <Alert type="error" message="复核操作失败，请刷新后重试" />
+              ) : null}
+            </section>
+          ) : null}
+
           <Divider />
-          <Alert
-            type="warning"
-            showIcon
-            message="仅允许使用已持久化的精确关联"
-            description="金额、日期或人员相似的模糊关系不能用于解决风险事项。"
-          />
+          {data.sap_link_status === "PENDING_LOCATION" ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="仅允许使用已持久化的精确关联"
+              description="金额、日期或人员相似的模糊关系不能用于解决风险事项。"
+            />
+          ) : null}
           {data.sap_link_status === "PENDING_LOCATION" ? (
             <Button
               type="primary"

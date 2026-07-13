@@ -16,6 +16,13 @@ from tax_risk.workers.quarterly_batch import (
     default_quarterly_service_factory,
     register_quarterly_tasks,
 )
+from tax_risk.workers.monthly_semantic import (
+    MONTHLY_SEMANTIC_QUEUE,
+    RUN_COMPANY_TASK as RUN_MONTHLY_SEMANTIC_COMPANY_TASK,
+    SUMMARIZE_TASK as SUMMARIZE_MONTHLY_SEMANTIC_TASK,
+    default_monthly_service_factory,
+    register_monthly_tasks,
+)
 
 
 def create_celery_app(settings: Settings | None = None) -> Celery:
@@ -60,6 +67,8 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             RUN_BUSINESS_ENTERTAINMENT_COMPANY_TASK: {
                 "queue": BUSINESS_ENTERTAINMENT_QUEUE
             },
+            RUN_MONTHLY_SEMANTIC_COMPANY_TASK: {"queue": MONTHLY_SEMANTIC_QUEUE},
+            SUMMARIZE_MONTHLY_SEMANTIC_TASK: {"queue": MONTHLY_SEMANTIC_QUEUE},
         },
         quarterly_task_max_retries=resolved.quarterly_task_max_retries,
         quarterly_task_retry_backoff_seconds=(
@@ -77,6 +86,10 @@ register_quarterly_tasks(
 register_business_entertainment_tasks(
     app=celery_app,
     service_factory=default_business_entertainment_service_factory,
+)
+register_monthly_tasks(
+    app=celery_app,
+    service_factory=default_monthly_service_factory,
 )
 app = celery_app
 

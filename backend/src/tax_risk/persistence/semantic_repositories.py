@@ -23,6 +23,7 @@ from tax_risk.persistence.semantic_models import (
     SemanticDetectionRecord,
     SemanticEvidenceTask,
     SemanticModelCallAudit,
+    SemanticVersionSetRecord,
     SuggestedAccountDictionaryVersion,
     SuggestedAccountEntry,
 )
@@ -75,6 +76,24 @@ class SemanticRepository:
 
     def add_semantic_artifact(self, artifact: SemanticArtifactVersion) -> None:
         self._session.add(artifact)
+
+    def add_semantic_version_set(self, version_set: SemanticVersionSetRecord) -> None:
+        self._session.add(version_set)
+
+    def get_semantic_version_set(
+        self,
+        version_set_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> SemanticVersionSetRecord | None:
+        statement = select(SemanticVersionSetRecord).where(
+            SemanticVersionSetRecord.id == version_set_id
+        )
+        if for_update:
+            statement = statement.with_for_update(read=True).execution_options(
+                populate_existing=True
+            )
+        return self._session.scalar(statement)
 
     def get_semantic_artifact(
         self,

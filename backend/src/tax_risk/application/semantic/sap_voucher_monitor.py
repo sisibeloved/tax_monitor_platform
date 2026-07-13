@@ -54,6 +54,8 @@ class MonitorRunResult:
     created_or_updated_cases: int
     evidence_task_count: int
     issue_code: str | None = None
+    detection_ids: tuple[UUID, ...] = ()
+    case_ids: tuple[UUID, ...] = ()
 
 
 class MonthlySemanticSource(Protocol):
@@ -179,6 +181,8 @@ class SapVoucherMonitor:
 
         case_count = 0
         evidence_task_count = 0
+        detection_ids: list[UUID] = []
+        case_ids: list[UUID] = []
         for view in lines:
             evidence = build_sap_voucher_evidence_pack(view, self._versions)
             detection = await self._agent.classify(
@@ -193,6 +197,9 @@ class SapVoucherMonitor:
             )
             case_count += int(routed.outcome is RoutingOutcome.RISK_CASE)
             evidence_task_count += int(routed.outcome is RoutingOutcome.EVIDENCE_TASK)
+            detection_ids.append(routed.detection_id)
+            if routed.risk_case_id is not None:
+                case_ids.append(routed.risk_case_id)
         return MonitorRunResult(
             "COMPLETED",
             True,
@@ -200,6 +207,8 @@ class SapVoucherMonitor:
             len(lines),
             case_count,
             evidence_task_count,
+            detection_ids=tuple(detection_ids),
+            case_ids=tuple(case_ids),
         )
 
     def _record_issue(

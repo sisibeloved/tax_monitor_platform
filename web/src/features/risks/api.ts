@@ -4,8 +4,10 @@ import { apiGet, apiPost } from "../../api/client";
 import type {
   BusinessEntertainmentRiskDetail,
   BusinessEntertainmentRiskList,
+  RiskCaseActionResponse,
   ResolveCaseResponse,
   RiskFilters,
+  RiskReviewOutcome,
 } from "./types";
 
 export const businessEntertainmentRiskListKey = [
@@ -19,7 +21,7 @@ export function riskListQueryOptions(filters: RiskFilters) {
     queryKey: [...businessEntertainmentRiskListKey, filters],
     queryFn: () =>
       apiGet<BusinessEntertainmentRiskList>("/api/v1/risk-cases", {
-        monitoring_type: "BUSINESS_ENTERTAINMENT",
+        monitoring_type: filters.monitoringType ?? "BUSINESS_ENTERTAINMENT",
         fiscal_year: filters.fiscalYear,
         period: filters.period,
         source_mode: filters.sourceMode,
@@ -57,5 +59,33 @@ export function resolveCaseToSap(
       evidence_link_id: evidenceLinkId,
       expected_row_version: expectedRowVersion,
     },
+  );
+}
+
+const reviewActions: Record<
+  RiskReviewOutcome,
+  { action: string; to_status: string; reason: string }
+> = {
+  CONFIRM: {
+    action: "REQUEST_ADJUSTMENT",
+    to_status: "PENDING_ADJUSTMENT",
+    reason: "确认科目入账风险，转入改账处理",
+  },
+  REJECT: {
+    action: "SUBMIT_GROUP_REVIEW",
+    to_status: "GROUP_REVIEW",
+    reason: "公司对风险判断有异议，提交集团复核",
+  },
+  REQUEST_EVIDENCE: {
+    action: "REQUEST_EVIDENCE",
+    to_status: "EVIDENCE_REQUIRED",
+    reason: "现有材料不足，要求补充证据",
+  },
+};
+
+export function applyRiskReview(caseId: string, outcome: RiskReviewOutcome) {
+  return apiPost<RiskCaseActionResponse, object>(
+    `/api/v1/risk-cases/${caseId}/actions`,
+    reviewActions[outcome],
   );
 }

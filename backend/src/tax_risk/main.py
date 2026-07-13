@@ -8,6 +8,7 @@ from tax_risk.api.routes.ingest import router as ingest_router
 from tax_risk.api.routes.cases import router as cases_router
 from tax_risk.api.routes.dashboard import router as dashboard_router
 from tax_risk.api.routes.master_data import router as master_data_router
+from tax_risk.api.routes.monthly_semantic import router as monthly_semantic_router
 from tax_risk.api.routes.runs import router as runs_router
 from tax_risk.api.routes.snapshots import router as snapshots_router
 from tax_risk.api.routes.semantic_governance import router as semantic_governance_router
@@ -37,6 +38,7 @@ def create_app(
     settings: Settings | None = None,
     principal_provider: PrincipalProvider | None = None,
     quarterly_dispatcher: Callable[..., None] | None = None,
+    monthly_semantic_dispatcher: Callable[..., None] | None = None,
     semantic_credential_resolver: Callable[[str], str] | None = None,
 ) -> FastAPI:
     """Create the tax risk monitoring API."""
@@ -51,6 +53,9 @@ def create_app(
         app.state.uow_factory
     )
     app.state.quarterly_dispatcher = quarterly_dispatcher or _dispatch_quarterly_batch
+    app.state.monthly_semantic_dispatcher = (
+        monthly_semantic_dispatcher or _dispatch_monthly_semantic_batch
+    )
     app.state.structured_model_client = bind_structured_model_client(
         resolved_settings,
         credential_resolver=semantic_credential_resolver or (lambda _reference: ""),
@@ -82,6 +87,7 @@ def create_app(
     app.include_router(semantic_governance_router)
     app.include_router(exports_router)
     app.include_router(business_entertainment_router)
+    app.include_router(monthly_semantic_router)
     return app
 
 
@@ -96,6 +102,21 @@ def _dispatch_quarterly_batch(
     from tax_risk.workers.quarterly_batch import build_quarterly_batch_canvas
 
     build_quarterly_batch_canvas(
+        app=celery_app,
+        run_id=run_id,
+        run_company_ids=run_company_ids,
+    ).apply_async()
+
+
+def _dispatch_monthly_semantic_batch(
+    *,
+    run_id: UUID,
+    run_company_ids: tuple[UUID, ...],
+) -> None:
+    from tax_risk.workers.celery_app import celery_app
+    from tax_risk.workers.monthly_semantic import build_monthly_semantic_canvas
+
+    build_monthly_semantic_canvas(
         app=celery_app,
         run_id=run_id,
         run_company_ids=run_company_ids,

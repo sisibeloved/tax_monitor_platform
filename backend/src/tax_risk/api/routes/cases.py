@@ -93,7 +93,11 @@ def list_risk_cases(
 ) -> RiskCaseListResponse:
     scope = company_scope(principal, requested_company_id=company)
     uow_factory = cast(Callable[[], UnitOfWork], request.app.state.uow_factory)
-    if monitoring_type is MonitorType.BUSINESS_ENTERTAINMENT:
+    if monitoring_type in {
+        MonitorType.BUSINESS_ENTERTAINMENT,
+        MonitorType.WELFARE,
+        MonitorType.DONATION,
+    }:
         semantic_rows = BusinessEntertainmentReportingService(uow_factory).list_root_cases(
             company_scope=scope,
             fiscal_year=fiscal_year,
@@ -103,6 +107,7 @@ def list_risk_cases(
             confidence_tier=confidence_tier,
             case_status=case_status.value if case_status is not None else None,
             company_id=company,
+            monitoring_type=monitoring_type,
         )
         start = (page - 1) * page_size
         selected = semantic_rows[start : start + page_size]
@@ -117,7 +122,7 @@ def list_risk_cases(
                     company_code=row.company_code,
                     company_name=row.company_name,
                     latest_detection_id=None,
-                    monitoring_type=MonitorType.BUSINESS_ENTERTAINMENT,
+                    monitoring_type=monitoring_type,
                     input_amount=None,
                     result_amount=None,
                     difference_amount=None,

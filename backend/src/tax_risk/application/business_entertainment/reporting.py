@@ -9,6 +9,8 @@ from decimal import Decimal
 from uuid import UUID
 
 from tax_risk.persistence.repositories import UnitOfWork
+from tax_risk.domain.cases import MonitorType
+from tax_risk.persistence.semantic_models import SapExpenseVoucherObservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,9 @@ class BusinessEntertainmentCaseDetailView:
     company_id: UUID
     company_code: str
     company_name: str
+    monitoring_type: MonitorType
+    fiscal_year: int
+    period: int
     status: str
     merged_into_case_id: UUID | None
     canonical_source_record_id: UUID
@@ -62,6 +67,10 @@ class BusinessEntertainmentCaseDetailView:
     sap_link_status: str
     sap_document_number: str | None
     sap_line_item: str | None
+    sap_fiscal_year: int | None
+    current_account_code: str | None
+    current_account_name: str | None
+    signed_amount: Decimal | None
     risk_amount: Decimal
     currency: str
     risk_amount_source: str
@@ -134,6 +143,7 @@ class BusinessEntertainmentReportingService:
         confidence_tier: str | None = None,
         case_status: str | None = None,
         company_id: UUID | None = None,
+        monitoring_type: MonitorType = MonitorType.BUSINESS_ENTERTAINMENT,
     ) -> tuple[BusinessEntertainmentRootCase, ...]:
         with self._uow_factory() as uow:
             rows = uow.business_entertainment_scope.root_case_rows(
@@ -145,6 +155,7 @@ class BusinessEntertainmentReportingService:
                 confidence_tier=confidence_tier,
                 case_status=case_status,
                 company_id=company_id,
+                monitoring_type=monitoring_type,
             )
             return tuple(
                 BusinessEntertainmentRootCase(
@@ -191,6 +202,11 @@ class BusinessEntertainmentReportingService:
             if row is None:
                 raise LookupError("risk case was not found")
             risk_case, detail, detection, company = row
+            sap_observation = (
+                uow.session.get(SapExpenseVoucherObservation, detail.sap_observation_id)
+                if detail.sap_observation_id is not None
+                else None
+            )
             resolution_rows = (
                 uow.business_entertainment_scope.exact_resolution_link_rows(
                     canonical_source_record_id=detail.canonical_source_record_id,
@@ -205,6 +221,9 @@ class BusinessEntertainmentReportingService:
                 company_id=risk_case.company_id,
                 company_code=company.company_code,
                 company_name=company.company_name,
+                monitoring_type=risk_case.monitor_type,
+                fiscal_year=detection.fiscal_year,
+                period=detection.period,
                 status=risk_case.status.value,
                 merged_into_case_id=risk_case.merged_into_case_id,
                 canonical_source_record_id=detail.canonical_source_record_id,
@@ -212,6 +231,22 @@ class BusinessEntertainmentReportingService:
                 sap_link_status=detail.sap_link_status,
                 sap_document_number=detection.sap_document_number,
                 sap_line_item=detection.sap_line_item,
+                sap_fiscal_year=(
+                    sap_observation.fiscal_year if sap_observation is not None else None
+                ),
+                current_account_code=(
+                    sap_observation.current_account_code
+                    if sap_observation is not None
+                    else None
+                ),
+                current_account_name=(
+                    sap_observation.current_account_name
+                    if sap_observation is not None
+                    else None
+                ),
+                signed_amount=(
+                    sap_observation.amount if sap_observation is not None else None
+                ),
                 risk_amount=risk_case.risk_amount or Decimal("0"),
                 currency=risk_case.currency,
                 risk_amount_source=detail.risk_amount_source,

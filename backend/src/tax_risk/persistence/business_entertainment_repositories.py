@@ -248,6 +248,7 @@ class BusinessEntertainmentScopeRepository:
         confidence_tier: str | None = None,
         case_status: str | None = None,
         company_id: UUID | None = None,
+        monitoring_type: MonitorType = MonitorType.BUSINESS_ENTERTAINMENT,
     ) -> list[tuple[RiskCase, BusinessEntertainmentCaseDetail, SemanticDetectionRecord, Company]]:
         statement = (
             select(
@@ -267,7 +268,7 @@ class BusinessEntertainmentScopeRepository:
             )
             .join(Company, Company.id == RiskCase.company_id)
             .where(
-                RiskCase.monitor_type == MonitorType.BUSINESS_ENTERTAINMENT,
+                RiskCase.monitor_type == monitoring_type,
                 RiskCase.merged_into_case_id.is_(None),
             )
             .order_by(Company.company_code, RiskCase.id)
@@ -326,7 +327,13 @@ class BusinessEntertainmentScopeRepository:
             .join(Company, Company.id == RiskCase.company_id)
             .where(
                 RiskCase.id == case_id,
-                RiskCase.monitor_type == MonitorType.BUSINESS_ENTERTAINMENT,
+                RiskCase.monitor_type.in_(
+                    (
+                        MonitorType.BUSINESS_ENTERTAINMENT,
+                        MonitorType.WELFARE,
+                        MonitorType.DONATION,
+                    )
+                ),
             )
         )
         if company_scope is not None:

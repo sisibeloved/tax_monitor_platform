@@ -21,9 +21,24 @@ function renderPage() {
 
 describe("业务招待费风险页面", () => {
   it("筛选风险并展示待定位、证据、建议和精确关联解决", async () => {
+    let workflowStatus = "PENDING_COMPANY_CONFIRMATION";
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "POST") {
+        if (url.endsWith(`/api/v1/risk-cases/${caseId}/actions`)) {
+          expect(JSON.parse(String(init.body))).toEqual({
+            action: "REQUEST_ADJUSTMENT",
+            to_status: "PENDING_ADJUSTMENT",
+            reason: "确认科目入账风险，转入改账处理",
+          });
+          workflowStatus = "PENDING_ADJUSTMENT";
+          return Response.json({
+            id: caseId,
+            status: workflowStatus,
+            assignee: "reviewer",
+            row_version: 2,
+          });
+        }
         expect(JSON.parse(String(init.body))).toEqual({
           evidence_link_id: evidenceLinkId,
           expected_row_version: 1,
@@ -41,13 +56,20 @@ describe("业务招待费风险页面", () => {
           company_id: "40000000-0000-4000-8000-000000000001",
           company_code: "C001",
           company_name: "示例公司",
-          status: "NEW",
+          monitoring_type: "WELFARE",
+          fiscal_year: 2032,
+          period: 3,
+          status: workflowStatus,
           merged_into_case_id: null,
           canonical_source_record_id: "50000000-0000-4000-8000-000000000001",
           source_mode: "BUSINESS_DOCUMENT_UNLINKED",
           sap_link_status: "PENDING_LOCATION",
           sap_document_number: null,
           sap_line_item: null,
+          sap_fiscal_year: 2032,
+          current_account_code: "660203",
+          current_account_name: "职工福利费",
+          signed_amount: "1200.00",
           risk_amount: "1280.00",
           currency: "CNY",
           risk_amount_source: "BUSINESS_DOCUMENT",
@@ -121,8 +143,18 @@ describe("业务招待费风险页面", () => {
 
     await user.click(screen.getByRole("button", { name: "查看详情" }));
     expect(await screen.findByText("内部培训班会议餐")).toBeInTheDocument();
+    expect(screen.getByText("660203 职工福利费")).toBeInTheDocument();
+    expect(screen.getByText("1200.00 CNY")).toBeInTheDocument();
+    expect(screen.getByText("model-v1")).toBeInTheDocument();
     expect(screen.getByText("EMPLOYEE_EDUCATION")).toBeInTheDocument();
     expect(screen.getByText("仅允许使用已持久化的精确关联")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "确认风险" }));
+    expect(await screen.findByText("待改账")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/risk-cases/${caseId}/actions`,
+      expect.objectContaining({ method: "POST" }),
+    );
 
     await user.click(screen.getByRole("button", { name: "关联SAP凭证" }));
     expect(screen.getByText("510001 / 001（精确关联）")).toBeInTheDocument();

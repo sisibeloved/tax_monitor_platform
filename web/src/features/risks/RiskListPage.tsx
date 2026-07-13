@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { riskListQueryOptions } from "./api";
 import { RiskDetailPage } from "./RiskDetailPage";
+import { MonitorTypeFilter } from "./MonitorTypeFilter";
 import type { BusinessEntertainmentRiskCase, RiskFilters } from "./types";
 
 function currentPeriod(): Pick<RiskFilters, "fiscalYear" | "period"> {
@@ -13,7 +14,10 @@ function currentPeriod(): Pick<RiskFilters, "fiscalYear" | "period"> {
 }
 
 export function RiskListPage() {
-  const [filters, setFilters] = useState<RiskFilters>(currentPeriod);
+  const [filters, setFilters] = useState<RiskFilters>({
+    ...currentPeriod(),
+    monitoringType: "BUSINESS_ENTERTAINMENT",
+  });
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const cases = useQuery(riskListQueryOptions(filters));
   const columns: ColumnsType<BusinessEntertainmentRiskCase> = [
@@ -55,7 +59,7 @@ export function RiskListPage() {
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Space style={{ justifyContent: "space-between", width: "100%" }}>
         <Typography.Title level={2} style={{ margin: 0 }}>
-          业务招待费风险清单
+          所得税风险清单
         </Typography.Title>
         <Button
           type="primary"
@@ -67,6 +71,12 @@ export function RiskListPage() {
       </Space>
       <Card size="small">
         <Space wrap>
+          <MonitorTypeFilter
+            value={filters.monitoringType}
+            onChange={(monitoringType) =>
+              setFilters({ ...filters, monitoringType })
+            }
+          />
           <Select
             aria-label="来源模式"
             placeholder="来源模式"
