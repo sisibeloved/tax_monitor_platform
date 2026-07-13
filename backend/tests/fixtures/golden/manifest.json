@@ -1,0 +1,28 @@
+{
+  "approved_at": "2026-07-01T10:00:00Z",
+  "approved_by": "gold-owner",
+  "files": [
+    {
+      "approved_at": "2026-07-01T10:00:00Z",
+      "approved_by": "gold-owner",
+      "frozen": true,
+      "gold_set_version": "welfare-gold-v1",
+      "path": "welfare.jsonl",
+      "row_count": 50,
+      "sha256": "5360cfe995c0a5a6f3074ded46a8d92efe6e324b1d4963684834e2b373286c9c",
+      "status": "APPROVED"
+    },
+    {
+      "approved_at": "2026-07-01T10:00:00Z",
+      "approved_by": "gold-owner",
+      "frozen": true,
+      "gold_set_version": "donation-gold-v1",
+      "path": "donation.jsonl",
+      "row_count": 50,
+      "sha256": "fb668b6712475fe6e544499f5c64eb3f48c82646e0684a842fd376e08a183487",
+      "status": "APPROVED"
+    }
+  ],
+  "frozen": true,
+  "status": "APPROVED"
+}
