@@ -1,0 +1,20 @@
+{
+  "version": "v1",
+  "monitor_type": "BUSINESS_ENTERTAINMENT",
+  "effective_from": "2026-01-01",
+  "status": "PUBLISHED",
+  "signals": [
+    {"signal_id": "INTERNAL_MEETING_MEAL", "canonical_phrase": "内部会议餐", "aliases": ["内部会议用餐", "内部会议餐费"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["MEETING_EXPENSE"]},
+    {"signal_id": "TRAINING_MEAL", "canonical_phrase": "培训餐", "aliases": ["培训用餐", "培训餐费"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_EDUCATION"]},
+    {"signal_id": "EMPLOYEE_GATHERING", "canonical_phrase": "员工聚餐", "aliases": ["职工聚餐", "部门聚餐"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_WELFARE"]},
+    {"signal_id": "TEAM_BUILDING", "canonical_phrase": "团建", "aliases": ["团队建设"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_WELFARE"]},
+    {"signal_id": "ANNUAL_MEETING", "canonical_phrase": "年会", "aliases": ["年度会议"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_WELFARE"]},
+    {"signal_id": "OVERTIME_MEAL", "canonical_phrase": "加班餐", "aliases": ["加班用餐", "加班餐费"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_WELFARE"]},
+    {"signal_id": "CANTEEN", "canonical_phrase": "食堂", "aliases": ["员工食堂", "职工食堂"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_WELFARE"]},
+    {"signal_id": "EMPLOYEE_WELFARE", "canonical_phrase": "员工福利", "aliases": ["职工福利", "福利活动"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 100, "label_hints": ["EMPLOYEE_WELFARE"]},
+    {"signal_id": "MEETING_NOTICE", "canonical_phrase": "会议通知", "aliases": ["开会通知"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 80, "label_hints": ["MEETING_EXPENSE"]},
+    {"signal_id": "ATTENDANCE", "canonical_phrase": "签到", "aliases": ["签到表", "参会签到"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 80, "label_hints": ["MEETING_EXPENSE", "EMPLOYEE_EDUCATION"]},
+    {"signal_id": "AGENDA", "canonical_phrase": "议程", "aliases": ["会议议程", "培训议程"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 80, "label_hints": ["MEETING_EXPENSE", "EMPLOYEE_EDUCATION"]},
+    {"signal_id": "TRAINING_CLASS", "canonical_phrase": "培训班", "aliases": ["培训课程", "培训讲座"], "allowed_fields": ["summary", "expense_reason", "reason", "purpose", "item_description", "material_description"], "priority": 80, "label_hints": ["EMPLOYEE_EDUCATION"]}
+  ]
+}

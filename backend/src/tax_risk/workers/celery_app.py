@@ -3,6 +3,12 @@ from __future__ import annotations
 from celery import Celery  # type: ignore[import-untyped]
 
 from tax_risk.config import Settings
+from tax_risk.workers.business_entertainment import (
+    BUSINESS_ENTERTAINMENT_QUEUE,
+    RUN_COMPANY_TASK as RUN_BUSINESS_ENTERTAINMENT_COMPANY_TASK,
+    default_business_entertainment_service_factory,
+    register_business_entertainment_tasks,
+)
 from tax_risk.workers.quarterly_batch import (
     QUARTERLY_QUEUE,
     RUN_COMPANY_TASK,
@@ -51,6 +57,9 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         task_routes={
             RUN_COMPANY_TASK: {"queue": QUARTERLY_QUEUE},
             SUMMARIZE_BATCH_TASK: {"queue": QUARTERLY_QUEUE},
+            RUN_BUSINESS_ENTERTAINMENT_COMPANY_TASK: {
+                "queue": BUSINESS_ENTERTAINMENT_QUEUE
+            },
         },
         quarterly_task_max_retries=resolved.quarterly_task_max_retries,
         quarterly_task_retry_backoff_seconds=(
@@ -64,6 +73,10 @@ celery_app = create_celery_app()
 register_quarterly_tasks(
     app=celery_app,
     service_factory=default_quarterly_service_factory,
+)
+register_business_entertainment_tasks(
+    app=celery_app,
+    service_factory=default_business_entertainment_service_factory,
 )
 app = celery_app
 
