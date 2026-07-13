@@ -8,6 +8,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from tax_risk.domain.cases import MonitorType
+from tax_risk.domain.semantic.contracts import SemanticLabel
+
 
 class AccountDictionaryVersionStatus(StrEnum):
     DRAFT = "DRAFT"
@@ -28,8 +31,8 @@ class SuggestedAccountEntry(BaseModel):
     account_code: str = Field(min_length=1, max_length=64)
     account_name: str = Field(min_length=1, max_length=256)
     accounting_classification: str = Field(min_length=1, max_length=128)
-    allowed_monitor_types: tuple[str, ...] = Field(min_length=1)
-    allowed_labels: tuple[str, ...] = Field(min_length=1)
+    allowed_monitor_types: tuple[MonitorType, ...] = Field(min_length=1)
+    allowed_labels: tuple[SemanticLabel, ...] = Field(min_length=1)
     status: AccountEntryStatus
 
 

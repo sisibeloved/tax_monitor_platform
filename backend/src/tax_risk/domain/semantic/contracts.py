@@ -9,12 +9,17 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from tax_risk.domain.cases import MonitorType
+
 
 class SemanticLabel(StrEnum):
     CURRENT_ACCOUNT_REASONABLE = "CURRENT_ACCOUNT_REASONABLE"
     MEETING_EXPENSE = "MEETING_EXPENSE"
     EMPLOYEE_EDUCATION = "EMPLOYEE_EDUCATION"
     EMPLOYEE_WELFARE = "EMPLOYEE_WELFARE"
+    BUSINESS_ENTERTAINMENT = "BUSINESS_ENTERTAINMENT"
+    ADVERTISING_PROMOTION = "ADVERTISING_PROMOTION"
+    SPONSORSHIP = "SPONSORSHIP"
     MANUAL_REVIEW = "MANUAL_REVIEW"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
@@ -80,6 +85,7 @@ class SemanticDetection(BaseModel):
     company_code: str = Field(min_length=1, max_length=64)
     fiscal_year: int = Field(ge=2000, le=9999)
     period: int = Field(ge=1, le=12)
+    monitoring_type: MonitorType = MonitorType.BUSINESS_ENTERTAINMENT
     source_mode: str = Field(pattern=r"^(SAP_LINKED|BUSINESS_DOCUMENT_UNLINKED)$")
     canonical_source_record_id: UUID
     sap_observation_id: UUID | None

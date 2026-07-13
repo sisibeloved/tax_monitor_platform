@@ -15,12 +15,14 @@ from tax_risk.adapters.ingest.suggested_account_dictionary_xlsx import (
     SuggestedAccountDictionaryXlsxAdapter,
     SuggestedAccountWorkbookError,
 )
+from tax_risk.domain.cases import MonitorType
 from tax_risk.domain.semantic.account_dictionary import (
     AccountDictionaryVersionStatus,
     AccountEntryStatus,
     SuggestedAccountDictionaryVersion,
     SuggestedAccountEntry,
 )
+from tax_risk.domain.semantic.contracts import SemanticLabel
 from tax_risk.persistence.ingest_models import (
     IngestBatch,
     IngestBatchStatus,
@@ -329,8 +331,10 @@ def _entry_view(model: AccountEntryModel) -> SuggestedAccountEntry:
         account_code=model.account_code,
         account_name=model.account_name,
         accounting_classification=model.accounting_classification,
-        allowed_monitor_types=tuple(model.allowed_monitor_types),
-        allowed_labels=tuple(model.allowed_labels),
+        allowed_monitor_types=tuple(
+            MonitorType(value) for value in model.allowed_monitor_types
+        ),
+        allowed_labels=tuple(SemanticLabel(value) for value in model.allowed_labels),
         status=AccountEntryStatus(model.status),
     )
 
