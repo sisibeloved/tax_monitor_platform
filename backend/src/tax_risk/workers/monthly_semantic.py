@@ -10,6 +10,7 @@ from celery import Celery, Task, chord, group  # type: ignore[import-untyped]
 from celery.canvas import Signature  # type: ignore[import-untyped]
 
 from tax_risk.application.monthly_semantic_runs import MonthlySemanticRunService
+from tax_risk.domain.task_runs import TaskRunResult, bounded_retry_delay
 
 
 MONTHLY_SEMANTIC_QUEUE = "monthly-semantic"
@@ -87,6 +88,8 @@ def default_monthly_service_factory() -> MonthlyWorkerService:
 
 def register_monthly_tasks(*, app: Celery, service_factory: ServiceFactory) -> None:
     max_retries = int(app.conf.quarterly_task_max_retries)
+    retry_base = int(app.conf.quarterly_task_retry_backoff_seconds)
+    retry_maximum = int(app.conf.task_time_limit)
 
     @app.task(  # type: ignore[untyped-decorator]
         bind=True,
@@ -110,7 +113,17 @@ def register_monthly_tasks(*, app: Celery, service_factory: ServiceFactory) -> N
             and outcome.get("retryable") is True
             and task.request.retries < max_retries
         ):
-            raise task.retry(exc=RuntimeError("retryable monthly company failure"))
+            countdown = bounded_retry_delay(
+                task.request.retries,
+                base_seconds=retry_base,
+                maximum_seconds=retry_maximum,
+            )
+            raise task.retry(
+                exc=RuntimeError("retryable monthly company failure"),
+                countdown=countdown,
+            )
+        if "run_type" in outcome:
+            TaskRunResult.from_payload(outcome)
         return outcome
 
     @app.task(  # type: ignore[untyped-decorator]

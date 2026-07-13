@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date, datetime
-from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from tax_risk.domain.semantic.contracts import SemanticDetection
+from tax_risk.domain.task_runs import business_entertainment_idempotency_key
 
 
 class BusinessEntertainmentRunError(Exception):
@@ -27,6 +27,7 @@ class BusinessEntertainmentRunRequest(BaseModel):
     company_code: str = Field(min_length=1, max_length=64)
     period_end: date
     snapshot_set_id: UUID
+    company_list_version_id: str = Field(min_length=1, max_length=128)
     rule_version_id: str = Field(min_length=1, max_length=128)
     lexicon_version: str = Field(min_length=1, max_length=128)
     model_version_id: str = Field(min_length=1, max_length=128)
@@ -43,19 +44,18 @@ class BusinessEntertainmentRunRequest(BaseModel):
 
     @property
     def idempotency_key(self) -> str:
-        components = (
-            str(self.run_id),
-            self.company_code,
-            self.period_end.isoformat(),
-            str(self.snapshot_set_id),
-            self.rule_version_id,
-            self.lexicon_version,
-            self.model_version_id,
-            self.prompt_version_id,
-            self.case_library_version_id,
-            self.account_dictionary_version_id,
+        return business_entertainment_idempotency_key(
+            company=self.company_code,
+            fiscal_year=self.period_end.year,
+            through_month=self.period_end.month,
+            snapshot_set=self.snapshot_set_id,
+            company_list=self.company_list_version_id,
+            rule=self.rule_version_id,
+            model=self.model_version_id,
+            prompt=self.prompt_version_id,
+            case_library=self.case_library_version_id,
+            account_dictionary=self.account_dictionary_version_id,
         )
-        return sha256("\0".join(components).encode()).hexdigest()
 
     def to_task_kwargs(self) -> dict[str, str]:
         return {
@@ -63,6 +63,7 @@ class BusinessEntertainmentRunRequest(BaseModel):
             "company_code": self.company_code,
             "period_end": self.period_end.isoformat(),
             "snapshot_set_id": str(self.snapshot_set_id),
+            "company_list_version_id": self.company_list_version_id,
             "rule_version_id": self.rule_version_id,
             "lexicon_version": self.lexicon_version,
             "model_version_id": self.model_version_id,

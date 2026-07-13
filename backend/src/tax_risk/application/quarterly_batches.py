@@ -16,6 +16,13 @@ from tax_risk.application.quarterly_runs import (
     QuarterlyRunService,
     assert_approved_quarterly_rule_manifest,
 )
+from tax_risk.domain.task_runs import (
+    TaskRunResult,
+    TaskRunType,
+    TaskTerminalStatus,
+    is_retryable_error,
+    quarterly_idempotency_key,
+)
 from tax_risk.persistence.master_models import RuleVersion, VersionStatus
 from tax_risk.observability.delivery import derive_batch_delivery
 from tax_risk.observability.metrics import record_company_task
@@ -234,16 +241,6 @@ class QuarterlyBatchService:
                 and run_company.retryable
                 and run_company.celery_task_id == normalized_task_id
             )
-            if (
-                run_company.status != MonitoringRunCompanyStatus.PENDING
-                and not automatic_retry
-            ):
-                return _company_outcome(run_company)
-            if run.status != MonitoringRunStatus.RUNNING:
-                raise QuarterlyBatchError(
-                    "MONITORING_RUN_NOT_RUNNING",
-                    "pending companies can execute only while the batch is RUNNING",
-                )
             member = uow.session.scalar(
                 select(SnapshotSetMember).where(
                     SnapshotSetMember.id == run_company.snapshot_set_member_id,
@@ -254,6 +251,16 @@ class QuarterlyBatchService:
                 raise QuarterlyBatchError(
                     "RUN_COMPANY_MEMBER_MISMATCH",
                     "run-company state does not resolve to its frozen snapshot-set member",
+                )
+            if (
+                run_company.status != MonitoringRunCompanyStatus.PENDING
+                and not automatic_retry
+            ):
+                return _company_task_outcome(run, run_company, member.company_id)
+            if run.status != MonitoringRunStatus.RUNNING:
+                raise QuarterlyBatchError(
+                    "MONITORING_RUN_NOT_RUNNING",
+                    "pending companies can execute only while the batch is RUNNING",
                 )
 
             _begin_attempt(run_company, task_id=normalized_task_id)
@@ -274,7 +281,7 @@ class QuarterlyBatchService:
                     _finish_failed(run_company, error)
             else:
                 _finish_succeeded(run_company, raw_result)
-            outcome = _company_outcome(run_company)
+            outcome = _company_task_outcome(run, run_company, member.company_id)
             record_company_task(
                 run_type="QUARTERLY",
                 monitor_type="ALL",
@@ -639,6 +646,53 @@ def _company_outcome(run_company: MonitoringRunCompany) -> dict[str, object]:
         "case_ids": list(run_company.case_ids),
         "error_code": run_company.error_code,
     }
+
+
+def _company_task_outcome(
+    run: MonitoringRun,
+    run_company: MonitoringRunCompany,
+    company_id: UUID,
+) -> dict[str, object]:
+    outcome = _company_outcome(run_company)
+    if run_company.status not in {
+        MonitoringRunCompanyStatus.SUCCEEDED,
+        MonitoringRunCompanyStatus.BLOCKED,
+        MonitoringRunCompanyStatus.FAILED,
+        MonitoringRunCompanyStatus.NOT_RUN,
+    }:
+        return outcome
+    assert run.quarter is not None
+    assert run_company.started_at is not None and run_company.finished_at is not None
+    error_code = run_company.error_code or run_company.issue_code
+    contract = TaskRunResult(
+        run_type=TaskRunType.QUARTERLY,
+        monitor_type="QUARTERLY_ALL",
+        batch_id=run.id,
+        company=str(company_id),
+        fiscal_year=run.fiscal_year,
+        period=f"{run.fiscal_year}-Q{run.quarter}",
+        idempotency_key=quarterly_idempotency_key(
+            company=str(company_id),
+            fiscal_year=run.fiscal_year,
+            quarter=run.quarter,
+            snapshot_set=run.snapshot_set_id,
+            rule_version=run.rule_version_id,
+        ),
+        terminal_status=TaskTerminalStatus(run_company.status.value),
+        retry_count=max(0, run_company.attempt_count - 1),
+        started_at=run_company.started_at,
+        finished_at=run_company.finished_at,
+        company_output_ready_at=run_company.company_output_ready_at,
+        error_code=error_code,
+        retryable=is_retryable_error(error_code),
+    )
+    outcome.update(contract.to_payload())
+    outcome["run_id"] = str(run.id)
+    outcome["run_company_id"] = str(run_company.id)
+    outcome["task_id"] = run_company.celery_task_id
+    outcome["detection_ids"] = list(run_company.detection_ids)
+    outcome["case_ids"] = list(run_company.case_ids)
+    return outcome
 
 
 def _batch_summary(run: MonitoringRun) -> dict[str, object]:

@@ -8,6 +8,8 @@ from celery import Celery, Task, chord, group  # type: ignore[import-untyped]
 from celery.canvas import Signature  # type: ignore[import-untyped]
 from celery.utils.time import get_exponential_backoff_interval  # type: ignore[import-untyped]
 
+from tax_risk.domain.task_runs import TaskRunResult
+
 QUARTERLY_QUEUE = "quarterly"
 RUN_COMPANY_TASK = "tax_risk.workers.quarterly_batch.run_company_quarterly"
 SUMMARIZE_BATCH_TASK = "tax_risk.workers.quarterly_batch.summarize_quarterly_batch"
@@ -105,6 +107,8 @@ def register_quarterly_tasks(
                 retry_backoff=retry_backoff,
                 retry_backoff_max=retry_backoff_max,
             )
+        if "run_type" in outcome:
+            TaskRunResult.from_payload(outcome)
         return outcome
 
     @app.task(  # type: ignore[untyped-decorator]

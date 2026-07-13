@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from tax_risk.application.business_entertainment.service import (
     BusinessEntertainmentMonthlyService,
+    BusinessEntertainmentRunError,
     BusinessEntertainmentRunRequest,
     PublishedCompanyInput,
 )
@@ -119,6 +120,7 @@ def _request(*, company_code: str = "C001") -> BusinessEntertainmentRunRequest:
         company_code=company_code,
         period_end=date(2026, 3, 31),
         snapshot_set_id=uuid4(),
+        company_list_version_id="company-list-v1",
         rule_version_id="business-entertainment-rule-v1",
         lexicon_version="business-entertainment-candidates-v1",
         model_version_id="model-v1",
@@ -164,6 +166,12 @@ def test_worker_checks_scope_and_snapshot_then_covers_before_agent() -> None:
     assert result["detection_count"] == 2
     assert result["evidence_task_count"] == 1
     assert result["risk_case_count"] == 1
+    assert result["run_type"] == "MONTHLY_SEMANTIC"
+    assert result["monitor_type"] == "BUSINESS_ENTERTAINMENT"
+    assert result["batch_id"] == str(result["run_id"])
+    assert result["company"] == "C001"
+    assert result["period"] == "2026-03"
+    assert result["company_output_ready_at"] is not None
 
 
 def test_retry_uses_stable_idempotency_key() -> None:
@@ -179,8 +187,10 @@ def test_company_failures_are_isolated_and_fail_closed() -> None:
     invalid_company = _run_task(RecordingPipeline(), _request(company_code="C999"))
     valid_company = _run_task(RecordingPipeline(), _request(company_code="C001"))
 
-    assert invalid_company["status"] == "FAILED"
+    assert invalid_company["status"] == "BLOCKED"
     assert invalid_company["error_code"] == "COMPANY_OUT_OF_SCOPE"
+    assert invalid_company["company_output_ready_at"] is None
+    assert invalid_company["retryable"] is False
     assert valid_company["status"] == "SUCCEEDED"
 
 
@@ -189,9 +199,9 @@ def test_only_published_snapshot_with_utc_publication_time_can_run() -> None:
     not_published = _run_task(RecordingPipeline(status="VALIDATED"), request)
     missing_publication = _run_task(RecordingPipeline(published_at=None), request)
 
-    assert not_published["status"] == "FAILED"
+    assert not_published["status"] == "BLOCKED"
     assert not_published["error_code"] == "SNAPSHOT_SET_NOT_PUBLISHED"
-    assert missing_publication["status"] == "FAILED"
+    assert missing_publication["status"] == "BLOCKED"
     assert missing_publication["error_code"] == "SNAPSHOT_SET_PUBLICATION_TIME_MISSING"
 
 
@@ -204,6 +214,7 @@ def test_worker_passes_snapshot_and_published_versions() -> None:
         "company_code",
         "period_end",
         "snapshot_set_id",
+        "company_list_version_id",
         "rule_version_id",
         "lexicon_version",
         "model_version_id",
@@ -213,3 +224,50 @@ def test_worker_passes_snapshot_and_published_versions() -> None:
     }
     UUID(task_kwargs["run_id"])
     UUID(task_kwargs["snapshot_set_id"])
+
+
+def test_stable_provider_failure_retries_once_with_bounded_policy_then_succeeds() -> None:
+    request = _request()
+
+    class RetryOnceService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run_company(
+            self,
+            current: BusinessEntertainmentRunRequest,
+            *,
+            task_id: str,
+        ) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                raise BusinessEntertainmentRunError(
+                    "PROVIDER_TIMEOUT",
+                    "temporary provider timeout",
+                    retryable=True,
+                )
+            return BusinessEntertainmentMonthlyService(RecordingPipeline()).run_company(
+                current,
+                task_id=task_id,
+            )
+
+    service = RetryOnceService()
+    app = create_celery_app(
+        Settings(
+            database_url="postgresql+psycopg://unused:unused@localhost/unused",
+            redis_url="memory://",
+            environment="test",
+            celery_task_always_eager=True,
+            celery_task_eager_propagates=False,
+            celery_task_store_eager_result=True,
+            quarterly_task_max_retries=1,
+            quarterly_task_retry_backoff_seconds=1,
+        )
+    )
+    register_business_entertainment_tasks(app=app, service_factory=lambda: service)
+
+    result = app.tasks[RUN_COMPANY_TASK].delay(**request.to_task_kwargs()).get()
+
+    assert service.calls == 2
+    assert result["status"] == "SUCCEEDED"
+    assert result["retry_count"] == 1

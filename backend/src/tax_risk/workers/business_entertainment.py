@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Protocol
 from uuid import UUID
 
 from celery import Celery, Task  # type: ignore[import-untyped]
+from pydantic import ValidationError
 
 from tax_risk.application.business_entertainment.service import (
     BusinessEntertainmentRunError,
     BusinessEntertainmentRunRequest,
+)
+from tax_risk.domain.task_runs import (
+    TaskRunResult,
+    TaskRunType,
+    TaskTerminalStatus,
+    bounded_retry_delay,
+    is_retryable_error,
 )
 from tax_risk.observability.metrics import record_company_task
 
@@ -45,6 +53,8 @@ def register_business_entertainment_tasks(
     service_factory: ServiceFactory,
 ) -> None:
     max_retries = int(app.conf.quarterly_task_max_retries)
+    retry_base = int(app.conf.quarterly_task_retry_backoff_seconds)
+    retry_maximum = int(app.conf.task_time_limit)
 
     @app.task(  # type: ignore[untyped-decorator]
         bind=True,
@@ -59,6 +69,7 @@ def register_business_entertainment_tasks(
         company_code: str,
         period_end: str,
         snapshot_set_id: str,
+        company_list_version_id: str,
         rule_version_id: str,
         lexicon_version: str,
         model_version_id: str,
@@ -69,6 +80,7 @@ def register_business_entertainment_tasks(
         task_id = str(task.request.id or "")
         if not task_id:
             raise RuntimeError("Celery did not assign a task id")
+        started_at = datetime.now(timezone.utc)
         request: BusinessEntertainmentRunRequest | None = None
         try:
             request = BusinessEntertainmentRunRequest(
@@ -76,6 +88,7 @@ def register_business_entertainment_tasks(
                 company_code=company_code,
                 period_end=date.fromisoformat(period_end),
                 snapshot_set_id=UUID(snapshot_set_id),
+                company_list_version_id=company_list_version_id,
                 rule_version_id=rule_version_id,
                 lexicon_version=lexicon_version,
                 model_version_id=model_version_id,
@@ -85,31 +98,75 @@ def register_business_entertainment_tasks(
             )
             outcome = service_factory().run_company(request, task_id=task_id)
             _record_outcome(outcome)
-            return outcome
+            return _attach_task_contract(
+                outcome,
+                request=request,
+                started_at=started_at,
+                retry_count=task.request.retries,
+            )
         except BusinessEntertainmentRunError as error:
+            retryable = error.retryable and is_retryable_error(error.error_code)
+            if retryable and task.request.retries < max_retries:
+                countdown = bounded_retry_delay(
+                    task.request.retries,
+                    base_seconds=retry_base,
+                    maximum_seconds=retry_maximum,
+                )
+                raise task.retry(exc=error, countdown=countdown) from error
             outcome = _failed_outcome(
                 request=request,
                 raw_run_id=run_id,
                 company_code=company_code,
                 task_id=task_id,
                 error_code=error.error_code,
-                retryable=error.retryable,
+                retryable=retryable,
+                status="FAILED" if retryable else "BLOCKED",
             )
             _record_outcome(outcome)
-            return outcome
+            assert request is not None
+            return _attach_task_contract(
+                outcome,
+                request=request,
+                started_at=started_at,
+                retry_count=task.request.retries,
+            )
+        except (ValidationError, ValueError) as error:
+            del error
+            return _failed_outcome(
+                request=request,
+                raw_run_id=run_id,
+                company_code=company_code,
+                task_id=task_id,
+                error_code="INVALID_TASK_PAYLOAD",
+                retryable=False,
+                status="BLOCKED",
+            )
         except Exception as error:
             if task.request.retries < max_retries:
-                raise task.retry(exc=error) from error
+                countdown = bounded_retry_delay(
+                    task.request.retries,
+                    base_seconds=retry_base,
+                    maximum_seconds=retry_maximum,
+                )
+                raise task.retry(exc=error, countdown=countdown) from error
             outcome = _failed_outcome(
                 request=request,
                 raw_run_id=run_id,
                 company_code=company_code,
                 task_id=task_id,
                 error_code="CELERY_TASK_EXECUTION_FAILED",
-                retryable=False,
+                retryable=True,
+                status="FAILED",
             )
             _record_outcome(outcome)
-            return outcome
+            if request is None:
+                return outcome
+            return _attach_task_contract(
+                outcome,
+                request=request,
+                started_at=started_at,
+                retry_count=task.request.retries,
+            )
 
 
 def _failed_outcome(
@@ -120,16 +177,52 @@ def _failed_outcome(
     task_id: str,
     error_code: str,
     retryable: bool,
+    status: str,
 ) -> dict[str, object]:
     return {
         "run_id": str(request.run_id) if request else raw_run_id,
         "company_code": request.company_code if request else company_code,
-        "status": "FAILED",
+        "status": status,
         "retryable": retryable,
         "task_id": task_id,
         "idempotency_key": request.idempotency_key if request else None,
         "error_code": error_code,
     }
+
+
+def _attach_task_contract(
+    outcome: dict[str, object],
+    *,
+    request: BusinessEntertainmentRunRequest,
+    started_at: datetime,
+    retry_count: int,
+) -> dict[str, object]:
+    finished_at = datetime.now(timezone.utc)
+    status = TaskTerminalStatus(str(outcome["status"]))
+    error_code = str(outcome["error_code"]) if outcome.get("error_code") else None
+    contract = TaskRunResult(
+        run_type=TaskRunType.MONTHLY_SEMANTIC,
+        monitor_type="BUSINESS_ENTERTAINMENT",
+        batch_id=request.run_id,
+        company=request.company_code,
+        fiscal_year=request.period_end.year,
+        period=request.period_end.strftime("%Y-%m"),
+        idempotency_key=request.idempotency_key,
+        terminal_status=status,
+        retry_count=retry_count,
+        started_at=started_at,
+        finished_at=finished_at,
+        company_output_ready_at=(
+            finished_at if status == TaskTerminalStatus.SUCCEEDED else None
+        ),
+        error_code=error_code,
+        retryable=is_retryable_error(error_code),
+    )
+    merged = dict(outcome)
+    merged.update(contract.to_payload())
+    merged["run_id"] = str(request.run_id)
+    merged["task_id"] = outcome["task_id"]
+    return merged
 
 
 def _record_outcome(outcome: dict[str, object]) -> None:

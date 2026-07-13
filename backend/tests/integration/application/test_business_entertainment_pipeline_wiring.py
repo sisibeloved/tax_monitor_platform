@@ -99,6 +99,7 @@ def test_service_orders_scope_snapshot_link_candidate_agent_and_router() -> None
         company_code="C001",
         period_end=date(2032, 3, 31),
         snapshot_set_id=uuid4(),
+        company_list_version_id="company-list-v1",
         rule_version_id="rule-v1",
         lexicon_version="lexicon-v1",
         model_version_id="model-v1",

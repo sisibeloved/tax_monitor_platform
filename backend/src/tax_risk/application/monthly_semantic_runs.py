@@ -19,6 +19,13 @@ from tax_risk.application.semantic.sap_voucher_monitor import (
 )
 from tax_risk.domain.cases import MonitorType
 from tax_risk.domain.semantic.contracts import SemanticVersionSet
+from tax_risk.domain.task_runs import (
+    TaskRunResult,
+    TaskRunType,
+    TaskTerminalStatus,
+    is_retryable_error,
+    semantic_idempotency_key,
+)
 from tax_risk.observability.delivery import derive_batch_delivery
 from tax_risk.observability.metrics import record_company_task
 from tax_risk.persistence.ingest_models import Company, CompanyLifecycle
@@ -326,11 +333,6 @@ class MonthlySemanticRunService:
             run = uow.risks.get_run(row.run_id, for_share=True)
             if run is None or run.run_type != MonitoringRunType.MONTHLY_SEMANTIC:
                 raise MonthlySemanticRunError("MONTHLY_RUN_NOT_FOUND", "run was not found")
-            if row.status not in {
-                MonitoringRunCompanyStatus.PENDING,
-                MonitoringRunCompanyStatus.FAILED,
-            }:
-                return _company_outcome(row)
             member, company = uow.session.execute(
                 select(SnapshotSetMember, Company)
                 .join(Company, Company.id == SnapshotSetMember.company_id)
@@ -346,6 +348,11 @@ class MonthlySemanticRunService:
                 run.semantic_version_set_id,
                 run.period,
             )
+            if row.status not in {
+                MonitoringRunCompanyStatus.PENDING,
+                MonitoringRunCompanyStatus.FAILED,
+            }:
+                return _company_task_outcome(run, row, company, versions)
             row.status = MonitoringRunCompanyStatus.RUNNING
             row.attempt_count += 1
             row.retryable = False
@@ -388,7 +395,7 @@ class MonthlySemanticRunService:
                 row.processed_line_count = 0
                 row.risk_case_count = 0
                 row.issue_code = None
-            outcome = _company_outcome(row)
+            outcome = _company_task_outcome(run, row, company, versions)
             record_company_task(
                 run_type="MONTHLY_SEMANTIC",
                 monitor_type=run.monitoring_type.value,
@@ -650,6 +657,60 @@ def _company_outcome(row: MonitoringRunCompany) -> dict[str, object]:
         "issue_code": row.issue_code,
         "error_code": row.error_code,
     }
+
+
+def _company_task_outcome(
+    run: MonitoringRun,
+    row: MonitoringRunCompany,
+    company: Company,
+    versions: SemanticVersionSet,
+) -> dict[str, object]:
+    outcome = _company_outcome(row)
+    if row.status not in {
+        MonitoringRunCompanyStatus.SUCCEEDED,
+        MonitoringRunCompanyStatus.BLOCKED,
+        MonitoringRunCompanyStatus.FAILED,
+        MonitoringRunCompanyStatus.NOT_RUN,
+    }:
+        return outcome
+    assert run.period is not None and run.monitoring_type is not None
+    assert row.started_at is not None and row.finished_at is not None
+    error_code = row.error_code or row.issue_code
+    contract = TaskRunResult(
+        run_type=TaskRunType.MONTHLY_SEMANTIC,
+        monitor_type=run.monitoring_type.value,
+        batch_id=run.id,
+        company=company.company_code,
+        fiscal_year=run.fiscal_year,
+        period=run.period.strftime("%Y-%m"),
+        idempotency_key=semantic_idempotency_key(
+            company=company.company_code,
+            fiscal_year=run.fiscal_year,
+            through_month=run.period.month,
+            monitor_type=run.monitoring_type.value,
+            snapshot_set=run.snapshot_set_id,
+            rule=versions.rule_version_id,
+            model=versions.model_version_id,
+            prompt=versions.prompt_version_id,
+            case_library=versions.case_library_version_id,
+            account_dictionary=versions.account_dictionary_version,
+        ),
+        terminal_status=TaskTerminalStatus(row.status.value),
+        retry_count=max(0, row.attempt_count - 1),
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        company_output_ready_at=row.company_output_ready_at,
+        error_code=error_code,
+        retryable=is_retryable_error(error_code),
+    )
+    outcome.update(contract.to_payload())
+    outcome["run_id"] = str(run.id)
+    outcome["run_company_id"] = str(row.id)
+    outcome["task_id"] = row.celery_task_id
+    outcome["detection_ids"] = list(row.detection_ids)
+    outcome["case_ids"] = list(row.case_ids)
+    outcome["issue_code"] = row.issue_code
+    return outcome
 
 
 def _month_end(period: str) -> date:

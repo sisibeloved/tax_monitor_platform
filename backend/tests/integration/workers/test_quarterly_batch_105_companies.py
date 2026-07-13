@@ -373,6 +373,12 @@ def test_same_celery_task_can_retry_a_persisted_failed_company_attempt(
 
     assert second["status"] == "SUCCEEDED"
     assert second["retryable"] is False
+    assert second["run_type"] == "QUARTERLY"
+    assert second["monitor_type"] == "QUARTERLY_ALL"
+    assert second["batch_id"] == str(plan.run_id)
+    assert second["period"] == "2026-Q2"
+    assert second["retry_count"] == 1
+    assert second["company_output_ready_at"] is not None
     with engine.connect() as connection:
         row = connection.execute(
             text(

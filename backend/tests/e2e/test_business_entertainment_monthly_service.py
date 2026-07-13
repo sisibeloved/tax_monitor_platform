@@ -602,6 +602,7 @@ def test_database_pipeline_executes_and_replays_the_governed_monthly_flow(
             company_code=company_code,
             period_end=PERIOD_END,
             snapshot_set_id=snapshot_set_id,
+            company_list_version_id="company-list-v1",
             rule_version_id="business-entertainment-rule-v1",
             lexicon_version="v1",
             model_version_id=f"model-{token}",

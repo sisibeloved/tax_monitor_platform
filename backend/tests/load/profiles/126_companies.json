@@ -1,0 +1,33 @@
+{
+  "schema_version": "phase-4-capacity-v1",
+  "execution_mode": "DETERMINISTIC_ACCEPTANCE_SIMULATION",
+  "company_count": 126,
+  "quarterly_snapshots_per_company": 1,
+  "monthly_lines_per_company": {
+    "business_entertainment": 400,
+    "welfare": 350,
+    "donation": 250,
+    "total": 1000
+  },
+  "reference_runner": {
+    "cpu_count": 8,
+    "memory_gib": 16,
+    "worker_count": 16
+  },
+  "synthetic_duration_seconds": {
+    "quarterly_company": 20,
+    "business_entertainment_line": 0.05,
+    "welfare_line": 0.05,
+    "donation_line": 0.05
+  },
+  "failure_injections": [
+    {"company": "C0124", "class": "DATA_SOURCE", "error_code": "REQUIRED_SOURCE_MISSING", "retryable": false},
+    {"company": "C0125", "class": "MASTER_DATA", "error_code": "MASTER_DATA_MISSING", "retryable": false},
+    {"company": "C0126", "class": "PROVIDER", "error_code": "PROVIDER_TIMEOUT", "retryable": true}
+  ],
+  "thresholds": {
+    "minimum_valid_company_success_rate": 0.98,
+    "maximum_capacity_hours": 24,
+    "maximum_delivery_hours": 48
+  }
+}

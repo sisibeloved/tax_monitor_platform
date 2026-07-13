@@ -71,6 +71,14 @@ def test_company_failure_is_isolated_and_only_failed_company_is_retried(
         summary = service.summarize(plan.run.run_id)
 
         assert {outcome["status"] for outcome in outcomes} == {"SUCCEEDED", "FAILED"}
+        assert {outcome["run_type"] for outcome in outcomes} == {"MONTHLY_SEMANTIC"}
+        assert {outcome["monitor_type"] for outcome in outcomes} == {"WELFARE"}
+        assert all(outcome["idempotency_key"] for outcome in outcomes)
+        assert all(
+            (outcome["company_output_ready_at"] is not None)
+            == (outcome["status"] == "SUCCEEDED")
+            for outcome in outcomes
+        )
         assert summary["status"] == "PARTIAL_SUCCESS"
         assert summary["succeeded"] == 1 and summary["failed"] == 1
         with engine.connect() as connection:
