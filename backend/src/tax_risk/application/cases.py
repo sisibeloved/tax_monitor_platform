@@ -1,4 +1,4 @@
-"""Business-entertainment case creation on top of the phase-1 workflow."""
+"""Semantic case creation on top of the phase-1 workflow."""
 
 from __future__ import annotations
 
@@ -11,14 +11,13 @@ from tax_risk.persistence.business_entertainment_models import (
 )
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.persistence.risk_models import (
-    MonitorType,
     RiskCase,
     RiskCaseStatus,
 )
 from tax_risk.persistence.semantic_models import SemanticDetectionRecord
 
 
-def create_or_update_business_entertainment_case(
+def create_or_update_semantic_case(
     *,
     detection: SemanticDetection,
     persisted_detection: SemanticDetectionRecord,
@@ -28,7 +27,7 @@ def create_or_update_business_entertainment_case(
     fingerprint = semantic_case_fingerprint(
         detection.company_code,
         detection.fiscal_year,
-        MonitorType.BUSINESS_ENTERTAINMENT.value,
+        detection.monitoring_type.value,
         detection.source_mode,
         detection.canonical_source_record_id,
         detection.sap_observation_id,
@@ -40,7 +39,7 @@ def create_or_update_business_entertainment_case(
             fingerprint=fingerprint,
             company_id=company_id,
             latest_detection_id=None,
-            monitor_type=MonitorType.BUSINESS_ENTERTAINMENT,
+            monitor_type=detection.monitoring_type,
             status=RiskCaseStatus.NEW,
             risk_amount=abs(detection.amount),
             risk_rate=None,
@@ -91,7 +90,7 @@ def create_or_update_business_entertainment_case(
             for_update=True,
         )
         if existing_detail is None:
-            raise RuntimeError("business-entertainment case has no semantic detail")
+            raise RuntimeError("semantic risk case has no semantic detail")
         existing_detail.semantic_detection_id = persisted_detection.id
         existing_detail.confidence_tier = detection.confidence_tier.value
         existing_detail.account_dictionary_version = (
@@ -110,4 +109,24 @@ def create_or_update_business_entertainment_case(
     return risk_case, created
 
 
-__all__ = ["create_or_update_business_entertainment_case"]
+def create_or_update_business_entertainment_case(
+    *,
+    detection: SemanticDetection,
+    persisted_detection: SemanticDetectionRecord,
+    company_id: UUID,
+    uow: UnitOfWork,
+) -> tuple[RiskCase, bool]:
+    """Compatibility alias for the stage-2 business-entertainment flow."""
+
+    return create_or_update_semantic_case(
+        detection=detection,
+        persisted_detection=persisted_detection,
+        company_id=company_id,
+        uow=uow,
+    )
+
+
+__all__ = [
+    "create_or_update_business_entertainment_case",
+    "create_or_update_semantic_case",
+]

@@ -16,7 +16,11 @@ from tax_risk.domain.semantic.contracts import SemanticDetection
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
 
 
-def _seed_graph(engine: Engine) -> tuple[str, UUID, UUID, UUID, UUID, UUID]:
+def _seed_graph(
+    engine: Engine,
+    *,
+    account_family: str = "BUSINESS_ENTERTAINMENT",
+) -> tuple[str, UUID, UUID, UUID, UUID, UUID]:
     token = uuid4().hex
     company_code = f"SEM-{token}"
     with engine.begin() as connection:
@@ -129,7 +133,7 @@ def _seed_graph(engine: Engine) -> tuple[str, UUID, UUID, UUID, UUID, UUID]:
                 ) VALUES (
                     :source_id, :batch_id, 'SAP-1', :company_code, 2032, 3,
                     '2032-03-18', '510001', '001', '660203', '业务招待费', 100,
-                    'CNY', '内部会议餐', 'BUSINESS_ENTERTAINMENT'
+                    'CNY', '内部会议餐', :account_family
                 ) RETURNING id
                 """
             ),
@@ -137,8 +141,22 @@ def _seed_graph(engine: Engine) -> tuple[str, UUID, UUID, UUID, UUID, UUID]:
                 "source_id": sap_source_id,
                 "batch_id": source_batch_id,
                 "company_code": company_code,
+                "account_family": account_family,
             },
         ).scalar_one()
+        if account_family != "BUSINESS_ENTERTAINMENT":
+            connection.execute(
+                text(
+                    "INSERT INTO sap_expense_voucher_snapshot_projection "
+                    "(observation_id, snapshot_id, company_code, period) "
+                    "VALUES (:observation_id, :snapshot_id, :company_code, '2032-03-31')"
+                ),
+                {
+                    "observation_id": sap_observation_id,
+                    "snapshot_id": snapshot_id,
+                    "company_code": company_code,
+                },
+            )
         evidence_link_id = connection.execute(
             text(
                 """
@@ -178,6 +196,7 @@ def _detection(
     linked: bool = False,
     sap_observation_id: UUID | None = None,
     evidence_link_id: UUID | None = None,
+    monitoring_type: str = "BUSINESS_ENTERTAINMENT",
 ) -> SemanticDetection:
     return SemanticDetection.model_validate(
         {
@@ -186,6 +205,7 @@ def _detection(
             "company_code": company_code,
             "fiscal_year": 2032,
             "period": 3,
+            "monitoring_type": monitoring_type,
             "source_mode": "SAP_LINKED" if linked else "BUSINESS_DOCUMENT_UNLINKED",
             "canonical_source_record_id": source_id,
             "sap_observation_id": sap_observation_id if linked else None,
@@ -392,5 +412,80 @@ def test_router_rejects_cross_company_evidence_references(
                 detection,
                 suspicious_labels=frozenset({"MEETING_EXPENSE"}),
             )
+    finally:
+        engine.dispose()
+
+
+def test_welfare_sap_line_upserts_one_existing_risk_case(
+    isolated_database_url: str,
+) -> None:
+    engine, factory = create_session_factory(isolated_database_url)
+    try:
+        company_code, company_id, snapshot_id, _, sap_id, _ = _seed_graph(
+            engine,
+            account_family="WELFARE",
+        )
+        with engine.connect() as connection:
+            sap_source_id = connection.execute(
+                text(
+                    "SELECT source_record_id FROM sap_expense_voucher_observation "
+                    "WHERE id = :sap_id"
+                ),
+                {"sap_id": sap_id},
+            ).scalar_one()
+        router = SemanticCaseRouter(partial(UnitOfWork, factory))
+        first_detection = _detection(
+            company_code=company_code,
+            snapshot_id=snapshot_id,
+            source_id=sap_source_id,
+            label="BUSINESS_ENTERTAINMENT",
+            model_version="welfare-v1",
+            linked=True,
+            sap_observation_id=sap_id,
+            monitoring_type="WELFARE",
+        )
+        first = router.route(
+            first_detection,
+            suspicious_labels=frozenset({"BUSINESS_ENTERTAINMENT"}),
+        )
+        replay = router.route(
+            first_detection,
+            suspicious_labels=frozenset({"BUSINESS_ENTERTAINMENT"}),
+        )
+        upgraded = router.route(
+            _detection(
+                company_code=company_code,
+                snapshot_id=snapshot_id,
+                source_id=sap_source_id,
+                label="BUSINESS_ENTERTAINMENT",
+                model_version="welfare-v2",
+                linked=True,
+                sap_observation_id=sap_id,
+                monitoring_type="WELFARE",
+            ),
+            suspicious_labels=frozenset({"BUSINESS_ENTERTAINMENT"}),
+        )
+
+        assert first.risk_case_id == replay.risk_case_id == upgraded.risk_case_id
+        assert first.case_created is True
+        assert replay.detection_created is False and replay.case_created is False
+        assert upgraded.detection_created is True and upgraded.case_created is False
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT count(*) AS count, min(monitor_type::text) AS monitor_type "
+                    "FROM risk_case WHERE company_id = :company_id AND monitor_type = 'WELFARE'"
+                ),
+                {"company_id": company_id},
+            ).mappings().one()
+            detection_types = connection.execute(
+                text(
+                    "SELECT DISTINCT monitoring_type::text FROM semantic_detection_record "
+                    "WHERE company_code = :company_code"
+                ),
+                {"company_code": company_code},
+            ).scalars().all()
+        assert row == {"count": 1, "monitor_type": "WELFARE"}
+        assert detection_types == ["WELFARE"]
     finally:
         engine.dispose()

@@ -7,7 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
-from tax_risk.application.cases import create_or_update_business_entertainment_case
+from tax_risk.application.cases import create_or_update_semantic_case
+from tax_risk.domain.cases import MonitorType
 from tax_risk.domain.semantic.contracts import SemanticDetection
 from tax_risk.persistence.business_entertainment_models import EvidenceLink
 from tax_risk.persistence.ingest_models import CompanyLifecycle, SourceRecord
@@ -50,8 +51,14 @@ def decide_detection_route(
 
 
 class SemanticCaseRouter:
-    def __init__(self, uow_factory: Callable[[], UnitOfWork]) -> None:
+    def __init__(
+        self,
+        uow_factory: Callable[[], UnitOfWork],
+        *,
+        failure_injector: Callable[[str], None] | None = None,
+    ) -> None:
         self._uow_factory = uow_factory
+        self._failure_injector = failure_injector
 
     def route(
         self,
@@ -71,6 +78,7 @@ class SemanticCaseRouter:
                 persisted = semantic_detection_model(detection)
                 uow.semantic.add_semantic_detection(persisted)
                 uow.session.flush()
+                self._inject("semantic_detection_persisted")
             else:
                 _assert_detection_replay(persisted, detection)
 
@@ -91,13 +99,14 @@ class SemanticCaseRouter:
                     uow.session.flush()
                 evidence_task_id = task.id
             elif outcome is RoutingOutcome.RISK_CASE:
-                risk_case, case_created = create_or_update_business_entertainment_case(
+                risk_case, case_created = create_or_update_semantic_case(
                     detection=detection,
                     persisted_detection=persisted,
                     company_id=company.id,
                     uow=uow,
                 )
                 risk_case_id = risk_case.id
+                self._inject("semantic_risk_case_persisted")
 
             result = RoutingResult(
                 detection_id=persisted.id,
@@ -109,6 +118,10 @@ class SemanticCaseRouter:
             )
             uow.commit()
             return result
+
+    def _inject(self, stage: str) -> None:
+        if self._failure_injector is not None:
+            self._failure_injector(stage)
 
 
 def _validate_authoritative_lineage(
@@ -136,6 +149,14 @@ def _validate_authoritative_lineage(
         sap = uow.session.get(SapExpenseVoucherObservation, detection.sap_observation_id)
         if sap is None or sap.company_code != detection.company_code:
             raise ValueError("SAP observation does not belong to the detection company")
+        if detection.monitoring_type in {MonitorType.WELFARE, MonitorType.DONATION}:
+            if sap.source_record_id != detection.canonical_source_record_id:
+                raise ValueError("SAP-only detection must use the SAP line as canonical source")
+            if sap.id not in uow.semantic.projected_observation_ids(detection.snapshot_id):
+                raise ValueError("SAP observation is not projected by the frozen snapshot")
+            if detection.exact_evidence_link_id is not None:
+                raise ValueError("SAP-only detection cannot use a business-document link")
+            return
         if detection.exact_evidence_link_id is None:
             raise ValueError("SAP-linked detection requires persisted exact evidence")
         relation = uow.session.get(EvidenceLink, detection.exact_evidence_link_id)
@@ -157,6 +178,7 @@ def semantic_detection_model(detection: SemanticDetection) -> SemanticDetectionR
         company_code=detection.company_code,
         fiscal_year=detection.fiscal_year,
         period=detection.period,
+        monitoring_type=detection.monitoring_type,
         source_mode=detection.source_mode,
         canonical_source_record_id=detection.canonical_source_record_id,
         sap_observation_id=detection.sap_observation_id,
@@ -190,6 +212,7 @@ def _assert_detection_replay(
         persisted.company_code,
         persisted.snapshot_id,
         persisted.model_version_id,
+        persisted.monitoring_type,
         persisted.semantic_label,
         persisted.amount,
     )
@@ -198,6 +221,7 @@ def _assert_detection_replay(
         detection.company_code,
         detection.snapshot_id,
         detection.versions.model_version_id,
+        detection.monitoring_type,
         detection.semantic_label.value,
         detection.amount,
     )
