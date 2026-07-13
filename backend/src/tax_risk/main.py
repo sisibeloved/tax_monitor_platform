@@ -1,9 +1,14 @@
 from collections.abc import Awaitable, Callable
+from calendar import monthrange
+from datetime import date
+from functools import partial
 import logging
 import re
 from fastapi import FastAPI, Request, Response
 from threading import BoundedSemaphore
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+
+from sqlalchemy import select
 
 from tax_risk.api.routes.health import router as health_router
 from tax_risk.api.routes.health import DefaultReadinessProbe, ReadinessProbe
@@ -42,7 +47,10 @@ from tax_risk.observability.context import observability_context
 from tax_risk.observability.metrics import DEFAULT_METRICS, MetricRegistry
 from tax_risk.observability.tracing import configure_structured_logging, start_span
 from tax_risk.persistence.repositories import UnitOfWork
+from tax_risk.persistence.risk_models import MonitoringRun, MonitoringRunCompany
+from tax_risk.persistence.snapshot_models import SnapshotSetMember
 from tax_risk.security.principal import PrincipalProvider
+from tax_risk.security.service_scope import issue_service_scope_token
 from tax_risk.api.business_entertainment_dependencies import (
     bind_structured_model_client,
 )
@@ -60,7 +68,7 @@ def create_app(
     quarterly_dispatcher: Callable[..., None] | None = None,
     monthly_semantic_dispatcher: Callable[..., None] | None = None,
     semantic_credential_resolver: Callable[[str], str] | None = None,
-    export_dispatcher: Callable[[UUID], None] | None = None,
+    export_dispatcher: Callable[..., None] | None = None,
     export_object_store: ExportObjectStore | None = None,
     readiness_probe: ReadinessProbe | None = None,
     metrics_registry: MetricRegistry | None = None,
@@ -84,7 +92,10 @@ def create_app(
         app.state.audit_service,
         resolved_settings,
     )
-    app.state.export_dispatcher = export_dispatcher or _dispatch_export_job
+    app.state.export_dispatcher = export_dispatcher or partial(
+        _dispatch_export_job,
+        worker_scope_secret=resolved_settings.worker_scope_secret,
+    )
     app.state.readiness_probe = readiness_probe or DefaultReadinessProbe(
         settings=resolved_settings,
         uow_factory=app.state.uow_factory,
@@ -93,12 +104,16 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.principal_provider = principal_provider
     app.state.adapter_factory = adapter_factory or create_csv_adapter
-    app.state.quarterly_batch_service_factory = lambda: QuarterlyBatchService(
-        app.state.uow_factory
+    app.state.quarterly_batch_service_factory = lambda: QuarterlyBatchService(app.state.uow_factory)
+    app.state.quarterly_dispatcher = quarterly_dispatcher or partial(
+        _dispatch_quarterly_batch,
+        uow_factory=app.state.uow_factory,
+        worker_scope_secret=resolved_settings.worker_scope_secret,
     )
-    app.state.quarterly_dispatcher = quarterly_dispatcher or _dispatch_quarterly_batch
-    app.state.monthly_semantic_dispatcher = (
-        monthly_semantic_dispatcher or _dispatch_monthly_semantic_batch
+    app.state.monthly_semantic_dispatcher = monthly_semantic_dispatcher or partial(
+        _dispatch_monthly_semantic_batch,
+        uow_factory=app.state.uow_factory,
+        worker_scope_secret=resolved_settings.worker_scope_secret,
     )
     app.state.structured_model_client = bind_structured_model_client(
         resolved_settings,
@@ -183,9 +198,7 @@ def _record_http_metrics(
         }
     )
     if status_code in {401, 403}:
-        action = f"HTTP_{request.method}_{metric_path}".replace("/", "_").replace(
-            ":", "_"
-        )[:128]
+        action = f"HTTP_{request.method}_{metric_path}".replace("/", "_").replace(":", "_")[:128]
         registry.metric("tax_risk_authorization_failure_total").inc(
             {"action": action, "reason_code": f"HTTP_{status_code}"}
         )
@@ -270,17 +283,28 @@ def _dispatch_quarterly_batch(
     *,
     run_id: UUID,
     run_company_ids: tuple[UUID, ...],
+    uow_factory: Callable[[], UnitOfWork],
+    worker_scope_secret: str,
 ) -> None:
     """Send the durable ID-only quarterly canvas through the production broker."""
 
     from tax_risk.workers.celery_app import celery_app
     from tax_risk.workers.quarterly_batch import build_quarterly_batch_canvas
 
+    company_ids, summary_company_ids, period = _worker_dispatch_scope(
+        uow_factory,
+        run_id=run_id,
+        run_company_ids=run_company_ids,
+    )
     with observability_context(run_id=run_id):
         build_quarterly_batch_canvas(
             app=celery_app,
             run_id=run_id,
             run_company_ids=run_company_ids,
+            company_ids=company_ids,
+            summary_company_ids=summary_company_ids,
+            scope_period=period,
+            worker_scope_secret=worker_scope_secret,
         ).apply_async()
 
 
@@ -288,20 +312,83 @@ def _dispatch_monthly_semantic_batch(
     *,
     run_id: UUID,
     run_company_ids: tuple[UUID, ...],
+    uow_factory: Callable[[], UnitOfWork],
+    worker_scope_secret: str,
 ) -> None:
     from tax_risk.workers.celery_app import celery_app
     from tax_risk.workers.monthly_semantic import build_monthly_semantic_canvas
 
+    company_ids, summary_company_ids, period = _worker_dispatch_scope(
+        uow_factory,
+        run_id=run_id,
+        run_company_ids=run_company_ids,
+    )
     with observability_context(run_id=run_id):
         build_monthly_semantic_canvas(
             app=celery_app,
             run_id=run_id,
             run_company_ids=run_company_ids,
+            company_ids=company_ids,
+            summary_company_ids=summary_company_ids,
+            scope_period=period,
+            worker_scope_secret=worker_scope_secret,
         ).apply_async()
 
 
-def _dispatch_export_job(job_id: UUID) -> None:
+def _dispatch_export_job(
+    *,
+    job_id: UUID,
+    company_ids: tuple[str, ...],
+    authorization_version: str,
+    worker_scope_secret: str,
+) -> None:
     from tax_risk.workers.celery_app import celery_app
     from tax_risk.workers.exports import RENDER_EXPORT_TASK
 
-    celery_app.send_task(RENDER_EXPORT_TASK, args=(str(job_id),))
+    scope_token = issue_service_scope_token(
+        secret=worker_scope_secret,
+        queue="exports",
+        run_type="EXPORT",
+        batch_id=str(job_id),
+        company_ids=frozenset(UUID(value) for value in company_ids),
+        period=date.today(),
+    )
+    celery_app.send_task(
+        RENDER_EXPORT_TASK,
+        args=(str(job_id), authorization_version, scope_token),
+    )
+
+
+def _worker_dispatch_scope(
+    uow_factory: Callable[[], UnitOfWork],
+    *,
+    run_id: UUID,
+    run_company_ids: tuple[UUID, ...],
+) -> tuple[tuple[UUID, ...], tuple[UUID, ...], date]:
+    with uow_factory() as uow:
+        run = uow.session.get(MonitoringRun, run_id)
+        if run is None:
+            raise RuntimeError("worker dispatch run was not found")
+        rows = uow.session.execute(
+            select(MonitoringRunCompany.id, SnapshotSetMember.company_id)
+            .join(
+                SnapshotSetMember,
+                SnapshotSetMember.id == MonitoringRunCompany.snapshot_set_member_id,
+            )
+            .where(
+                MonitoringRunCompany.run_id == run_id,
+            )
+        ).all()
+        company_by_task = {task_id: company_id for task_id, company_id in rows}
+        if not set(run_company_ids) <= set(company_by_task):
+            raise RuntimeError("worker dispatch scope is incomplete")
+        company_ids = tuple(company_by_task[value] for value in run_company_ids)
+        summary_company_ids = tuple(sorted(set(company_by_task.values()), key=str))
+        if run.period is not None:
+            period = run.period
+        else:
+            if run.quarter is None:
+                raise RuntimeError("worker dispatch period is unavailable")
+            month = run.quarter * 3
+            period = date(run.fiscal_year, month, monthrange(run.fiscal_year, month)[1])
+    return company_ids, summary_company_ids, period

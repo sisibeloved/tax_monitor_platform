@@ -9,13 +9,14 @@ from tax_risk.application.exports import InMemoryExportObjectStore
 from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+from tax_risk.security.context import principal_context
 from tax_risk.security.principal import COMPANY_FINANCE_ROLE, Principal
 
 
 def test_download_url_is_hidden_after_company_permission_is_revoked(
-    isolated_database_url: str,
+    rls_database_url: str,
 ) -> None:
-    engine, factory = create_session_factory(isolated_database_url)
+    engine, factory = create_session_factory(rls_database_url)
     company_id = uuid4()
     allowed = Principal(
         subject="company-exporter",
@@ -28,7 +29,7 @@ def test_download_url_is_hidden_after_company_permission_is_revoked(
         uow_factory=partial(UnitOfWork, factory),
         settings=Settings(environment="test", export_download_secret="test-secret"),
         principal_provider=lambda _request: current["principal"],
-        export_dispatcher=lambda _job_id: None,
+        export_dispatcher=lambda **_payload: None,
         export_object_store=InMemoryExportObjectStore(),
     )
     with TestClient(app) as client:
@@ -41,7 +42,8 @@ def test_download_url_is_hidden_after_company_permission_is_revoked(
         )
         assert created.status_code == 202, created.text
         job_id = created.json()["id"]
-        app.state.export_service.complete_for_test(job_id, b"xlsx", row_count=0)
+        with principal_context(allowed):
+            app.state.export_service.complete_for_test(job_id, b"xlsx", row_count=0)
 
         issued = client.post(f"/api/v1/exports/{job_id}/download-url")
         assert issued.status_code == 200
@@ -57,4 +59,3 @@ def test_download_url_is_hidden_after_company_permission_is_revoked(
         assert denied.status_code == 404
         assert "url" not in denied.text
     engine.dispose()
-

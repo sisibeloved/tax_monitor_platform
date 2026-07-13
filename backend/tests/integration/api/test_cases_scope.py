@@ -56,8 +56,10 @@ class _CaseSeed:
 @pytest.fixture(scope="module")
 def case_api_resources(
     isolated_database_url: str,
+    rls_database_url: str,
 ) -> Iterator[tuple[TestClient, Engine, _CaseSeed]]:
-    engine, factory = create_session_factory(isolated_database_url)
+    engine, _ = create_session_factory(isolated_database_url)
+    app_engine, factory = create_session_factory(rls_database_url)
     token = uuid4().hex
     company_ids: list[UUID] = []
     company_codes: list[str] = []
@@ -333,6 +335,7 @@ def case_api_resources(
                 {"company_ids": company_ids},
             )
         engine.dispose()
+        app_engine.dispose()
 
 
 def test_case_list_applies_group_company_and_audit_scope_in_sql(

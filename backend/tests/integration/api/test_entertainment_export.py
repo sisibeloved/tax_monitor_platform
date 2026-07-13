@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from functools import partial
 from io import BytesIO
 
@@ -18,6 +19,9 @@ from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
 from tax_risk.security.principal import COMPANY_FINANCE_ROLE, Principal
+from tax_risk.security.service_scope import issue_service_scope_token
+from tax_risk.workers.celery_app import create_celery_app
+from tax_risk.workers.exports import RENDER_EXPORT_TASK, register_export_tasks
 
 
 def test_export_contains_one_safe_root_case_row(
@@ -45,15 +49,25 @@ def test_export_contains_one_safe_root_case_row(
         )
         principal = Principal(
             subject="group-tax@example.com",
-                roles=frozenset({COMPANY_FINANCE_ROLE}),
-                allowed_company_ids=frozenset({company_id}),
-                organization_path="/companies/scoped",
+            roles=frozenset({COMPANY_FINANCE_ROLE}),
+            allowed_company_ids=frozenset({company_id}),
+            organization_path="/companies/scoped",
         )
+        settings = Settings(
+            environment="test",
+            export_download_secret="test-secret",
+            worker_scope_secret="signed-export-api-scope-test",
+            redis_url="redis://localhost:6379/15",
+            celery_task_always_eager=True,
+            celery_task_eager_propagates=True,
+            celery_task_store_eager_result=True,
+        )
+        dispatched: list[dict[str, object]] = []
         app = create_app(
             uow_factory=partial(UnitOfWork, factory),
-            settings=Settings(environment="test", export_download_secret="test-secret"),
+            settings=settings,
             principal_provider=lambda _request: principal,
-            export_dispatcher=lambda _job_id: None,
+            export_dispatcher=lambda **payload: dispatched.append(payload),
             export_object_store=InMemoryExportObjectStore(),
         )
         with TestClient(app) as client:
@@ -63,7 +77,27 @@ def test_export_contains_one_safe_root_case_row(
             )
             assert created.status_code == 202, created.text
             job_id = created.json()["id"]
-            app.state.export_service.render_export(job_id)
+            worker = create_celery_app(settings)
+            register_export_tasks(
+                app=worker,
+                service_factory=lambda: app.state.export_service,
+            )
+            scope_token = issue_service_scope_token(
+                secret=settings.worker_scope_secret,
+                queue="exports",
+                run_type="EXPORT",
+                batch_id=job_id,
+                company_ids=frozenset({company_id}),
+                period=date(2026, 6, 30),
+            )
+            worker.signature(
+                RENDER_EXPORT_TASK,
+                args=(
+                    job_id,
+                    dispatched[0]["authorization_version"],
+                    scope_token,
+                ),
+            ).apply_async().get(timeout=10)
             issued = client.post(f"/api/v1/exports/{job_id}/download-url")
             assert issued.status_code == 200, issued.text
             response = client.get(issued.json()["url"])

@@ -1,8 +1,18 @@
-from fastapi.testclient import TestClient
+from datetime import timedelta
+from functools import partial
 
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from tests.integration.persistence.test_constraints import (
+    _insert_snapshot_set,
+    _populate_snapshot_set,
+)
 from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.observability.metrics import build_default_registry
+from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+from tax_risk.security.principal import GROUP_TAX_ROLE, Principal
 
 
 def test_metrics_endpoint_exports_required_bounded_operational_series() -> None:
@@ -64,3 +74,49 @@ def test_request_context_is_returned_and_api_metric_is_recorded() -> None:
     rendered = registry.render_prometheus()
     assert 'path="/health/live"' in rendered
     assert 'status="200"' in rendered
+
+
+def test_operations_summary_materializes_published_snapshot_before_uow_closes(
+    isolated_database_url: str,
+) -> None:
+    engine, factory = create_session_factory(isolated_database_url)
+    with engine.begin() as connection:
+        snapshot_set_id = _insert_snapshot_set(
+            connection,
+            set_key="operations-detached",
+        )
+        _populate_snapshot_set(
+            connection,
+            snapshot_set_id,
+            member_count=100,
+            company_code_prefix="OPS-",
+        )
+        published_at = connection.execute(
+            text(
+                """
+                UPDATE snapshot_set SET status = 'PUBLISHED'
+                WHERE id = :snapshot_set_id
+                RETURNING published_at
+                """
+            ),
+            {"snapshot_set_id": snapshot_set_id},
+        ).scalar_one()
+    principal = Principal(
+        subject="operations-observer",
+        roles=frozenset({GROUP_TAX_ROLE}),
+        allowed_company_ids=frozenset(),
+        organization_path="/group/tax",
+    )
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        settings=Settings(environment="test", semantic_model_provider="fake"),
+        principal_provider=lambda _request: principal,
+    )
+    try:
+        response = TestClient(app).get("/api/v1/operations/summary")
+        assert response.status_code == 200, response.text
+        assert response.json()["t_plus_2_deadline"] == (
+            published_at + timedelta(hours=48)
+        ).isoformat()
+    finally:
+        engine.dispose()

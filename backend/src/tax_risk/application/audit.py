@@ -8,7 +8,8 @@ import json
 from typing import Any, Callable, Mapping
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
+from sqlalchemy.sql.elements import ColumnElement
 
 from tax_risk.db import apply_principal_context
 from tax_risk.persistence.repositories import UnitOfWork
@@ -129,13 +130,16 @@ class AuditService:
         page_size: int,
     ) -> tuple[int, tuple[AuditEvent, ...]]:
         scope = DEFAULT_POLICY.company_scope(principal, Action.READ_AUDIT)
-        conditions = []
+        conditions: list[ColumnElement[bool]] = []
         if scope is not None:
             if not scope:
                 return 0, ()
-            conditions.append(
-                or_(
-                    *(AuditEvent.company_ids.contains([str(company_id)]) for company_id in scope)
+            conditions.extend(
+                (
+                    func.jsonb_array_length(AuditEvent.company_ids) > 0,
+                    AuditEvent.company_ids.op("<@")(
+                        sorted(str(company_id) for company_id in scope)
+                    ),
                 )
             )
         with self._uow_factory() as uow:

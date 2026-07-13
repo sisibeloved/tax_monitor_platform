@@ -3,11 +3,13 @@ name: tax-risk
 x-backend-image: &backend-image ${BACKEND_IMAGE:-tax-risk-backend:local}
 x-backend-environment: &backend-environment
   # Local fallback only. Production deployments must override credentials via their secret store.
-  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://tax_risk:tax-risk-local-only@postgres:5432/tax_risk}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://tax_risk_app:tax-risk-app-local-only@postgres:5432/tax_risk}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
   ENVIRONMENT: ${ENVIRONMENT:-production}
   DEVELOPMENT_PRINCIPAL_ENABLED: ${DEVELOPMENT_PRINCIPAL_ENABLED:-false}
   DEVELOPMENT_PRINCIPAL_SECRET: ${DEVELOPMENT_PRINCIPAL_SECRET:-}
+  EXPORT_DOWNLOAD_SECRET: ${EXPORT_DOWNLOAD_SECRET:-}
+  WORKER_SCOPE_SECRET: ${WORKER_SCOPE_SECRET:-}
   QUARTERLY_WORKER_CONCURRENCY: ${QUARTERLY_WORKER_CONCURRENCY:-4}
 
 services:
@@ -16,7 +18,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tax_risk}
-      POSTGRES_USER: ${POSTGRES_USER:-tax_risk}
+      POSTGRES_USER: ${POSTGRES_USER:-tax_risk_owner}
       # Local fallback keeps `docker compose up postgres` usable; override in every deployment.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tax-risk-local-only}
     ports:
@@ -29,6 +31,23 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+
+  database-roles:
+    image: ${POSTGRES_ROLE_IMAGE:-tax-risk-postgres-roles:local}
+    build:
+      context: ./postgres
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-tax_risk}
+      PGUSER: ${POSTGRES_USER:-tax_risk_owner}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-tax-risk-local-only}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-tax_risk_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-tax-risk-app-local-only}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7
@@ -50,9 +69,13 @@ services:
     build:
       context: ../backend
     restart: "no"
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgresql+psycopg://tax_risk_owner:tax-risk-local-only@postgres:5432/tax_risk}
     command: ["alembic", "upgrade", "head"]
     depends_on:
+      database-roles:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
 
@@ -101,6 +124,90 @@ services:
       - worker
       - --queues=quarterly
       - --concurrency=${QUARTERLY_WORKER_CONCURRENCY:-4}
+      - --loglevel=INFO
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          celery -A tax_risk.workers.celery_app:celery_app inspect ping
+          --destination celery@$${HOSTNAME} --timeout 5 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker-business-entertainment:
+    image: *backend-image
+    restart: unless-stopped
+    environment: *backend-environment
+    command:
+      - celery
+      - -A
+      - tax_risk.workers.celery_app:celery_app
+      - worker
+      - --queues=business-entertainment
+      - --concurrency=${MONTHLY_WORKER_CONCURRENCY:-4}
+      - --loglevel=INFO
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          celery -A tax_risk.workers.celery_app:celery_app inspect ping
+          --destination celery@$${HOSTNAME} --timeout 5 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker-monthly-semantic:
+    image: *backend-image
+    restart: unless-stopped
+    environment: *backend-environment
+    command:
+      - celery
+      - -A
+      - tax_risk.workers.celery_app:celery_app
+      - worker
+      - --queues=monthly-semantic
+      - --concurrency=${MONTHLY_WORKER_CONCURRENCY:-4}
+      - --loglevel=INFO
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          celery -A tax_risk.workers.celery_app:celery_app inspect ping
+          --destination celery@$${HOSTNAME} --timeout 5 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker-exports:
+    image: *backend-image
+    restart: unless-stopped
+    environment: *backend-environment
+    command:
+      - celery
+      - -A
+      - tax_risk.workers.celery_app:celery_app
+      - worker
+      - --queues=exports
+      - --concurrency=${EXPORT_WORKER_CONCURRENCY:-2}
       - --loglevel=INFO
     healthcheck:
       test:

@@ -101,6 +101,7 @@ class ExportJobView:
     requester_subject: str
     company_ids: tuple[str, ...]
     normalized_filters: dict[str, object]
+    authorization_version: str
     schema_version: str
     status: str
     row_count: int | None
@@ -164,6 +165,8 @@ class ExportService:
                 frozen_scope = frozenset(uow.session.scalars(select(Company.id)))
             else:
                 frozen_scope = policy_scope
+            if not frozen_scope:
+                raise ResourceNotFound("export scope contains no companies")
             normalized = _normalize_filters(filters, frozen_scope)
             job = ExportJob(
                 id=uuid4(),
@@ -201,11 +204,21 @@ class ExportService:
         _record_export_metric(ExportJobStatus.QUEUED)
         return view
 
-    def render_export(self, job_id: UUID | str) -> ExportJobView:
+    def render_export(
+        self,
+        job_id: UUID | str,
+        *,
+        authorization_version: str,
+    ) -> ExportJobView:
         resolved_id = UUID(str(job_id))
         with self._uow_factory() as uow:
             job = uow.exports.get(resolved_id, for_update=True)
             if job is None:
+                raise ExportNotFound(str(resolved_id))
+            if (
+                job.authorization_version != authorization_version
+                or not self._matches_current_worker_scope(job)
+            ):
                 raise ExportNotFound(str(resolved_id))
             if ExportJobStatus(job.status) == ExportJobStatus.COMPLETED:
                 return _view(job)
@@ -234,6 +247,7 @@ class ExportService:
             payload = render_xlsx(build_export_rows(root_cases))
             return self._complete(resolved_id, payload, row_count=len(root_cases))
         except Exception:
+            failed_job: ExportJob | None = None
             with self._uow_factory() as uow:
                 failed = uow.exports.get(resolved_id, for_update=True)
                 if failed is not None:
@@ -241,6 +255,17 @@ class ExportService:
                     failed.failure_code = "EXPORT_RENDER_FAILED"
                     failed.completed_at = datetime.now(timezone.utc)
                     uow.commit()
+                    uow.session.expunge(failed)
+                    failed_job = failed
+            if failed_job is not None:
+                self._audit.append(
+                    self._audit_draft(
+                        failed_job,
+                        action="EXPORT_FAILED",
+                        result="FAILED",
+                        reason_code="EXPORT_RENDER_FAILED",
+                    )
+                )
             _record_export_metric(ExportJobStatus.FAILED)
             raise
 
@@ -258,18 +283,28 @@ class ExportService:
         with self._uow_factory() as uow:
             apply_principal_context(uow.session, principal)
             rows = uow.exports.list_for_requester(principal.subject)
-            views = tuple(_view(job) for job in rows if self._is_currently_authorized(principal, job))
+            views = tuple(
+                _view(job) for job in rows if self._is_currently_authorized(principal, job)
+            )
         return views
 
     def issue_download_url(self, principal: Principal, job_id: UUID | str) -> str:
-        job = self._authorized_job(principal, UUID(str(job_id)))
+        resolved_id = UUID(str(job_id))
+        try:
+            job = self._authorized_job(principal, resolved_id)
+        except (ExportNotFound, ResourceNotFound):
+            self._audit_download_denied(principal, resolved_id, "CURRENT_SCOPE_DENIED")
+            raise
         if ExportJobStatus(job.status) != ExportJobStatus.COMPLETED or not job.object_key:
             raise ExportNotReady(str(job.id))
         if job.expires_at <= datetime.now(timezone.utc):
-            self._expire(job.id, job.object_key)
+            self._expire(job, principal)
             raise ExportNotFound(str(job.id))
         expires = int(
-            (datetime.now(timezone.utc) + timedelta(seconds=self._settings.export_download_ttl_seconds)).timestamp()
+            (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=self._settings.export_download_ttl_seconds)
+            ).timestamp()
         )
         signature = self._download_signature(job.id, principal.subject, expires)
         return f"/api/v1/exports/{job.id}/content?expires={expires}&signature={signature}"
@@ -287,9 +322,17 @@ class ExportService:
             signature,
             self._download_signature(resolved_id, principal.subject, expires),
         ):
+            self._audit_download_denied(principal, resolved_id, "DOWNLOAD_TOKEN_INVALID")
             raise ExportNotFound(str(resolved_id))
-        job = self._authorized_job(principal, resolved_id)
+        try:
+            job = self._authorized_job(principal, resolved_id)
+        except (ExportNotFound, ResourceNotFound):
+            self._audit_download_denied(principal, resolved_id, "CURRENT_SCOPE_DENIED")
+            raise
         if ExportJobStatus(job.status) != ExportJobStatus.COMPLETED or not job.object_key:
+            raise ExportNotFound(str(resolved_id))
+        if job.expires_at <= datetime.now(timezone.utc):
+            self._expire(job, principal)
             raise ExportNotFound(str(resolved_id))
         payload = self._store.get(job.object_key)
         self._audit.append(
@@ -324,6 +367,17 @@ class ExportService:
             job.completed_at = datetime.now(timezone.utc)
             uow.commit()
             view = _view(job)
+            uow.session.expunge(job)
+            completed_job = job
+        self._audit.append(
+            self._audit_draft(
+                completed_job,
+                action="EXPORT_COMPLETED",
+                result="SUCCEEDED",
+                row_count=row_count,
+                payload={"checksum": checksum},
+            )
+        )
         _record_export_metric(ExportJobStatus.COMPLETED)
         return view
 
@@ -339,9 +393,7 @@ class ExportService:
 
     @staticmethod
     def _is_currently_authorized(principal: Principal, job: ExportJob) -> bool:
-        if principal.subject != job.requester_subject and not principal.has_role(
-            GROUP_TAX_ROLE
-        ):
+        if principal.subject != job.requester_subject and not principal.has_role(GROUP_TAX_ROLE):
             return False
         current_scope = DEFAULT_POLICY.company_scope(principal, Action.EXPORT_RISK)
         frozen_scope = frozenset(UUID(value) for value in job.company_ids)
@@ -355,20 +407,93 @@ class ExportService:
             sha256,
         ).hexdigest()
 
-    def _expire(self, job_id: UUID, object_key: str) -> None:
-        self._store.delete(object_key)
+    @staticmethod
+    def _matches_current_worker_scope(job: ExportJob) -> bool:
+        from tax_risk.security.context import current_principal
+
+        principal = current_principal()
+        return bool(
+            principal is not None
+            and principal.is_service
+            and principal.allowed_company_ids == frozenset(UUID(value) for value in job.company_ids)
+        )
+
+    def _expire(self, job: ExportJob, principal: Principal) -> None:
+        if job.object_key is None:
+            raise ExportNotFound(str(job.id))
+        self._store.delete(job.object_key)
         with self._uow_factory() as uow:
-            job = uow.exports.get(job_id, for_update=True)
-            if job is not None:
-                job.status = ExportJobStatus.EXPIRED
+            persisted = uow.exports.get(job.id, for_update=True)
+            if persisted is not None:
+                persisted.status = ExportJobStatus.EXPIRED
                 uow.commit()
+        self._audit.append(
+            AuditEventDraft(
+                action="EXPORT_EXPIRED",
+                entity_type="EXPORT_JOB",
+                entity_id=job.id,
+                principal=principal,
+                company_ids=frozenset(UUID(value) for value in job.company_ids),
+                result="SUCCEEDED",
+                row_count=job.row_count,
+                export_job_id=job.id,
+                filters_hash=job.filters_hash,
+                payload={"checksum": job.checksum},
+            )
+        )
         _record_export_metric(ExportJobStatus.EXPIRED)
+
+    def _audit_download_denied(
+        self,
+        principal: Principal,
+        job_id: UUID,
+        reason_code: str,
+    ) -> None:
+        self._audit.append(
+            AuditEventDraft(
+                action="EXPORT_DOWNLOAD_DENIED",
+                entity_type="EXPORT_JOB",
+                entity_id=job_id,
+                principal=principal,
+                company_ids=frozenset(),
+                result="DENIED",
+                export_job_id=job_id,
+                reason_code=reason_code,
+            )
+        )
+
+    @staticmethod
+    def _audit_draft(
+        job: ExportJob,
+        *,
+        action: str,
+        result: str,
+        reason_code: str | None = None,
+        row_count: int | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> AuditEventDraft:
+        return AuditEventDraft(
+            action=action,
+            entity_type="EXPORT_JOB",
+            entity_id=job.id,
+            principal=Principal(
+                subject=job.requester_subject,
+                roles=frozenset(job.requester_roles),
+                allowed_company_ids=frozenset(UUID(value) for value in job.company_ids),
+                organization_path="/export/frozen-scope",
+            ),
+            company_ids=frozenset(UUID(value) for value in job.company_ids),
+            result=result,
+            filters_hash=job.filters_hash,
+            row_count=row_count,
+            export_job_id=job.id,
+            reason_code=reason_code,
+            payload=payload or {},
+        )
 
 
 def _record_export_metric(status: ExportJobStatus) -> None:
-    DEFAULT_METRICS.metric("tax_risk_export_total").inc(
-        {"status": status.value, "format": "XLSX"}
-    )
+    DEFAULT_METRICS.metric("tax_risk_export_total").inc({"status": status.value, "format": "XLSX"})
 
 
 def build_default_export_service(settings: Settings | None = None) -> ExportService:
@@ -400,6 +525,7 @@ def _view(job: ExportJob) -> ExportJobView:
         requester_subject=job.requester_subject,
         company_ids=tuple(job.company_ids),
         normalized_filters=dict(job.normalized_filters),
+        authorization_version=job.authorization_version,
         schema_version=job.schema_version,
         status=str(job.status),
         row_count=job.row_count,

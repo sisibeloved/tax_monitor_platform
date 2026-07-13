@@ -382,6 +382,8 @@ def test_development_principal_rejects_a_tampered_signature(
             semantic_model_endpoint="https://model.internal.example/generate",
             semantic_model_deployment="income-tax-test",
             semantic_model_credential_ref="secret://test-only-reference",
+            export_download_secret="test-production-export-secret-32-chars",
+            worker_scope_secret="test-production-worker-secret-32-chars",
         ),
     ],
     ids=["development-disabled", "production"],

@@ -11,8 +11,10 @@ from tax_risk.application.business_entertainment.service import (
 )
 from tax_risk.domain.semantic.contracts import SemanticDetection
 from tax_risk.config import Settings
+from tax_risk.security.context import current_principal
 from tax_risk.workers.business_entertainment import (
     RUN_COMPANY_TASK,
+    build_business_entertainment_task_kwargs,
     register_business_entertainment_tasks,
 )
 from tax_risk.workers.celery_app import create_celery_app
@@ -224,6 +226,97 @@ def test_worker_passes_snapshot_and_published_versions() -> None:
     }
     UUID(task_kwargs["run_id"])
     UUID(task_kwargs["snapshot_set_id"])
+
+
+def test_signed_worker_payload_binds_the_exact_company_and_period() -> None:
+    request = _request()
+    company_id = uuid4()
+    settings = Settings(
+        environment="test",
+        redis_url="memory://",
+        celery_task_always_eager=True,
+        celery_task_eager_propagates=True,
+        celery_task_store_eager_result=True,
+        worker_scope_secret="signed-entertainment-worker-scope-test",
+    )
+
+    class ScopeAwareService:
+        def run_company(
+            self,
+            current: BusinessEntertainmentRunRequest,
+            *,
+            task_id: str,
+        ) -> dict[str, object]:
+            principal = current_principal()
+            assert principal is not None and principal.is_service
+            assert principal.allowed_company_ids == frozenset({company_id})
+            assert principal.service_scope is not None
+            assert principal.service_scope.period == request.period_end
+            return BusinessEntertainmentMonthlyService(RecordingPipeline()).run_company(
+                current,
+                task_id=task_id,
+            )
+
+    app = create_celery_app(settings)
+    register_business_entertainment_tasks(
+        app=app,
+        service_factory=ScopeAwareService,
+    )
+
+    result = (
+        app.tasks[RUN_COMPANY_TASK]
+        .delay(
+            **build_business_entertainment_task_kwargs(
+                request,
+                company_id=company_id,
+                worker_scope_secret=settings.worker_scope_secret,
+            )
+        )
+        .get()
+    )
+
+    assert result["status"] == "SUCCEEDED"
+
+
+def test_production_worker_rejects_unsigned_payload_before_service_access() -> None:
+    request = _request()
+    calls = 0
+
+    class RecordingService:
+        def run_company(
+            self,
+            current: BusinessEntertainmentRunRequest,
+            *,
+            task_id: str,
+        ) -> dict[str, object]:
+            nonlocal calls
+            del current, task_id
+            calls += 1
+            return {}
+
+    app = create_celery_app(
+        Settings(
+            environment="production",
+            redis_url="memory://",
+            celery_task_always_eager=True,
+            celery_task_eager_propagates=True,
+            celery_task_store_eager_result=True,
+            export_download_secret="test-production-export-secret-32-chars",
+            worker_scope_secret="test-production-worker-secret-32-chars",
+        )
+    )
+    register_business_entertainment_tasks(
+        app=app,
+        service_factory=RecordingService,
+    )
+
+    result = app.tasks[RUN_COMPANY_TASK].delay(**request.to_task_kwargs()).get()
+
+    assert calls == 0
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == "WORKER_SCOPE_TOKEN_INVALID"
+    assert result["company_output_ready_at"] is None
+    assert result["run_type"] == "MONTHLY_SEMANTIC"
 
 
 def test_stable_provider_failure_retries_once_with_bounded_policy_then_succeeds() -> None:

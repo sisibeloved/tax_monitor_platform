@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 import hmac
 import json
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Never, cast
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from tax_risk.security.principal import (
     Principal,
     PrincipalProvider,
 )
+from tax_risk.security.context import bind_principal, reset_principal
 from tax_risk.security.policies import (
     Action,
     AuthorizationDenied,
@@ -27,7 +29,7 @@ from tax_risk.security.policies import (
 )
 
 
-def get_principal(
+async def get_principal(
     request: Request,
     development_principal: Annotated[
         str | None,
@@ -37,35 +39,40 @@ def get_principal(
         str | None,
         Header(alias="X-Development-Principal-Signature"),
     ] = None,
-) -> Principal:
+) -> AsyncIterator[Principal]:
     """Resolve an IdP principal, or a signed principal in development only."""
 
     provider = cast(PrincipalProvider | None, request.app.state.principal_provider)
     if provider is not None:
         principal = provider(request)
-        request.state.principal = principal
-        return principal
-
-    settings = cast(Settings, request.app.state.settings)
-    if settings.environment != "development" or not settings.development_principal_enabled:
-        _unauthenticated()
-    secret = settings.development_principal_secret
-    if not secret or development_principal is None or development_signature is None:
-        _unauthenticated()
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        development_principal.encode("utf-8"),
-        sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(expected, development_signature):
-        _unauthenticated()
+    else:
+        settings = cast(Settings, request.app.state.settings)
+        if (
+            settings.environment != "development"
+            or not settings.development_principal_enabled
+        ):
+            _unauthenticated()
+        secret = settings.development_principal_secret
+        if not secret or development_principal is None or development_signature is None:
+            _unauthenticated()
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            development_principal.encode("utf-8"),
+            sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, development_signature):
+            _unauthenticated()
+        try:
+            payload = json.loads(development_principal)
+            principal = _parse_principal_payload(payload)
+        except (TypeError, ValueError, KeyError):
+            _unauthenticated()
+    request.state.principal = principal
+    token = bind_principal(principal)
     try:
-        payload = json.loads(development_principal)
-        principal = _parse_principal_payload(payload)
-        request.state.principal = principal
-        return principal
-    except (TypeError, ValueError, KeyError):
-        _unauthenticated()
+        yield principal
+    finally:
+        reset_principal(token)
 
 
 def require_reader(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:

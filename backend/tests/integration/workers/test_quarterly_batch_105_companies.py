@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
+from functools import partial
 from typing import Protocol
 from uuid import UUID
 
@@ -10,7 +12,7 @@ from sqlalchemy import Engine, text
 from tax_risk.application.quarterly_batches import QuarterlyBatchService
 from tax_risk.application.quarterly_runs import QuarterlyRunService
 from tax_risk.config import Settings
-from tax_risk.persistence.repositories import UnitOfWork
+from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
 from tax_risk.workers.celery_app import create_celery_app
 from tax_risk.workers.quarterly_batch import (
     build_quarterly_batch_canvas,
@@ -68,30 +70,39 @@ def _status_counts(engine: Engine, run_id: UUID) -> dict[str, int]:
 
 def _run_row(engine: Engine, run_id: UUID) -> dict[str, object]:
     with engine.connect() as connection:
-        row = connection.execute(
-            text("SELECT * FROM monitoring_run WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).mappings().one()
+        row = (
+            connection.execute(
+                text("SELECT * FROM monitoring_run WHERE id = :run_id"),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
         return dict(row)
 
 
 def _evidence_counts(engine: Engine, run_id: UUID) -> dict[str, int]:
     with engine.connect() as connection:
-        detection = connection.execute(
-            text(
-                """
+        detection = (
+            connection.execute(
+                text(
+                    """
                 SELECT count(*) AS total,
                        count(DISTINCT detection_key) AS unique_keys,
                        count(DISTINCT company_id) AS companies
                 FROM detection_record
                 WHERE run_id = :run_id
                 """
-            ),
-            {"run_id": run_id},
-        ).mappings().one()
-        cases = connection.execute(
-            text(
-                """
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+        cases = (
+            connection.execute(
+                text(
+                    """
                 SELECT count(*) AS total,
                        count(DISTINCT fingerprint) AS unique_fingerprints
                 FROM risk_case
@@ -103,9 +114,12 @@ def _evidence_counts(engine: Engine, run_id: UUID) -> dict[str, int]:
                     WHERE company_run.run_id = :run_id
                 )
                 """
-            ),
-            {"run_id": run_id},
-        ).mappings().one()
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
         return {
             "detections": detection["total"],
             "unique_detection_keys": detection["unique_keys"],
@@ -117,9 +131,10 @@ def _evidence_counts(engine: Engine, run_id: UUID) -> dict[str, int]:
 
 def _snapshot_source_counts(engine: Engine, snapshot_ids: tuple[UUID, ...]) -> dict[str, int]:
     with engine.connect() as connection:
-        counts = connection.execute(
-            text(
-                """
+        counts = (
+            connection.execute(
+                text(
+                    """
                 SELECT count(DISTINCT source.id) AS snapshot_sources,
                        count(DISTINCT batch.id) AS sap_batches,
                        count(record.id) AS source_records
@@ -133,9 +148,12 @@ def _snapshot_source_counts(engine: Engine, snapshot_ids: tuple[UUID, ...]) -> d
                   ON record.batch_id = batch.id
                 WHERE snapshot.id = ANY(:snapshot_ids)
                 """
-            ),
-            {"snapshot_ids": list(snapshot_ids)},
-        ).mappings().one()
+                ),
+                {"snapshot_ids": list(snapshot_ids)},
+            )
+            .mappings()
+            .one()
+        )
         return {key: int(value) for key, value in counts.items()}
 
 
@@ -145,6 +163,7 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         Engine,
         _QuarterlyBatchSeed,
     ],
+    rls_database_url: str,
 ) -> None:
     uow_factory, engine, seed = quarterly_batch_resources
     failure_state = _InjectedFailureState({seed.failed_snapshot_id})
@@ -155,6 +174,18 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
             company_runner_factory=lambda: _CompanyRunner(uow_factory, failure_state),
         )
 
+    app_engine, app_factory = create_session_factory(rls_database_url)
+    app_uow_factory = partial(UnitOfWork, app_factory)
+
+    def worker_batch_service_factory() -> QuarterlyBatchService:
+        return QuarterlyBatchService(
+            app_uow_factory,
+            company_runner_factory=lambda: _CompanyRunner(
+                app_uow_factory,
+                failure_state,
+            ),
+        )
+
     service = batch_service_factory()
     plan = service.start_batch(
         fiscal_year=2026,
@@ -163,9 +194,7 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         rule_version_id=seed.rule_version_id,
     )
 
-    assert plan.run_key == (
-        f"quarterly:2026:Q2:{seed.snapshot_set_id}:{seed.rule_version_id}"
-    )
+    assert plan.run_key == (f"quarterly:2026:Q2:{seed.snapshot_set_id}:{seed.rule_version_id}")
     assert len(plan.run_company_ids) == 105
     assert len(set(plan.run_company_ids)) == 105
     assert _snapshot_source_counts(engine, seed.snapshot_ids) == {
@@ -195,13 +224,21 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         quarterly_worker_concurrency=4,
     )
     app = create_celery_app(settings)
-    register_quarterly_tasks(app=app, service_factory=batch_service_factory)
+    register_quarterly_tasks(app=app, service_factory=worker_batch_service_factory)
+    first_company_ids = _company_ids_for_tasks(engine, plan.run_company_ids)
 
-    first_summary = build_quarterly_batch_canvas(
-        app=app,
-        run_id=plan.run_id,
-        run_company_ids=plan.run_company_ids,
-    ).apply_async().get(timeout=120)
+    first_summary = (
+        build_quarterly_batch_canvas(
+            app=app,
+            run_id=plan.run_id,
+            run_company_ids=plan.run_company_ids,
+            company_ids=first_company_ids,
+            scope_period=date(2026, 6, 30),
+            worker_scope_secret=settings.worker_scope_secret,
+        )
+        .apply_async()
+        .get(timeout=120)
+    )
 
     assert first_summary["run_id"] == str(plan.run_id)
     assert first_summary["status"] == "PARTIAL_SUCCESS"
@@ -229,9 +266,10 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         "unique_case_fingerprints": 309,
     }
     with engine.connect() as connection:
-        frozen = connection.execute(
-            text(
-                """
+        frozen = (
+            connection.execute(
+                text(
+                    """
                 SELECT snapshot.lineage AS snapshot_lineage,
                        detection.lineage AS detection_lineage
                 FROM detection_record AS detection
@@ -241,20 +279,25 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
                 ORDER BY detection.monitor_type
                 LIMIT 1
                 """
-            ),
-            {"run_id": plan.run_id, "company_id": seed.company_ids[0]},
-        ).mappings().one()
+                ),
+                {"run_id": plan.run_id, "company_id": seed.company_ids[0]},
+            )
+            .mappings()
+            .one()
+        )
     snapshot_lineage = frozen["snapshot_lineage"]
     detection_lineage = frozen["detection_lineage"]
     source_batch = snapshot_lineage["sources"][0]["batch"]
     assert source_batch["extraction_time"].endswith("Z")
     assert source_batch["payload_ref"].endswith(".csv")
     assert detection_lineage["sources"] == snapshot_lineage["sources"]
-    assert detection_lineage["tax_master_version"]["source_file_name"] == (
-        snapshot_lineage["tax_master"]["source_file_name"]
+    assert (
+        detection_lineage["tax_master_version"]["source_file_name"]
+        == (snapshot_lineage["tax_master"]["source_file_name"])
     )
-    assert detection_lineage["tax_master_version"]["imported_at"] == (
-        snapshot_lineage["tax_master"]["imported_at"]
+    assert (
+        detection_lineage["tax_master_version"]["imported_at"]
+        == (snapshot_lineage["tax_master"]["imported_at"])
     )
     assert detection_lineage["tax_master_version"]["imported_at"].endswith("Z")
 
@@ -276,11 +319,19 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
     assert retry_plan.run_id == plan.run_id
     assert len(retry_plan.run_company_ids) == 1
 
-    retry_summary = build_quarterly_batch_canvas(
-        app=app,
-        run_id=retry_plan.run_id,
-        run_company_ids=retry_plan.run_company_ids,
-    ).apply_async().get(timeout=30)
+    retry_summary = (
+        build_quarterly_batch_canvas(
+            app=app,
+            run_id=retry_plan.run_id,
+            run_company_ids=retry_plan.run_company_ids,
+            company_ids=_company_ids_for_tasks(engine, retry_plan.run_company_ids),
+            summary_company_ids=first_company_ids,
+            scope_period=date(2026, 6, 30),
+            worker_scope_secret=settings.worker_scope_secret,
+        )
+        .apply_async()
+        .get(timeout=30)
+    )
 
     assert retry_summary["status"] == "PARTIAL_SUCCESS"
     assert retry_summary["succeeded_company_count"] == 104
@@ -324,6 +375,28 @@ def test_105_company_batch_isolates_failures_and_retries_failed_only(
         ("BLOCKED", 1),
         ("SUCCEEDED", 2),
     ]
+    app_engine.dispose()
+
+
+def _company_ids_for_tasks(
+    engine: Engine,
+    run_company_ids: tuple[UUID, ...],
+) -> tuple[UUID, ...]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT company_run.id, member.company_id
+                FROM monitoring_run_company AS company_run
+                JOIN snapshot_set_member AS member
+                  ON member.id = company_run.snapshot_set_member_id
+                WHERE company_run.id = ANY(:run_company_ids)
+                """
+            ),
+            {"run_company_ids": list(run_company_ids)},
+        ).all()
+    company_by_task = {task_id: company_id for task_id, company_id in rows}
+    return tuple(company_by_task[value] for value in run_company_ids)
 
 
 def test_same_celery_task_can_retry_a_persisted_failed_company_attempt(
@@ -514,11 +587,15 @@ def test_duplicate_canvas_cannot_finalize_while_owner_retry_is_pending(
     )
     app = create_celery_app(settings)
     register_quarterly_tasks(app=app, service_factory=lambda: service)
-    duplicate_summary = build_quarterly_batch_canvas(
-        app=app,
-        run_id=plan.run_id,
-        run_company_ids=(owner_run_company_id,),
-    ).apply_async().get(timeout=10)
+    duplicate_summary = (
+        build_quarterly_batch_canvas(
+            app=app,
+            run_id=plan.run_id,
+            run_company_ids=(owner_run_company_id,),
+        )
+        .apply_async()
+        .get(timeout=10)
+    )
 
     assert duplicate_summary["status"] == "RUNNING"
     with engine.connect() as connection:

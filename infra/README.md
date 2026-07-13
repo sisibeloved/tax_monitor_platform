@@ -1,7 +1,8 @@
-# 第一阶段基础设施运维手册
+# 集团所得税风险监测平台基础设施运维手册
 
-本手册用于从仓库根目录运维具备生产形态的第一阶段技术栈。Compose 拓扑包含 PostgreSQL、Redis、
-一次性数据库迁移服务、API、季度任务工作进程以及 Web/Nginx 服务，不包含语义 Agent 或模型服务。
+本手册用于从仓库根目录运维具备生产形态的完整技术栈。Compose 拓扑包含 PostgreSQL、数据库角色初始化、
+Redis、一次性数据库迁移、API、季度/月度/业务招待费/导出工作进程以及 Web/Nginx。企业语义模型通过受保护
+网关调用，不在本 Compose 中部署模型服务或外部语义索引。
 
 ## 前置条件
 
@@ -27,7 +28,9 @@ HMAC 密钥绝不会进入浏览器构建产物。不得在隔离的开发机以
 对于每个部署环境，必须通过经批准的密钥存储替换本地数据库密码和 URL，设置
 `ENVIRONMENT=production`，禁用并移除所有 `DEVELOPMENT_PRINCIPAL_*` 值，并将经批准的生产 IdP
 验证器注入 FastAPI 应用组合。缺少该验证器时，生产环境必须以 HTTP 401 拒绝访问；启用开发标志
-不能绕过生产环境防护。
+不能绕过生产环境防护。`MIGRATION_DATABASE_URL` 只能使用对象所有者账号，`DATABASE_URL` 只能使用
+`NOSUPERUSER NOBYPASSRLS` 应用账号；`EXPORT_DOWNLOAD_SECRET` 与 `WORKER_SCOPE_SECRET` 必须由密钥
+存储注入、至少 32 个字符且彼此不同。
 
 ## 启动
 
@@ -38,7 +41,8 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 docker compose --env-file infra/.env -f infra/docker-compose.yml ps -a
 ```
 
-`migrate` 必须以退出码 0 完成。PostgreSQL、Redis、API、`worker-quarterly` 和 Web 必须报告健康状态。
+`database-roles` 和 `migrate` 必须以退出码 0 完成。PostgreSQL、Redis、API、四类工作进程和 Web
+必须报告健康状态。
 PostgreSQL、Redis、API 和 Web 仅向宿主机回环地址发布端口。
 
 ## 健康检查
@@ -50,16 +54,19 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml ps -a
 docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T redis redis-cli ping
 docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T worker-quarterly celery -A tax_risk.workers.celery_app:celery_app inspect ping --timeout 5
+docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T worker-monthly-semantic celery -A tax_risk.workers.celery_app:celery_app inspect ping --timeout 5
+docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T worker-business-entertainment celery -A tax_risk.workers.celery_app:celery_app inspect ping --timeout 5
+docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T worker-exports celery -A tax_risk.workers.celery_app:celery_app inspect ping --timeout 5
 curl -fsS http://127.0.0.1:8000/health
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
 HTTP 健康检查端点仅检查进程健康状态。系统达到可运行状态还要求数据库迁移成功，并且上述
-PostgreSQL、Redis 和季度任务工作进程检查全部通过。
+PostgreSQL、Redis 和四类任务工作进程检查全部通过。
 
 ## 生产上线准入
 
-在以下每一项均已完整登记至受控发布记录，且最终决策明确为 `GO` 之前，第一阶段技术栈
+在以下每一项均已完整登记至受控发布记录，且最终决策明确为 `GO` 之前，完整技术栈
 **严禁部署至生产环境**。本地静态测试通过、镜像构建成功或进程内 `eager-worker` 测试通过，
 均不能视为满足以下门禁。
 
@@ -96,7 +103,7 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml logs --no-color
 
 ```bash
 export E2E_BASE_URL=http://127.0.0.1:8000
-export E2E_DATABASE_URL='postgresql+psycopg://tax_risk:replace-for-local-development-only@127.0.0.1:5432/tax_risk'
+export E2E_DATABASE_URL='postgresql+psycopg://tax_risk_owner:replace-for-local-development-only@127.0.0.1:5432/tax_risk'
 export E2E_DEV_PRINCIPAL_SECRET='local-only-tax-risk-development-secret-do-not-use-in-production'
 export E2E_SEED_TOKEN="run$(date +%Y%m%d%H%M%S)"
 export E2E_STANDARD_COMPANY_CODE="E2E-${E2E_SEED_TOKEN}-000"
@@ -141,7 +148,7 @@ export RUN_ID=$(printf '%s\n' "$RUN_RESPONSE" | jq -r .run_id)
 curl -fsS "$WEB_URL/api/v1/quarterly-runs/$RUN_ID" | jq .
 curl -fsS "$WEB_URL/api/v1/dashboard/quarterly?fiscal_year=2026&quarter=2" | jq .
 curl -fsS "$WEB_URL/api/v1/risk-cases?fiscal_year=2026&quarter=2&page=1&page_size=100" | jq .
-docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T postgres psql -U tax_risk -d tax_risk -c "SELECT status, count(*) FROM monitoring_run_company WHERE run_id = '$RUN_ID' GROUP BY status ORDER BY status;"
+docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T postgres psql -U tax_risk_owner -d tax_risk -c "SELECT status, count(*) FROM monitoring_run_company WHERE run_id = '$RUN_ID' GROUP BY status ORDER BY status;"
 ```
 
 运行批次终态为 `SUCCEEDED`、`PARTIAL_SUCCESS` 或 `FAILED`。`BLOCKED` 是公司层面的数据或控制结果，
@@ -149,33 +156,14 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T postgre
 
 ## 重试
 
-Celery 会自动重试可重试的公司任务。第一阶段不提供公共的手工重试 API。如获授权的运维人员必须将终态运行批次
-重新入队，以下受控内部操作将选择全部且仅选择状态为 `FAILED` 的公司记录；该操作绝不会重新运行
-`SUCCEEDED` 或 `BLOCKED` 公司：
+Celery 会自动重试可重试的公司任务。获授权集团税务人员可通过受审计 API 将终态运行批次重新入队；该操作
+只选择状态为 `FAILED` 的公司记录，绝不会重新运行 `SUCCEEDED` 或 `BLOCKED` 公司。API 会签发精确绑定
+队列、批次、公司和期间的工作进程令牌，严禁从命令行构造无签名任务：
 
 ```bash
 export RUN_ID='<终态运行批次UUID>'
-docker compose --env-file infra/.env -f infra/docker-compose.yml exec -T api python - "$RUN_ID" <<'PY'
-import sys
-from uuid import UUID
-
-from tax_risk.application.quarterly_batches import QuarterlyBatchService
-from tax_risk.persistence.repositories import UnitOfWork
-from tax_risk.workers.celery_app import celery_app
-from tax_risk.workers.quarterly_batch import build_quarterly_batch_canvas
-
-plan = QuarterlyBatchService(UnitOfWork).retry_failed(run_id=UUID(sys.argv[1]))
-if plan.run_company_ids:
-    build_quarterly_batch_canvas(
-        app=celery_app,
-        run_id=plan.run_id,
-        run_company_ids=plan.run_company_ids,
-    ).apply_async()
-print({
-    "run_id": str(plan.run_id),
-    "requeued_run_company_ids": [str(value) for value in plan.run_company_ids],
-})
-PY
+curl -fsS -X POST "$WEB_URL/api/v1/operations/runs/$RUN_ID/retry" \
+  -H 'Content-Type: application/json' -d '{}' | jq .
 ```
 
 必须在运维日志中记录操作人、变更单号、运行批次 ID，以及返回的公司任务 ID。返回空列表表示该运行批次
@@ -186,9 +174,14 @@ PY
 读取实时日志，或导出不含 ANSI 颜色代码的支持包：
 
 ```bash
-docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f api worker-quarterly web
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f \
+  api worker-quarterly worker-business-entertainment worker-monthly-semantic \
+  worker-exports web
 mkdir -p artifacts/logs
-docker compose --env-file infra/.env -f infra/docker-compose.yml logs --no-color --since=24h postgres redis migrate api worker-quarterly web > artifacts/logs/phase1-stack.log
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs --no-color --since=24h \
+  postgres database-roles redis migrate api worker-quarterly \
+  worker-business-entertainment worker-monthly-semantic worker-exports web \
+  > artifacts/logs/platform-stack.log
 ```
 
 不得将已上传的源数据、自由文本证据、数据库 URL、`Principal` 请求头或密钥写入工单或共享日志包。
@@ -225,4 +218,5 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml down
 docker compose --env-file infra/.env -f infra/docker-compose.yml down --volumes
 ```
 
-第一阶段使用确定性公式，不需要模型、LLM 或语义 Agent 凭据。
+生产语义监测所需模型端点和凭据引用必须来自批准的企业配置与密钥存储，不得把模型访问令牌写入
+`infra/.env`、命令历史、工单或日志包。

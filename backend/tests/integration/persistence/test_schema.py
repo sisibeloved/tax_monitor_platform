@@ -55,6 +55,9 @@ EXPECTED_TABLES = {
     "semantic_version_set",
     "business_entertainment_case_detail",
     "audit_event",
+    "export_job",
+    "release_manifest",
+    "release_event",
 }
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 PYTEST_SCHEMA_PATTERN = re.compile(r"tax_risk_pytest_[0-9a-f]{32}")
@@ -77,7 +80,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0011_welfare_donation"
+    assert revision == "0017_strict_rls_runtime"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -132,7 +135,7 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
         "risk_case_status",
     } <= enum_names
 
-    for table_name in EXPECTED_TABLES - {"audit_event"}:
+    for table_name in EXPECTED_TABLES - {"audit_event", "release_event"}:
         created_at = _column(engine, table_name, "created_at")
         assert isinstance(created_at["type"], TIMESTAMP)
         assert created_at["type"].timezone is True
@@ -140,6 +143,10 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
     occurred_at = _column(engine, "audit_event", "occurred_at")
     assert isinstance(occurred_at["type"], TIMESTAMP)
     assert occurred_at["type"].timezone is True
+
+    release_occurred_at = _column(engine, "release_event", "occurred_at")
+    assert isinstance(release_occurred_at["type"], TIMESTAMP)
+    assert release_occurred_at["type"].timezone is True
 
     master_updated_at = _column(engine, "company", "master_data_updated_at")
     assert isinstance(master_updated_at["type"], TIMESTAMP)
@@ -833,7 +840,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0011_welfare_donation (head)" in completed.stdout
+    assert "0017_strict_rls_runtime (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -859,7 +866,7 @@ def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0011_welfare_donation"
+    assert revision == "0017_strict_rls_runtime"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

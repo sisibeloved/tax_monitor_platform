@@ -48,16 +48,29 @@ class Settings(BaseSettings):
     export_retention_hours: int = Field(default=24, gt=0, le=24 * 30)
     export_download_ttl_seconds: int = Field(default=300, gt=0, le=3_600)
     export_download_secret: str = "development-export-download-secret"
-    expected_migration_head: str = "0016_release_manifests"
+    worker_scope_secret: str = "development-worker-scope-secret-change-me"
+    expected_migration_head: str = "0017_strict_rls_runtime"
 
     @model_validator(mode="after")
-    def validate_quarterly_worker_timeouts(self) -> Self:
+    def validate_runtime_safety(self) -> Self:
         if self.quarterly_task_time_limit_seconds <= (
             self.quarterly_task_soft_time_limit_seconds
         ):
             raise ValueError("quarterly hard time limit must exceed its soft time limit")
         if self.celery_visibility_timeout_seconds <= self.quarterly_task_time_limit_seconds:
             raise ValueError("Celery visibility timeout must exceed the quarterly hard time limit")
+        if self.environment == "production" and (
+            len(self.export_download_secret) < 32
+            or len(self.worker_scope_secret) < 32
+            or self.export_download_secret == "development-export-download-secret"
+            or self.worker_scope_secret
+            == "development-worker-scope-secret-change-me"
+            or self.export_download_secret == self.worker_scope_secret
+        ):
+            raise ValueError(
+                "production runtime secrets must be independent, nondefault, "
+                "and at least 32 characters"
+            )
         return self
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

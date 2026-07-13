@@ -85,6 +85,8 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         quarterly_task_retry_backoff_seconds=(
             resolved.quarterly_task_retry_backoff_seconds
         ),
+        runtime_environment=resolved.environment,
+        worker_scope_secret=resolved.worker_scope_secret,
     )
     install_celery_context(app)
     return app

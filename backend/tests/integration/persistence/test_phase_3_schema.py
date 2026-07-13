@@ -28,7 +28,7 @@ def test_phase_3_extends_the_existing_control_plane(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0011_welfare_donation"
+    assert revision == "0017_strict_rls_runtime"
     assert "semantic_version_set" in inspector.get_table_names()
     assert {"WELFARE", "DONATION"} <= set(_enum_labels(engine, "monitor_type"))
     assert "MONTHLY_SEMANTIC" in _enum_labels(engine, "monitoring_run_type")

@@ -1,7 +1,7 @@
-# 第一阶段后端
+# 集团所得税风险监测平台后端
 
 后端基于 Python 3.12、FastAPI、SQLAlchemy/Alembic、PostgreSQL 和 Celery 构建，
-用于执行集团所得税季度确定性监测。
+用于执行季度确定性监测、月度语义监测、风险事项治理、安全导出、审计和发布门禁。
 
 ## 环境准备
 
@@ -23,13 +23,17 @@ backend/.venv/bin/python -m pip check
 
 ```bash
 cp infra/env.example infra/.env
-docker compose --env-file infra/.env -f infra/docker-compose.yml up -d postgres redis
-export DATABASE_URL='postgresql+psycopg://tax_risk:replace-for-local-development-only@127.0.0.1:5432/tax_risk'
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d postgres redis database-roles
+export MIGRATION_DATABASE_URL='postgresql+psycopg://tax_risk_owner:replace-for-local-development-only@127.0.0.1:5432/tax_risk'
+export DATABASE_URL='postgresql+psycopg://tax_risk_app:replace-for-local-application-only@127.0.0.1:5432/tax_risk'
+export TEST_DATABASE_URL="$MIGRATION_DATABASE_URL"
 export REDIS_URL='redis://127.0.0.1:6379/0'
 ```
 
-应用容器使用 Compose 服务名 `postgres` 和 `redis`；宿主机测试使用 `127.0.0.1`。
-在任何共享环境或部署环境中，都必须替换全部仅供本地使用的凭据。
+迁移账号拥有数据库对象，并仅通过 `MIGRATION_DATABASE_URL` 和本地测试专用的 `TEST_DATABASE_URL` 使用；
+API 和全部工作进程只能使用 `NOSUPERUSER NOBYPASSRLS` 的应用账号。
+应用容器使用 Compose 服务名 `postgres` 和 `redis`；宿主机测试使用 `127.0.0.1`。在任何共享环境或
+部署环境中，都必须替换全部仅供本地使用的凭据，并从密钥存储注入两个彼此独立的导出/任务签名密钥。
 
 ## 数据库迁移
 
@@ -37,9 +41,9 @@ export REDIS_URL='redis://127.0.0.1:6379/0'
 
 ```bash
 cd backend
-.venv/bin/alembic current
-.venv/bin/alembic upgrade head
-.venv/bin/alembic check
+DATABASE_URL="$MIGRATION_DATABASE_URL" .venv/bin/alembic current
+DATABASE_URL="$MIGRATION_DATABASE_URL" .venv/bin/alembic upgrade head
+DATABASE_URL="$MIGRATION_DATABASE_URL" .venv/bin/alembic check
 ```
 
 严禁对主数据库或数据库的唯一副本执行 `alembic downgrade`。将已验证的备份恢复至一次性数据库后，
@@ -47,7 +51,7 @@ cd backend
 
 ```bash
 cd backend
-export DATABASE_URL='postgresql+psycopg://tax_risk:replace-for-local-development-only@127.0.0.1:5432/tax_risk_restore_test'
+export DATABASE_URL='postgresql+psycopg://tax_risk_owner:replace-for-local-development-only@127.0.0.1:5432/tax_risk_restore_test'
 .venv/bin/alembic downgrade -1
 .venv/bin/alembic upgrade head
 ```
@@ -74,8 +78,11 @@ cd backend
 - `POST /api/v1/snapshots/validate`、`POST /api/v1/snapshots/{id}/publish` 和
   `POST /api/v1/snapshot-sets`
 - `POST /api/v1/quarterly-runs` 和 `GET /api/v1/quarterly-runs/{id}`
+- `POST /api/v1/monthly-semantic/runs` 和 `GET /api/v1/monthly-semantic/runs/{id}`
 - `GET /api/v1/dashboard/quarterly`、`GET /api/v1/risk-cases`、
   `POST /api/v1/risk-cases/{id}/actions` 和 `GET /api/v1/detections/{id}`
+- `POST /api/v1/exports`、`GET /api/v1/exports/{id}` 和受当前权限复核的下载端点
+- `GET /api/v1/audit-events`、`GET /api/v1/operations/summary` 和受控运行重试端点
 
 所有 ingest-batch、tax-master 和 snapshot 控制面路由均要求 `group-tax` 管理角色。
 季度监测、风险、驾驶舱和检测端点还会在服务端 SQL 中强制校验 `Principal` 的角色和公司权限范围。
@@ -84,24 +91,30 @@ cd backend
 `DEVELOPMENT_PRINCIPAL_ENABLED=true` 时，系统才接受已签名的开发请求头。生产环境必须注入 IdP
 验证器，否则返回 HTTP 401；健康检查端点保持公开，供编排系统使用。
 
-## 季度任务
+## 异步任务
 
 在本地运行真实的季度任务队列：
 
 ```bash
 cd backend
-.venv/bin/celery -A tax_risk.workers.celery_app:celery_app worker --queues=quarterly --concurrency=4 --loglevel=INFO
+.venv/bin/celery -A tax_risk.workers.celery_app:celery_app worker \
+  --queues=quarterly,monthly-semantic,business-entertainment,exports \
+  --concurrency=4 --loglevel=INFO
 ```
 
 对应的 Compose 命令如下：
 
 ```bash
-docker compose --env-file infra/.env -f infra/docker-compose.yml up -d worker-quarterly
-docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f worker-quarterly
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d \
+  worker-quarterly worker-business-entertainment worker-monthly-semantic worker-exports
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f \
+  worker-quarterly worker-business-entertainment worker-monthly-semantic worker-exports
 ```
 
-任务仅携带可持久化 ID。工作进程会从 PostgreSQL 重新加载冻结快照、tax-master 版本和规则版本；
-系统采用 JSON 序列化、延迟确认、工作进程丢失时拒绝确认、有限任务超时，以及按公司隔离的重试机制。
+任务只携带可持久化 ID 和服务端签发的 HMAC 范围令牌。令牌精确绑定队列、运行类型、批次、公司和期间；
+生产工作进程缺少或收到篡改令牌时必须在访问数据前拒绝。工作进程以不能绕过 RLS 的应用账号重新加载冻结
+快照、tax-master 和规则/模型版本；系统采用 JSON 序列化、延迟确认、工作进程丢失时拒绝确认、有限任务
+超时，以及按公司隔离的重试机制。
 
 ## 重试
 
@@ -110,8 +123,8 @@ Celery 自动重试仅适用于单家公司执行失败。手工批量重试通�
 的运行批次可以重试，并且会重置全部且仅重置状态为 `FAILED` 的公司记录。该操作绝不会重新计算
 `SUCCEEDED` 公司，也绝不会重试因数据或控制原因处于 `BLOCKED` 状态的公司。
 
-第一阶段不将该操作开放为公共 HTTP 端点。获授权的运维人员必须使用 `infra/README.md` 中受控的内部命令，
-记录命令返回的公司任务 ID，并由正常的 Celery `canvas` 重新汇总运行结果。
+获授权的集团税务人员通过 `POST /api/v1/operations/runs/{run_id}/retry` 执行手工重试。该端点只选择
+技术失败公司，并通过正常的签名 Celery `canvas` 重新汇总；不得从命令行构造无签名任务。
 
 ## 测试
 
@@ -133,7 +146,7 @@ backend/.venv/bin/pytest -q backend/tests/e2e/test_quarterly_standard_scenario.p
 
 ```bash
 export E2E_BASE_URL=http://127.0.0.1:8000
-export E2E_DATABASE_URL='postgresql+psycopg://tax_risk:replace-for-local-development-only@127.0.0.1:5432/tax_risk'
+export E2E_DATABASE_URL="$MIGRATION_DATABASE_URL"
 export E2E_DEV_PRINCIPAL_SECRET='local-only-tax-risk-development-secret-do-not-use-in-production'
 export E2E_SEED_TOKEN="run$(date +%Y%m%d%H%M%S)"
 export E2E_STANDARD_COMPANY_CODE="E2E-${E2E_SEED_TOKEN}-000"
@@ -152,10 +165,12 @@ backend/.venv/bin/pytest -q -s backend/tests/e2e/test_quarterly_api_worker_flow.
 - 税率使用小数而非百分数表示：`0.25` 表示 25%，预警阈值 `0.05` 表示五个百分点。
 - 公式重放必须使用冻结快照、tax-master 版本、规则版本及已持久化的公式代入值。浏览器不得重新计算税务结果。
 
-## 第一阶段边界
+## 当前边界
 
-第一阶段实现受控数据采集、不可变的已发布快照集、三项已批准的季度确定性检查、可审计风险事项、
-受权限范围控制的 API，以及季度驾驶舱。`SnapshotSet.published_at` 是唯一的数据就绪时间戳。
+当前实现覆盖受控数据采集、不可变已发布快照集、三项季度确定性检查、业务招待费/福利费/公益性捐赠
+月度语义检查、统一风险事项、公司级隔离、不可变审计、安全导出、运维驾驶舱和发布/回滚门禁。
+`SnapshotSet.published_at` 是唯一的数据就绪时间戳。
 
-第一阶段不包含语义 Agent、LLM 适配器、模型服务器、提示词、向量索引或模型凭据。业务招待费、福利费和
-捐赠支出的语义分类属于后续阶段，严禁引入当前运行环境或工作进程队列。
+当前仓库没有真实数据接口和真实试点数据；本地门禁证据只能标记为 `LOCAL_SYNTHETIC`。生产语义调用必须
+经企业模型网关并采用批准的零留存/不公开训练配置；当前不配置外部向量索引。真实生产准入还要求冻结数据
+UAT、KMS/HSM 签名和税务、数据、安全、运维四方批准。

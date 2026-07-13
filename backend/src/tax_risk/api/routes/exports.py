@@ -71,8 +71,12 @@ def create_export(
         )
     except (ResourceNotFound, ValueError) as exc:
         raise HTTPException(status_code=404, detail="Not Found") from exc
-    dispatcher = cast(Callable[[UUID], None], request.app.state.export_dispatcher)
-    dispatcher(job.id)
+    dispatcher = cast(Callable[..., None], request.app.state.export_dispatcher)
+    dispatcher(
+        job_id=job.id,
+        company_ids=job.company_ids,
+        authorization_version=job.authorization_version,
+    )
     request.state.audit_company_ids = frozenset(UUID(value) for value in job.company_ids)
     request.state.audit_row_count = 1
     return job

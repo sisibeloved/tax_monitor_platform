@@ -16,6 +16,7 @@ build/
 # Frontend
 node_modules/
 dist/
+web/test-results/
 
 # Local configuration
 .env

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from functools import partial
 
 from sqlalchemy import text
@@ -7,7 +8,13 @@ from sqlalchemy import text
 from tax_risk.application.monthly_semantic_runs import MonthlySemanticRunService
 from tax_risk.application.semantic.sap_voucher_monitor import MonitorRunResult
 from tax_risk.domain.cases import MonitorType
+from tax_risk.config import Settings
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+from tax_risk.workers.celery_app import create_celery_app
+from tax_risk.workers.monthly_semantic import (
+    build_monthly_semantic_canvas,
+    register_monthly_tasks,
+)
 from tests.integration.api.test_monthly_semantic_routes import (
     _cleanup_monthly_semantic_state,
     _seed_semantic_versions,
@@ -36,6 +43,68 @@ class FakeMonitor:
             created_or_updated_cases=1,
             evidence_task_count=0,
         )
+
+
+def test_signed_monthly_worker_runs_with_non_bypassrls_role(
+    isolated_database_url: str,
+    rls_database_url: str,
+) -> None:
+    admin_engine, admin_factory = create_session_factory(isolated_database_url)
+    app_engine, app_factory = create_session_factory(rls_database_url)
+    failures: set[str] = set()
+
+    def monitor_factory(**_kwargs):
+        return FakeMonitor(failures)
+
+    try:
+        snapshot_set_id, _, first_code = _seed_monthly_set(admin_engine)
+        second_code = f"{first_code[:-3]}001"
+        admin_service = MonthlySemanticRunService(
+            partial(UnitOfWork, admin_factory),
+            monitor_factory=monitor_factory,
+        )
+        plan = admin_service.start_run(
+            monitoring_type=MonitorType.WELFARE,
+            period="2026-06",
+            company_codes=(first_code, second_code),
+            snapshot_set_id=snapshot_set_id,
+            semantic_version_set_id=_seed_semantic_versions(admin_engine),
+            allowed_company_ids=None,
+        )
+        company_by_task = {row.id: row.company_id for row in plan.run.companies}
+        company_ids = tuple(company_by_task[value] for value in plan.run_company_ids)
+        worker_service = MonthlySemanticRunService(
+            partial(UnitOfWork, app_factory),
+            monitor_factory=monitor_factory,
+        )
+        settings = Settings(
+            environment="test",
+            redis_url="redis://localhost:6379/15",
+            celery_task_always_eager=True,
+            celery_task_eager_propagates=True,
+            celery_task_store_eager_result=True,
+            quarterly_task_max_retries=0,
+            worker_scope_secret="signed-monthly-integration-scope-test",
+        )
+        app = create_celery_app(settings)
+        register_monthly_tasks(app=app, service_factory=lambda: worker_service)
+
+        summary = build_monthly_semantic_canvas(
+            app=app,
+            run_id=plan.run.run_id,
+            run_company_ids=plan.run_company_ids,
+            company_ids=company_ids,
+            scope_period=date(2026, 6, 30),
+            worker_scope_secret=settings.worker_scope_secret,
+        ).apply_async().get(timeout=30)
+
+        assert summary["status"] == "SUCCEEDED"
+        assert summary["succeeded"] == 2
+        assert summary["failed"] == 0
+    finally:
+        _cleanup_monthly_semantic_state(admin_engine)
+        app_engine.dispose()
+        admin_engine.dispose()
 
 
 def test_company_failure_is_isolated_and_only_failed_company_is_retried(

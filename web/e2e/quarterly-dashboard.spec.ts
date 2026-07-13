@@ -20,6 +20,11 @@ function descriptionValue(container: Locator, label: string) {
 test.describe.configure({ mode: "serial" });
 
 test.describe("季度所得税风险看板", () => {
+  test.skip(
+    !process.env.E2E_STANDARD_COMPANY_CODE,
+    "需要先由外部后端E2E注入唯一的105家公司验收数据",
+  );
+
   test("展示105家公司监测结果并可追溯标准公司的计提公式", async ({ page }) => {
     const standardCompanyCode = process.env.E2E_STANDARD_COMPANY_CODE;
     if (!standardCompanyCode) {

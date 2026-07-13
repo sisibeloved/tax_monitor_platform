@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from tax_risk.workers.quarterly_batch import (
     build_quarterly_batch_canvas,
     register_quarterly_tasks,
 )
+from tax_risk.security.service_scope import verify_service_scope_token
 
 
 def _settings(**overrides: object) -> Settings:
@@ -49,7 +51,7 @@ def test_celery_configuration_is_durable_json_only_and_quarterly_routed() -> Non
     assert app.conf.task_routes[RUN_COMPANY_TASK]["queue"] == QUARTERLY_QUEUE
     assert app.conf.task_routes[SUMMARIZE_BATCH_TASK]["queue"] == QUARTERLY_QUEUE
     summary_task = app.tasks[SUMMARIZE_BATCH_TASK]
-    assert summary_task.max_retries is None
+    assert summary_task.max_retries == 3
     assert summary_task.autoretry_for == (Exception,)
     assert summary_task.retry_backoff == 5
     assert summary_task.retry_jitter is True
@@ -101,3 +103,40 @@ def test_canvas_fans_out_105_id_only_company_tasks_then_summarizes() -> None:
     assert tuple(canvas.body.args) == (str(run_id),)
     assert not canvas.body.kwargs
     assert canvas.body.options["queue"] == QUARTERLY_QUEUE
+
+
+def test_signed_retry_canvas_gives_finalizer_the_complete_batch_scope() -> None:
+    app = create_celery_app(_settings())
+    run_id = uuid4()
+    run_company_id = uuid4()
+    retry_company_id = uuid4()
+    complete_batch_scope = (retry_company_id, uuid4(), uuid4())
+    secret = "signed-quarterly-retry-scope-test"
+
+    canvas = build_quarterly_batch_canvas(
+        app=app,
+        run_id=run_id,
+        run_company_ids=(run_company_id,),
+        company_ids=(retry_company_id,),
+        summary_company_ids=complete_batch_scope,
+        scope_period=date(2026, 6, 30),
+        worker_scope_secret=secret,
+    )
+
+    company_scope = verify_service_scope_token(
+        tuple(canvas.tasks)[0].args[2],
+        secret=secret,
+        expected_queue=QUARTERLY_QUEUE,
+        expected_run_type="QUARTERLY",
+        expected_batch_id=str(run_company_id),
+    )
+    summary_scope = verify_service_scope_token(
+        canvas.body.args[1],
+        secret=secret,
+        expected_queue=QUARTERLY_QUEUE,
+        expected_run_type="QUARTERLY_SUMMARY",
+        expected_batch_id=str(run_id),
+    )
+
+    assert company_scope.company_ids == frozenset({retry_company_id})
+    assert summary_scope.company_ids == frozenset(complete_batch_scope)

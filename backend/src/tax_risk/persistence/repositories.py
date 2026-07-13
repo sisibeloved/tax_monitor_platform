@@ -19,6 +19,7 @@ from tax_risk.persistence.semantic_repositories import (
     SemanticRepository,
 )
 from tax_risk.persistence.snapshot_repositories import SnapshotRepository
+from tax_risk.security.context import apply_principal_context, current_principal
 
 
 def create_session_factory(database_url: str) -> tuple[Engine, sessionmaker[Session]]:
@@ -54,6 +55,9 @@ class UnitOfWork:
 
     def __enter__(self) -> Self:
         self.session = self._session_factory()
+        principal = current_principal()
+        if principal is not None:
+            apply_principal_context(self.session, principal)
         self.ingest = IngestRepository(self.session)
         self.exports = ExportRepository(self.session)
         self.business_entertainment_scope = BusinessEntertainmentScopeRepository(self.session)

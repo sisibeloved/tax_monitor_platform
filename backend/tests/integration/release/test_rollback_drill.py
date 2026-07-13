@@ -27,7 +27,7 @@ def _signed_bundle(path: Path, version: str, marker: str) -> Path:
         candidate_version=version,
         application_image_digest=f"sha256:{marker * 64}",
         git_commit=marker * 40,
-        migration_head="0016_release_manifests",
+        migration_head="0017_strict_rls_runtime",
         artifacts=ReleaseArtifacts(
             rule_package_sha256="1" * 64,
             prompt_package_sha256="2" * 64,

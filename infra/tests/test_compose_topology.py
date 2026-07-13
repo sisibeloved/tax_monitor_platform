@@ -9,21 +9,33 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Any
+from urllib.parse import urlsplit
 
 
 INFRA_DIR = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = INFRA_DIR / "docker-compose.yml"
 ENV_EXAMPLE = INFRA_DIR / "env.example"
 OPERATIONS_GUIDE = INFRA_DIR / "README.md"
+ROLE_BOOTSTRAP = INFRA_DIR / "postgres" / "configure_database_roles.sh"
 EXPECTED_SERVICES = {
     "postgres",
+    "database-roles",
     "redis",
     "migrate",
     "api",
     "worker-quarterly",
+    "worker-business-entertainment",
+    "worker-monthly-semantic",
+    "worker-exports",
     "web",
 }
-LONG_LIVED_SERVICES = {"postgres", "redis", "api", "worker-quarterly", "web"}
+WORKER_SERVICES = {
+    "worker-quarterly",
+    "worker-business-entertainment",
+    "worker-monthly-semantic",
+    "worker-exports",
+}
+LONG_LIVED_SERVICES = {"postgres", "redis", "api", *WORKER_SERVICES, "web"}
 
 
 def _compose_config() -> dict[str, Any]:
@@ -31,10 +43,17 @@ def _compose_config() -> dict[str, Any]:
         "POSTGRES_DB": "tax_risk",
         "POSTGRES_USER": "tax_risk",
         "POSTGRES_PASSWORD": "static-test-only",
-        "DATABASE_URL": (
+        "POSTGRES_APP_USER": "tax_risk_app",
+        "POSTGRES_APP_PASSWORD": "static-app-test-only",
+        "MIGRATION_DATABASE_URL": (
             "postgresql+psycopg://tax_risk:static-test-only@postgres:5432/tax_risk"
         ),
+        "DATABASE_URL": (
+            "postgresql+psycopg://tax_risk_app:static-app-test-only@postgres:5432/tax_risk"
+        ),
         "REDIS_URL": "redis://redis:6379/0",
+        "EXPORT_DOWNLOAD_SECRET": "static-export-signing-secret-at-least-32-chars",
+        "WORKER_SCOPE_SECRET": "static-worker-signing-secret-at-least-32-chars",
     }
     result = subprocess.run(
         [
@@ -116,10 +135,10 @@ def test_application_services_use_immutable_images_without_source_mounts() -> No
     services = _compose_config()["services"]
 
     backend_images = {
-        services[name]["image"] for name in ("migrate", "api", "worker-quarterly")
+        services[name]["image"] for name in ("migrate", "api", *WORKER_SERVICES)
     }
     assert len(backend_images) == 1
-    for name in ("migrate", "api", "worker-quarterly", "web"):
+    for name in ("migrate", "api", *WORKER_SERVICES, "web"):
         assert not services[name].get("volumes")
     for service in services.values():
         assert all(mount["type"] != "bind" for mount in service.get("volumes", []))
@@ -135,21 +154,72 @@ def test_long_lived_services_are_healthy_and_start_in_dependency_order() -> None
         assert services[name].get("healthcheck"), name
 
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert services["migrate"]["depends_on"]["database-roles"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert services["database-roles"]["depends_on"]["postgres"]["condition"] == (
+        "service_healthy"
+    )
     assert services["api"]["depends_on"]["migrate"]["condition"] == (
         "service_completed_successfully"
     )
     assert services["api"]["depends_on"]["redis"]["condition"] == "service_healthy"
-    assert services["worker-quarterly"]["depends_on"]["migrate"]["condition"] == (
-        "service_completed_successfully"
-    )
-    assert services["worker-quarterly"]["depends_on"]["redis"]["condition"] == (
-        "service_healthy"
-    )
+    for worker in WORKER_SERVICES:
+        assert services[worker]["depends_on"]["migrate"]["condition"] == (
+            "service_completed_successfully"
+        )
+        assert services[worker]["depends_on"]["redis"]["condition"] == (
+            "service_healthy"
+        )
     assert services["web"]["depends_on"]["api"]["condition"] == "service_healthy"
 
     assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
     assert "--queues=quarterly" in services["worker-quarterly"]["command"]
+    assert "--queues=business-entertainment" in services[
+        "worker-business-entertainment"
+    ]["command"]
+    assert "--queues=monthly-semantic" in services["worker-monthly-semantic"]["command"]
+    assert "--queues=exports" in services["worker-exports"]["command"]
     assert all("sleep" not in json.dumps(service.get("command", "")) for service in services.values())
+
+
+def test_migrations_and_runtime_use_separate_database_roles() -> None:
+    services = _compose_config()["services"]
+
+    migration_url = services["migrate"]["environment"]["DATABASE_URL"]
+    api_url = services["api"]["environment"]["DATABASE_URL"]
+    worker_urls = {
+        services[name]["environment"]["DATABASE_URL"] for name in WORKER_SERVICES
+    }
+    role_environment = services["database-roles"]["environment"]
+
+    assert urlsplit(migration_url).username == "tax_risk"
+    assert urlsplit(api_url).username == "tax_risk_app"
+    assert worker_urls == {api_url}
+    assert role_environment["POSTGRES_APP_USER"] == "tax_risk_app"
+    assert role_environment["PGUSER"] == "tax_risk"
+
+
+def test_runtime_signing_secrets_are_injected_only_into_backend_services() -> None:
+    services = _compose_config()["services"]
+    backend_names = {"api", *WORKER_SERVICES}
+
+    for name in backend_names:
+        environment = services[name]["environment"]
+        assert environment["EXPORT_DOWNLOAD_SECRET"].startswith("static-export")
+        assert environment["WORKER_SCOPE_SECRET"].startswith("static-worker")
+    assert "EXPORT_DOWNLOAD_SECRET" not in services["web"]["environment"]
+    assert "WORKER_SCOPE_SECRET" not in services["web"]["environment"]
+
+
+def test_database_role_bootstrap_cannot_create_a_bypass_runtime_identity() -> None:
+    script = ROLE_BOOTSTRAP.read_text()
+
+    assert '"${PGUSER}" == "${POSTGRES_APP_USER}"' in script
+    assert "NOSUPERUSER" in script
+    assert "NOBYPASSRLS" in script
+    assert "NOINHERIT" in script
+    assert "ALTER DEFAULT PRIVILEGES" in script
 
 
 def test_host_ports_are_loopback_only() -> None:

@@ -25,7 +25,7 @@ def _manifest(**overrides: object) -> ReleaseManifest:
         "candidate_version": "2026.07.13-rc1",
         "application_image_digest": f"sha256:{'a' * 64}",
         "git_commit": "b" * 40,
-        "migration_head": "0016_release_manifests",
+        "migration_head": "0017_strict_rls_runtime",
         "artifacts": _artifacts(),
         "created_at": datetime(2026, 7, 13, 8, tzinfo=timezone.utc),
     }
@@ -38,7 +38,7 @@ def test_manifest_is_canonical_and_hashes_every_governed_artifact() -> None:
 
     assert manifest.canonical_bytes() == _manifest().canonical_bytes()
     assert len(manifest.manifest_sha256) == 64
-    assert b'"migration_head":"0016_release_manifests"' in manifest.canonical_bytes()
+    assert b'"migration_head":"0017_strict_rls_runtime"' in manifest.canonical_bytes()
     assert b'"rule_package_sha256":"' in manifest.canonical_bytes()
 
 
@@ -47,7 +47,7 @@ def test_changing_any_artifact_or_migration_head_changes_manifest_hash() -> None
     changed_artifact = _manifest(
         artifacts=_artifacts(rule_package_sha256="f" * 64)
     )
-    changed_migration = _manifest(migration_head="0017_unapproved")
+    changed_migration = _manifest(migration_head="0018_unapproved")
 
     assert changed_artifact.manifest_sha256 != original.manifest_sha256
     assert changed_migration.manifest_sha256 != original.manifest_sha256

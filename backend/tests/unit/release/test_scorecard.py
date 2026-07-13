@@ -2,6 +2,7 @@ from tax_risk.release.scorecard import (
     AcceptanceMetrics,
     EvidenceReference,
     ProductionScorecard,
+    _evidence_reference,
 )
 
 
@@ -73,3 +74,12 @@ def test_missing_evidence_or_failed_metric_never_reports_production_ready() -> N
         "MISSING_APPROVAL_OPERATIONS_OWNER",
     }
 
+
+def test_generated_evidence_reference_is_repository_portable(tmp_path) -> None:
+    evidence_path = tmp_path / "artifacts" / "acceptance" / "phase-4" / "security.json"
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_text("{}\n", encoding="utf-8")
+
+    reference = _evidence_reference(evidence_path)
+
+    assert reference.reference == "artifacts/acceptance/phase-4/security.json"

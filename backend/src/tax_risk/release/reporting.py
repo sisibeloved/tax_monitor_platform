@@ -293,7 +293,7 @@ def write_ci_release_evidence(output_dir: Path, repository_root: Path) -> None:
             f"sha256:{sha256(b'tax-risk-phase-4-local-image').hexdigest()}",
         ),
         git_commit=_git_commit(repository_root),
-        migration_head="0016_release_manifests",
+        migration_head="0017_strict_rls_runtime",
         artifacts=ReleaseArtifacts(
             rule_package_sha256=_hash_paths(
                 repository_root,

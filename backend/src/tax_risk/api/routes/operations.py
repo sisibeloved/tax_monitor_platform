@@ -121,60 +121,19 @@ def get_operations_summary(
         coverage_ratio = (
             float(coverage[1] or 0) / coverage_total if coverage_total else None
         )
-        latest_snapshot = uow.session.scalar(
-            select(SnapshotSet)
+        latest_snapshot_published_at = uow.session.scalar(
+            select(SnapshotSet.published_at)
             .where(SnapshotSet.status == SnapshotSetStatus.PUBLISHED)
             .order_by(SnapshotSet.published_at.desc())
             .limit(1)
         )
-
-    deadline = (
-        latest_snapshot.published_at + timedelta(hours=48)
-        if latest_snapshot is not None and latest_snapshot.published_at is not None
-        else None
-    )
-    latest_output_ready = bool(runs and runs[0].output_ready_at is not None)
-    delivery_status = _delivery_status(now, deadline, latest_output_ready)
-    registry = cast(MetricRegistry, request.app.state.metrics_registry)
-    if coverage_ratio is not None:
-        registry.metric("tax_risk_link_coverage_ratio").set(
-            {"source_pair": "BUSINESS_DOCUMENT_SAP"},
-            coverage_ratio,
+        latest_output_ready = bool(runs and runs[0].output_ready_at is not None)
+        output_ready_timestamps = tuple(
+            (run.run_type.value, run.output_ready_at.timestamp())
+            for run in runs
+            if run.output_ready_at is not None
         )
-    registry.metric("tax_risk_evidence_backlog").set(
-        {"monitor_type": "ALL"},
-        float(evidence_backlog),
-    )
-    if latest_snapshot is not None and latest_snapshot.published_at is not None:
-        registry.metric("tax_risk_data_source_ready").set(
-            {"source": "SNAPSHOT_SET"},
-            1.0,
-        )
-        for run_type in ("QUARTERLY", "MONTHLY_SEMANTIC"):
-            registry.metric("tax_risk_data_ready_timestamp_seconds").set(
-                {"run_type": run_type},
-                latest_snapshot.published_at.timestamp(),
-            )
-    for run in runs:
-        if run.output_ready_at is not None:
-            registry.metric("tax_risk_output_ready_timestamp_seconds").set(
-                {"run_type": run.run_type.value, "scope": "BATCH"},
-                run.output_ready_at.timestamp(),
-            )
-    return {
-        "generated_at": now.isoformat(),
-        "t_plus_2_deadline": deadline.isoformat() if deadline is not None else None,
-        "delivery_status": delivery_status,
-        "can_retry": True,
-        "counters": {
-            "data_errors": int(data_errors),
-            "technical_failures": int(technical_failures),
-            "tax_risks": int(tax_risks),
-            "provider_failures": int(provider_failures),
-            "evidence_backlog": int(evidence_backlog),
-        },
-        "link_coverage_ratio": coverage_ratio,
-        "runs": [
+        run_payloads: list[dict[str, object]] = [
             {
                 "run_id": str(run.id),
                 "run_type": run.run_type.value,
@@ -192,7 +151,53 @@ def get_operations_summary(
                 "company_counts": counts_by_run[run.id],
             }
             for run in runs
-        ],
+        ]
+
+    deadline = (
+        latest_snapshot_published_at + timedelta(hours=48)
+        if latest_snapshot_published_at is not None
+        else None
+    )
+    delivery_status = _delivery_status(now, deadline, latest_output_ready)
+    registry = cast(MetricRegistry, request.app.state.metrics_registry)
+    if coverage_ratio is not None:
+        registry.metric("tax_risk_link_coverage_ratio").set(
+            {"source_pair": "BUSINESS_DOCUMENT_SAP"},
+            coverage_ratio,
+        )
+    registry.metric("tax_risk_evidence_backlog").set(
+        {"monitor_type": "ALL"},
+        float(evidence_backlog),
+    )
+    if latest_snapshot_published_at is not None:
+        registry.metric("tax_risk_data_source_ready").set(
+            {"source": "SNAPSHOT_SET"},
+            1.0,
+        )
+        for run_type in ("QUARTERLY", "MONTHLY_SEMANTIC"):
+            registry.metric("tax_risk_data_ready_timestamp_seconds").set(
+                {"run_type": run_type},
+                latest_snapshot_published_at.timestamp(),
+            )
+    for run_type, output_ready_timestamp in output_ready_timestamps:
+        registry.metric("tax_risk_output_ready_timestamp_seconds").set(
+            {"run_type": run_type, "scope": "BATCH"},
+            output_ready_timestamp,
+        )
+    return {
+        "generated_at": now.isoformat(),
+        "t_plus_2_deadline": deadline.isoformat() if deadline is not None else None,
+        "delivery_status": delivery_status,
+        "can_retry": True,
+        "counters": {
+            "data_errors": int(data_errors),
+            "technical_failures": int(technical_failures),
+            "tax_risks": int(tax_risks),
+            "provider_failures": int(provider_failures),
+            "evidence_backlog": int(evidence_backlog),
+        },
+        "link_coverage_ratio": coverage_ratio,
+        "runs": run_payloads,
     }
 
 

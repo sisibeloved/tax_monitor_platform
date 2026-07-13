@@ -109,7 +109,7 @@ def _drop_owned_schema(base_url: URL, schema_name: str) -> None:
 
 @pytest.fixture(scope="session")
 def isolated_database_url() -> Iterator[str]:
-    base_url = make_url(Settings().database_url)
+    base_url = make_url(os.environ.get("TEST_DATABASE_URL", Settings().database_url))
     schema_name = f"tax_risk_pytest_{uuid4().hex}"
     _create_owned_schema(base_url, schema_name)
     database_url = _isolated_schema_url(base_url, schema_name)
@@ -127,3 +127,55 @@ def engine(isolated_database_url: str) -> Iterator[Engine]:
         yield database_engine
     finally:
         database_engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def rls_database_url(isolated_database_url: str) -> Iterator[str]:
+    """Connect as a real application role that cannot bypass row-level security."""
+
+    role_name = f"tax_risk_app_test_{uuid4().hex}"
+    password = uuid4().hex + uuid4().hex
+    admin_engine = create_engine(isolated_database_url, poolclass=NullPool)
+    with admin_engine.begin() as connection:
+        schema_name = connection.execute(text("SELECT current_schema()")).scalar_one()
+        _validate_pytest_schema_name(schema_name)
+        preparer = connection.dialect.identifier_preparer
+        quoted_role = preparer.quote(role_name)
+        quoted_schema = preparer.quote(schema_name)
+        connection.exec_driver_sql(
+            f"CREATE ROLE {quoted_role} LOGIN PASSWORD '{password}' "
+            "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+        )
+        connection.exec_driver_sql(f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_role}")
+        connection.exec_driver_sql(
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "
+            f"{quoted_schema} TO {quoted_role}"
+        )
+        connection.exec_driver_sql(
+            f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {quoted_schema} "
+            f"TO {quoted_role}"
+        )
+        connection.exec_driver_sql(
+            f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {quoted_schema} TO {quoted_role}"
+        )
+
+    role_url = make_url(isolated_database_url).set(
+        username=role_name,
+        password=password,
+    )
+    try:
+        yield role_url.render_as_string(hide_password=False)
+    finally:
+        with admin_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE usename = :role_name AND pid <> pg_backend_pid()"
+                ),
+                {"role_name": role_name},
+            )
+            preparer = connection.dialect.identifier_preparer
+            quoted_role = preparer.quote(role_name)
+            connection.exec_driver_sql(f"DROP OWNED BY {quoted_role}")
+            connection.exec_driver_sql(f"DROP ROLE {quoted_role}")
+        admin_engine.dispose()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from datetime import date, datetime, timezone
 from typing import Protocol
 from uuid import UUID
@@ -22,6 +23,13 @@ from tax_risk.domain.task_runs import (
     is_retryable_error,
 )
 from tax_risk.observability.metrics import record_company_task
+from tax_risk.security.context import principal_context
+from tax_risk.security.service_scope import (
+    ServiceScopeTokenError,
+    issue_service_scope_token,
+    service_principal,
+    verify_service_scope_token,
+)
 
 BUSINESS_ENTERTAINMENT_QUEUE = "business-entertainment"
 RUN_COMPANY_TASK = "tax_risk.workers.business_entertainment.run_company_monthly"
@@ -76,6 +84,8 @@ def register_business_entertainment_tasks(
         prompt_version_id: str,
         case_library_version_id: str,
         account_dictionary_version_id: str,
+        company_id: str | None = None,
+        scope_token: str | None = None,
     ) -> dict[str, object]:
         task_id = str(task.request.id or "")
         if not task_id:
@@ -96,7 +106,14 @@ def register_business_entertainment_tasks(
                 case_library_version_id=case_library_version_id,
                 account_dictionary_version_id=account_dictionary_version_id,
             )
-            outcome = service_factory().run_company(request, task_id=task_id)
+            with _task_scope_context(
+                app,
+                scope_token,
+                run_id=run_id,
+                company_id=company_id,
+                period_end=request.period_end,
+            ):
+                outcome = service_factory().run_company(request, task_id=task_id)
             _record_outcome(outcome)
             return _attach_task_contract(
                 outcome,
@@ -124,6 +141,25 @@ def register_business_entertainment_tasks(
             )
             _record_outcome(outcome)
             assert request is not None
+            return _attach_task_contract(
+                outcome,
+                request=request,
+                started_at=started_at,
+                retry_count=task.request.retries,
+            )
+        except ServiceScopeTokenError:
+            outcome = _failed_outcome(
+                request=request,
+                raw_run_id=run_id,
+                company_code=company_code,
+                task_id=task_id,
+                error_code="WORKER_SCOPE_TOKEN_INVALID",
+                retryable=False,
+                status="BLOCKED",
+            )
+            _record_outcome(outcome)
+            if request is None:
+                return outcome
             return _attach_task_contract(
                 outcome,
                 request=request,
@@ -169,6 +205,57 @@ def register_business_entertainment_tasks(
             )
 
 
+def build_business_entertainment_task_kwargs(
+    request: BusinessEntertainmentRunRequest,
+    *,
+    company_id: UUID,
+    worker_scope_secret: str,
+) -> dict[str, str]:
+    """Build the only production-safe payload for the legacy dedicated worker."""
+
+    payload = request.to_task_kwargs()
+    payload.update(
+        {
+            "company_id": str(company_id),
+            "scope_token": issue_service_scope_token(
+                secret=worker_scope_secret,
+                queue=BUSINESS_ENTERTAINMENT_QUEUE,
+                run_type="BUSINESS_ENTERTAINMENT",
+                batch_id=str(request.run_id),
+                company_ids=frozenset({company_id}),
+                period=request.period_end,
+            ),
+        }
+    )
+    return payload
+
+
+def _task_scope_context(
+    app: Celery,
+    token: str | None,
+    *,
+    run_id: str,
+    company_id: str | None,
+    period_end: date,
+) -> AbstractContextManager[object]:
+    if token is None:
+        if str(app.conf.runtime_environment) == "production":
+            raise ServiceScopeTokenError("signed service scope token is required in production")
+        return nullcontext()
+    if company_id is None:
+        raise ServiceScopeTokenError("company id is required for a signed task")
+    scope = verify_service_scope_token(
+        token,
+        secret=str(app.conf.worker_scope_secret),
+        expected_queue=BUSINESS_ENTERTAINMENT_QUEUE,
+        expected_run_type="BUSINESS_ENTERTAINMENT",
+        expected_batch_id=run_id,
+    )
+    if scope.company_ids != frozenset({UUID(company_id)}) or scope.period != period_end:
+        raise ServiceScopeTokenError("business entertainment task does not match its signed scope")
+    return principal_context(service_principal(scope))
+
+
 def _failed_outcome(
     *,
     request: BusinessEntertainmentRunRequest | None,
@@ -212,9 +299,7 @@ def _attach_task_contract(
         retry_count=retry_count,
         started_at=started_at,
         finished_at=finished_at,
-        company_output_ready_at=(
-            finished_at if status == TaskTerminalStatus.SUCCEEDED else None
-        ),
+        company_output_ready_at=(finished_at if status == TaskTerminalStatus.SUCCEEDED else None),
         error_code=error_code,
         retryable=is_retryable_error(error_code),
     )
@@ -230,17 +315,14 @@ def _record_outcome(outcome: dict[str, object]) -> None:
         run_type="MONTHLY_SEMANTIC",
         monitor_type="BUSINESS_ENTERTAINMENT",
         status=str(outcome.get("status", "FAILED")),
-        error_code=(
-            str(outcome["error_code"])
-            if outcome.get("error_code") is not None
-            else None
-        ),
+        error_code=(str(outcome["error_code"]) if outcome.get("error_code") is not None else None),
     )
 
 
 __all__ = [
     "BUSINESS_ENTERTAINMENT_QUEUE",
     "RUN_COMPANY_TASK",
+    "build_business_entertainment_task_kwargs",
     "default_business_entertainment_service_factory",
     "register_business_entertainment_tasks",
 ]

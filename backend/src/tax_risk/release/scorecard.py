@@ -144,8 +144,18 @@ class ProductionScorecard:
 
 
 def _evidence_reference(path: Path) -> EvidenceReference:
+    resolved = path.resolve()
+    artifact_root = next(
+        (parent for parent in (resolved, *resolved.parents) if parent.name == "artifacts"),
+        None,
+    )
+    reference = (
+        resolved.relative_to(artifact_root.parent).as_posix()
+        if artifact_root is not None
+        else path.name
+    )
     return EvidenceReference(
-        reference=str(path),
+        reference=reference,
         sha256=sha256(path.read_bytes()).hexdigest(),
         verified=True,
     )
