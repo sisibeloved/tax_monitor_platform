@@ -1,50 +1,50 @@
-# Phase 3 Welfare and Donation Agents Implementation Plan
+# 阶段 3 福利费与公益性捐赠 Agent 实施计划
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **面向 Agent 工作单元：** 必须使用 superpowers:subagent-driven-development（如可使用子 Agent）或 superpowers:executing-plans 来实施本计划。各步骤使用复选框（`- [ ]`）语法跟踪。
 
-**Goal:** Add deterministic company-scope gates and SAP-voucher semantic Agents for welfare expenses and public-welfare donations, producing evidence-backed account suggestions and human-reviewable risk cases without expanding the approved company scope or posting entries.
+**目标：** 为福利费和公益性捐赠增加确定性公司范围门禁及 SAP 凭证语义 Agent，在不扩大已批准公司范围、不自动过账凭证的前提下，生成有证据支撑的科目建议及可供人工复核的风险事项。
 
-**Architecture:** Extend the Phase 1 modular monolith and reuse Phase 2's provider-neutral semantic contracts, PUBLISHED SnapshotSet projections, structured model client, evidence validation, risk-case service, and risk UI. A shared SAP-voucher monitor owns orchestration; welfare and donation supply only their deterministic scope formula, allowed semantic labels, prompt policy, and candidate-account mapping. Both monitors use snapshot-bound SAP voucher lines as the sole canonical record and never enter Phase 2's unlinked OA/Hesi business-document path.
+**架构：** 扩展阶段 1 的模块化单体应用，并复用阶段 2 的供应商中立语义契约、PUBLISHED SnapshotSet 投影、结构化模型客户端、证据校验、风险事项服务及风险界面。由共享 SAP 凭证监测器负责整体编排；福利费和公益性捐赠仅分别提供确定性范围公式、允许的语义标签、提示词策略及候选科目映射。两项监测均以绑定快照的 SAP 凭证明细作为唯一规范记录，绝不进入阶段 2 的未关联 OA/合思业务单据路径。
 
-**Tech Stack:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy/Alembic, PostgreSQL, Celery/Redis, pytest/Hypothesis, React/TypeScript/Vite/Ant Design/TanStack Query, Vitest/Playwright.
+**技术栈：** Python 3.12、FastAPI、Pydantic v2、SQLAlchemy/Alembic、PostgreSQL、Celery/Redis、pytest/Hypothesis、React/TypeScript/Vite/Ant Design/TanStack Query、Vitest/Playwright。
 
 ---
 
-## File Structure Locked by This Plan
+## 本计划锁定的文件结构
 
 ```text
 backend/src/tax_risk/
   domain/
-    cases.py                               # Extend Phase 1 MonitorType only
-    semantic/contracts.py                  # Reuse Phase 2 strict evidence/detection schemas
-    semantic/limited_scope.py              # Shared deterministic ratio-limit scope decision
-    semantic/account_dictionary.py         # Extend Phase 2's authoritative immutable dictionary
-    semantic/sap_voucher.py                # Extend shared account-family enum only
+    cases.py                               # 仅扩展阶段 1 的 MonitorType
+    semantic/contracts.py                  # 复用阶段 2 的严格证据/监测结果模式
+    semantic/limited_scope.py              # 共享的确定性比例限额范围判定
+    semantic/account_dictionary.py         # 扩展阶段 2 的权威不可变字典
+    semantic/sap_voucher.py                # 仅扩展共享科目类别枚举
   application/
-    monthly_semantic_runs.py               # Freeze authorized snapshot/version inputs before enqueue
-    semantic/model_client.py               # Reuse Phase 2 StructuredModelClient Protocol
-    semantic/evidence_review.py            # Reuse Phase 2 SAP EvidencePack builder/citation resolver
-    semantic/detection_router.py            # Reuse Phase 2 one-transaction routing unchanged
-    semantic/sap_voucher_agent.py           # Shared evidence-constrained structured classifier
-    semantic/sap_voucher_monitor.py         # Shared scope -> SAP lines -> detection -> case flow
-    welfare/policy.py                       # Welfare prompt, labels, scope rate, signals
-    welfare/service.py                      # Welfare monitor factory only
-    donation/policy.py                      # Donation prompt, labels, scope rate, signals
-    donation/service.py                     # Donation monitor factory only
-  adapters/ingest/sap_expense.py            # Map welfare/donation datasets to shared observations
+    monthly_semantic_runs.py               # 入队前冻结已授权的快照/版本输入
+    semantic/model_client.py               # 复用阶段 2 的 StructuredModelClient Protocol
+    semantic/evidence_review.py            # 复用阶段 2 的 SAP EvidencePack 构建器/引用解析器
+    semantic/detection_router.py            # 原样复用阶段 2 的单事务路由
+    semantic/sap_voucher_agent.py           # 共享的证据约束结构化分类器
+    semantic/sap_voucher_monitor.py         # 共享的范围 -> SAP 明细 -> 监测结果 -> 风险事项流程
+    welfare/policy.py                       # 福利费提示词、标签、范围比例及信号
+    welfare/service.py                      # 仅包含福利费监测器工厂
+    donation/policy.py                      # 公益性捐赠提示词、标签、范围比例及信号
+    donation/service.py                     # 仅包含公益性捐赠监测器工厂
+  adapters/ingest/sap_expense.py            # 将福利费/公益性捐赠数据集映射为共享观测记录
   persistence/
-    models.py                               # Extend Phase 1 MonitoringRun; reuse source/snapshot/case lineage
-    repositories.py                         # Add frozen-run and scoped status reads
-    semantic_models.py                      # Reuse source-only observations and immutable snapshot projections
-    semantic_repositories.py                # Add PUBLISHED SnapshotSet-bound YTD reads
-  workers/monthly_semantic.py               # Company fan-out/fan-in and failed-only retry
-  workers/celery_app.py                     # Register monthly-semantic queue/tasks
-  api/dependencies.py                       # Build MonthlySemanticRunService
-  api/routes/monthly_semantic.py            # Trigger/status endpoints for both monitors
-  api/routes/cases.py                       # Add monitor-type filters only
-  api/schemas.py                            # Add run request/response and risk fields
-  main.py                                   # Register the monthly semantic router
-backend/migrations/versions/0003_welfare_donation_agents.py
+    models.py                               # 扩展阶段 1 的 MonitoringRun；复用来源/快照/风险事项血缘
+    repositories.py                         # 增加冻结运行及范围受控的状态读取
+    semantic_models.py                      # 复用仅含来源的观测记录及不可变快照投影
+    semantic_repositories.py                # 增加绑定 PUBLISHED SnapshotSet 的本年累计读取
+  workers/monthly_semantic.py               # 公司任务扇出/扇入及仅重试失败公司
+  workers/celery_app.py                     # 注册 monthly-semantic 队列/任务
+  api/dependencies.py                       # 构建 MonthlySemanticRunService
+  api/routes/monthly_semantic.py            # 两项监测的触发/状态端点
+  api/routes/cases.py                       # 仅增加监测类型筛选
+  api/schemas.py                            # 增加运行请求/响应及风险字段
+  main.py                                   # 注册月度语义路由
+backend/migrations/versions/0011_welfare_donation_agents.py
 backend/tests/
   unit/semantic/test_limited_scope.py
   unit/semantic/test_account_dictionary.py
@@ -65,21 +65,21 @@ backend/tests/
   evaluation/test_welfare_donation_golden_governance.py
   e2e/test_phase_3_monthly_semantic_flow.py
 web/src/features/risks/
-  api.ts                                     # Reuse and add monitoring_type query
-  types.ts                                   # Extend monitor type union
-  MonitorTypeFilter.tsx                      # Welfare/donation filter options
+  api.ts                                     # 复用并增加 monitoring_type 查询
+  types.ts                                   # 扩展监测类型联合类型
+  MonitorTypeFilter.tsx                      # 福利费/公益性捐赠筛选选项
   MonitorTypeFilter.test.tsx
-  RiskListPage.tsx                           # Reuse existing list and workflow actions
-  RiskDetailPage.tsx                         # Show SAP evidence and suggested account
+  RiskListPage.tsx                           # 复用现有清单及流程操作
+  RiskDetailPage.tsx                         # 展示 SAP 证据及建议科目
 web/e2e/phase-3-welfare-donation.spec.ts
 ```
 
-## Authoritative Preconditions
+## 权威前置条件
 
-- Phase 1 is green and has frozen snapshot, SAP voucher, Decimal, case fingerprint, batch, API, and UI contracts.
-- Phase 2 is green and provides:
-  - `backend/src/tax_risk/domain/semantic/contracts.py` with strict `EvidenceRef`, `EvidencePack`, model-only `SemanticModelJudgment`, server-owned `SemanticDetection`, `SemanticVersionSet`, semantic labels, confidence, and version fields.
-  - `backend/src/tax_risk/application/semantic/model_client.py` with:
+- 阶段 1 处于绿灯状态，并已冻结快照、SAP 凭证、Decimal、风险事项指纹、批处理、API 及界面契约。
+- 阶段 2 处于绿灯状态，并提供：
+  - `backend/src/tax_risk/domain/semantic/contracts.py`，包含严格的 `EvidenceRef`、`EvidencePack`、仅供模型输出的 `SemanticModelJudgment`、服务端所有的 `SemanticDetection`、`SemanticVersionSet`、语义标签、置信度及版本字段。
+  - `backend/src/tax_risk/application/semantic/model_client.py`，内容如下：
 
 ```python
 from typing import Protocol, TypeVar
@@ -97,25 +97,25 @@ class StructuredModelClient(Protocol):
     ) -> T: ...
 ```
 
-  - `domain/semantic/sap_voucher.py::SnapshotBoundSapExpenseVoucher`, the frozen projection DTO combining immutable observation fields with `projection_id`, `snapshot_id`, and `source_record_id`.
-  - `persistence/semantic_repositories.py::load_snapshot_bound_sap_vouchers(snapshot_set_id, account_family, company_code, period_end)`, which reads only projections created inside the atomic PUBLISHED SnapshotSet transaction.
-  - `application/semantic/evidence_review.py::build_sap_voucher_evidence_pack(view: SnapshotBoundSapExpenseVoucher, versions: SemanticVersionSet)` and `resolve_citations`, which resolve citations only against IDs present in the server-built pack.
-  - `application/semantic/detection_router.py::route_sap_detection`, which persists a detection and routes it to no case, an evidence task, or Phase 1 `CreateOrUpdateRisk` in one transaction.
-  - SAP-line risk fingerprints, the authoritative candidate-account dictionary, and persisted `account_dictionary_version` on every semantic detection.
-- If any frozen Phase 1/2 symbol or persistence table named above is missing, stop and finish the upstream phase first; do not rename it locally or add a second contract, client, evidence model, account dictionary, SAP observation, case service, or risk page.
+  - `domain/semantic/sap_voucher.py::SnapshotBoundSapExpenseVoucher`：冻结投影 DTO，将不可变观测字段与 `projection_id`、`snapshot_id` 及 `source_record_id` 组合。
+  - `persistence/semantic_repositories.py::load_snapshot_bound_sap_vouchers(snapshot_set_id, account_family, company_code, period_end)`：仅读取在 PUBLISHED SnapshotSet 原子事务中创建的投影。
+  - `application/semantic/evidence_review.py::build_sap_voucher_evidence_pack(view: SnapshotBoundSapExpenseVoucher, versions: SemanticVersionSet)` 及 `resolve_citations`：引用只能解析到服务端构建的证据包中已有的 ID。
+  - `application/semantic/detection_router.py::route_sap_detection`：在同一事务中持久化监测结果，并将其路由为不创建风险事项、创建补充证据任务，或调用阶段 1 的 `CreateOrUpdateRisk`。
+  - SAP 明细风险指纹、权威候选科目字典，以及每条语义监测结果上持久化的 `account_dictionary_version`。
+- 如果上述任一已冻结的阶段 1/2 符号或持久化表缺失，应停止并先完成上游阶段；不得在本阶段局部重命名，也不得增加第二套契约、客户端、证据模型、科目字典、SAP 观测记录、风险事项服务或风险页面。
 
-**Execution rules:** Follow @superpowers:test-driven-development for every behavior, @superpowers:verification-before-completion before each chunk handoff, and commit only after the focused checks named below pass.
+**执行规则：** 每项行为均遵循 @superpowers:test-driven-development，每个工作块移交前均遵循 @superpowers:verification-before-completion，并且只有在下列指定聚焦检查通过后才能提交。
 
-## Chunk 1: Welfare and Donation SAP-Voucher Monitoring
+## 工作块 1：福利费与公益性捐赠 SAP 凭证监测
 
-### Task 1: Implement deterministic company-scope gates
+### 任务 1：实现确定性公司范围门禁
 
-**Files:**
-- Create: `backend/src/tax_risk/domain/semantic/limited_scope.py`
-- Modify: `backend/src/tax_risk/domain/cases.py`
-- Test: `backend/tests/unit/semantic/test_limited_scope.py`
+**文件：**
+- 新建：`backend/src/tax_risk/domain/semantic/limited_scope.py`
+- 修改：`backend/src/tax_risk/domain/cases.py`
+- 测试：`backend/tests/unit/semantic/test_limited_scope.py`
 
-- [ ] **Step 1: Write failing scope tests before production code**
+- [ ] **步骤 1：先于生产代码编写预期失败的范围测试**
 
 ```python
 # backend/tests/unit/semantic/test_limited_scope.py
@@ -175,13 +175,13 @@ def test_phase_3_monitor_types_are_explicit() -> None:
     assert MonitorType.DONATION.value == "DONATION"
 ```
 
-- [ ] **Step 2: Run the tests and verify the red state**
+- [ ] **步骤 2：运行测试并确认红灯状态**
 
-Run: `cd backend && pytest tests/unit/semantic/test_limited_scope.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_limited_scope.py -q`
 
-Expected: FAIL because `limited_scope` and the two monitor enum members do not exist.
+预期：失败，因为 `limited_scope` 及两个监测枚举成员尚不存在。
 
-- [ ] **Step 3: Implement the shared Decimal scope decision**
+- [ ] **步骤 3：实现共享 Decimal 范围判定**
 
 ```python
 # backend/src/tax_risk/domain/semantic/limited_scope.py
@@ -228,35 +228,35 @@ def evaluate_scope(value: ScopeInput) -> ScopeDecision:
     )
 ```
 
-Add exactly these enum members to the existing Phase 1/2 `MonitorType`; do not replace existing values:
+将以下枚举成员准确添加到阶段 1/2 现有的 `MonitorType` 中；不得替换现有值：
 
 ```python
 WELFARE = "WELFARE"
 DONATION = "DONATION"
 ```
 
-- [ ] **Step 4: Run scope tests and the frozen quarterly regression suite**
+- [ ] **步骤 4：运行范围测试及已冻结的季度回归测试套件**
 
-Run: `cd backend && pytest tests/unit/semantic/test_limited_scope.py tests/unit/domain/test_quarterly_*.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_limited_scope.py tests/unit/domain/test_quarterly_*.py -q`
 
-Expected: PASS; exact 14%/12% equality is excluded, negative profit follows the approved formula, missing values never become zero, and quarterly tests remain green.
+预期：通过；精确等于 14%/12% 时不纳入范围，利润为负时遵循已批准公式，缺失值绝不转为零，且季度测试保持绿灯。
 
-- [ ] **Step 5: Commit the deterministic gates**
+- [ ] **步骤 5：提交确定性门禁**
 
 ```bash
 git add backend/src/tax_risk/domain/cases.py backend/src/tax_risk/domain/semantic/limited_scope.py backend/tests/unit/semantic/test_limited_scope.py
 git commit -m "feat(semantic): add welfare and donation scope gates"
 ```
 
-### Task 2: Extend the Phase 2 candidate-account dictionary
+### 任务 2：扩展阶段 2 候选科目字典
 
-**Files:**
-- Modify: `backend/src/tax_risk/domain/semantic/account_dictionary.py`
-- Modify: `backend/src/tax_risk/domain/semantic/contracts.py`
-- Test: `backend/tests/unit/semantic/test_account_dictionary.py`
-- Test: `backend/tests/unit/semantic/test_contract_separation.py`
+**文件：**
+- 修改：`backend/src/tax_risk/domain/semantic/account_dictionary.py`
+- 修改：`backend/src/tax_risk/domain/semantic/contracts.py`
+- 测试：`backend/tests/unit/semantic/test_account_dictionary.py`
+- 测试：`backend/tests/unit/semantic/test_contract_separation.py`
 
-- [ ] **Step 1: Write failing dictionary tests**
+- [ ] **步骤 1：编写预期失败的字典测试**
 
 ```python
 # backend/tests/unit/semantic/test_account_dictionary.py
@@ -292,18 +292,18 @@ def test_dictionary_entries_cannot_mutate_without_a_new_version() -> None:
         DEFAULT_ACCOUNT_DICTIONARY.entries[(MonitorType.WELFARE, "SPONSORSHIP")] = ()
 ```
 
-- [ ] **Step 2: Run the dictionary tests and verify failure**
+- [ ] **步骤 2：运行字典测试并确认失败**
 
-Run: `cd backend && pytest tests/unit/semantic/test_account_dictionary.py tests/unit/semantic/test_contract_separation.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_account_dictionary.py tests/unit/semantic/test_contract_separation.py -q`
 
-Expected: FAIL because the two new monitor/label combinations are not yet present in the Phase 2 dictionary/contracts.
+预期：失败，因为两个新的监测/标签组合尚未加入阶段 2 字典/契约。
 
-- [ ] **Step 3: Implement immutable, versioned account categories**
+- [ ] **步骤 3：实现不可变、版本化的科目类别**
 
 ```python
-# Add these entries to the existing authoritative MappingProxyType literal in
-# backend/src/tax_risk/domain/semantic/account_dictionary.py; retain every
-# Phase 2 entry and its existing CandidateAccount/CandidateAccountDictionary types.
+# 将这些条目添加到以下文件现有的权威 MappingProxyType 字面量中：
+# backend/src/tax_risk/domain/semantic/account_dictionary.py；保留所有
+# 阶段 2 条目及其现有 CandidateAccount/CandidateAccountDictionary 类型。
 from types import MappingProxyType
 
 from tax_risk.domain.cases import MonitorType
@@ -328,30 +328,30 @@ PHASE_3_ENTRIES = MappingProxyType({
 })
 ```
 
-Do not ship `PHASE_3_ENTRIES` as a second runtime dictionary; the snippet names the exact additions only. Merge those keys into the existing authoritative literal, retain all Phase 2 entries, set the resulting published version to `candidate-accounts-v2`, and keep the existing governance/publication model. Extend only the shared `SemanticLabel` allow-list for Phase 3. Phase 2 already requires and persists `account_dictionary_version`; Phase 3 must not add a shadow column, migration, model, repository, or in-code authority that bypasses the published dictionary. The contract test must prove a Phase 3 detection without the published dictionary version is rejected and a Phase 2 detection remains valid.
+不得将 `PHASE_3_ENTRIES` 作为第二个运行时字典交付；该代码片段仅列出需要准确新增的内容。将这些键合并到现有权威字面量中，保留阶段 2 全部条目，将最终发布版本设为 `candidate-accounts-v2`，并保持现有治理/发布模型。阶段 3 仅扩展共享 `SemanticLabel` 允许清单。阶段 2 已要求并持久化 `account_dictionary_version`；阶段 3 不得增加影子列、迁移、模型、仓储或绕过已发布字典的代码内权威来源。契约测试必须证明：不含已发布字典版本的阶段 3 监测结果会被拒绝，而阶段 2 监测结果仍然有效。
 
-- [ ] **Step 4: Run contract and dictionary tests**
+- [ ] **步骤 4：运行契约及字典测试**
 
-Run: `cd backend && pytest tests/unit/semantic/test_account_dictionary.py tests/unit/semantic/test_contract_separation.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_account_dictionary.py tests/unit/semantic/test_contract_separation.py -q`
 
-Expected: PASS; unknown labels return an empty tuple, Phase 2 entries remain present, and every new suggestion carries `candidate-accounts-v2`.
+预期：通过；未知标签返回空元组，阶段 2 条目保持存在，且每项新建议均携带 `candidate-accounts-v2`。
 
-- [ ] **Step 5: Commit the dictionary**
+- [ ] **步骤 5：提交字典**
 
 ```bash
 git add backend/src/tax_risk/domain/semantic/account_dictionary.py backend/src/tax_risk/domain/semantic/contracts.py backend/tests/unit/semantic/test_account_dictionary.py backend/tests/unit/semantic/test_contract_separation.py
 git commit -m "feat(semantic): version candidate account suggestions"
 ```
 
-### Task 3: Build one shared SAP-voucher Agent with two explicit policies
+### 任务 3：构建一个共享 SAP 凭证 Agent 及两项明确策略
 
-**Files:**
-- Create: `backend/src/tax_risk/application/semantic/sap_voucher_agent.py`
-- Create: `backend/src/tax_risk/application/welfare/policy.py`
-- Create: `backend/src/tax_risk/application/donation/policy.py`
-- Test: `backend/tests/unit/semantic/test_sap_voucher_agent.py`
+**文件：**
+- 新建：`backend/src/tax_risk/application/semantic/sap_voucher_agent.py`
+- 新建：`backend/src/tax_risk/application/welfare/policy.py`
+- 新建：`backend/src/tax_risk/application/donation/policy.py`
+- 测试：`backend/tests/unit/semantic/test_sap_voucher_agent.py`
 
-- [ ] **Step 1: Write failing structured-classification tests**
+- [ ] **步骤 1：编写预期失败的结构化分类测试**
 
 ```python
 # backend/tests/unit/semantic/test_sap_voucher_agent.py
@@ -441,13 +441,13 @@ async def test_dictionary_must_match_frozen_version_set(
         )
 ```
 
-- [ ] **Step 2: Run the Agent tests and verify failure**
+- [ ] **步骤 2：运行 Agent 测试并确认失败**
 
-Run: `cd backend && pytest tests/unit/semantic/test_sap_voucher_agent.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_sap_voucher_agent.py -q`
 
-Expected: FAIL because the shared Agent and both policies do not exist.
+预期：失败，因为共享 Agent 及两项策略尚不存在。
 
-- [ ] **Step 3: Implement both policies completely**
+- [ ] **步骤 3：完整实现两项策略**
 
 ```python
 # backend/src/tax_risk/application/welfare/policy.py
@@ -511,7 +511,7 @@ DONATION_POLICY = SapVoucherPolicy(
 )
 ```
 
-- [ ] **Step 4: Implement the shared Agent using the Phase 2 client and contracts**
+- [ ] **步骤 4：使用阶段 2 客户端及契约实现共享 Agent**
 
 ```python
 # backend/src/tax_risk/application/semantic/sap_voucher_agent.py
@@ -615,34 +615,34 @@ class SapVoucherAgent:
         )
 ```
 
-- [ ] **Step 5: Run Agent, prompt-safety, and Phase 2 semantic-contract tests**
+- [ ] **步骤 5：运行 Agent、提示词安全及阶段 2 语义契约测试**
 
-Run: `cd backend && pytest tests/unit/semantic/test_sap_voucher_agent.py tests/unit/semantic/test_prompt_safety.py tests/unit/semantic/test_contracts.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_sap_voucher_agent.py tests/unit/semantic/test_prompt_safety.py tests/unit/semantic/test_contracts.py -q`
 
-Expected: PASS; only allowed labels are accepted, evidence remains SAP-primary, and no duplicate model client or detection schema is introduced.
+预期：通过；仅接受允许的标签，SAP 仍为主要证据，且不引入重复的模型客户端或监测结果模式。
 
-- [ ] **Step 6: Commit the shared Agent and policies**
+- [ ] **步骤 6：提交共享 Agent 及策略**
 
 ```bash
 git add backend/src/tax_risk/application/semantic/sap_voucher_agent.py backend/src/tax_risk/application/welfare backend/src/tax_risk/application/donation backend/tests/unit/semantic/test_sap_voucher_agent.py
 git commit -m "feat(agents): classify welfare and donation SAP lines"
 ```
 
-### Task 4: Reuse versioned snapshots and SAP observations for complete YTD inputs
+### 任务 4：复用版本化快照及 SAP 观测记录，形成完整本年累计输入
 
-**Files:**
-- Modify: `backend/src/tax_risk/domain/semantic/sap_voucher.py`
-- Modify: `backend/src/tax_risk/adapters/ingest/sap_expense.py`
-- Modify: `backend/src/tax_risk/application/snapshots.py`
-- Modify: `backend/src/tax_risk/persistence/models.py`
-- Modify: `backend/src/tax_risk/persistence/semantic_models.py`
-- Modify: `backend/src/tax_risk/persistence/semantic_repositories.py`
-- Create: `backend/migrations/versions/0003_welfare_donation_agents.py`
-- Test: `backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py`
-- Test: `backend/tests/integration/persistence/test_monthly_semantic_repository.py`
-- Test: `backend/tests/integration/persistence/test_phase_3_schema.py`
+**文件：**
+- 修改：`backend/src/tax_risk/domain/semantic/sap_voucher.py`
+- 修改：`backend/src/tax_risk/adapters/ingest/sap_expense.py`
+- 修改：`backend/src/tax_risk/application/snapshots.py`
+- 修改：`backend/src/tax_risk/persistence/models.py`
+- 修改：`backend/src/tax_risk/persistence/semantic_models.py`
+- 修改：`backend/src/tax_risk/persistence/semantic_repositories.py`
+- 新建：`backend/migrations/versions/0011_welfare_donation_agents.py`
+- 测试：`backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py`
+- 测试：`backend/tests/integration/persistence/test_monthly_semantic_repository.py`
+- 测试：`backend/tests/integration/persistence/test_phase_3_schema.py`
 
-- [ ] **Step 1: Write failing ingestion, lineage, and repository tests**
+- [ ] **步骤 1：编写预期失败的数据采集、血缘及仓储测试**
 
 ```python
 # backend/tests/integration/persistence/test_monthly_semantic_repository.py
@@ -719,18 +719,18 @@ async def test_duplicate_scope_metric_is_rejected(
         )
 ```
 
-The ingestion test must submit Phase 1 `IngestBatch` datasets for `WELFARE_YTD`, `SALARY_YTD`, `DONATION_YTD`, `PROFIT_YTD`, `SAP_WELFARE_DETAIL`, and `SAP_DONATION_DETAIL`; validate them, then publish one SnapshotSet. Assert source normalization creates observations with `source_record_id` and no snapshot FK, while the same publication transaction creates every non-null `SapExpenseVoucherSnapshotProjection`, passes the complete quality gate, sets database-UTC `published_at`, and marks the set PUBLISHED. Prove a non-PUBLISHED set, a prior-year line, a July line, a later source batch, and another SnapshotSet are excluded. Reject projection UPDATE/DELETE, null projection FKs, and every post-publication attempt to attach an observation. The schema test must assert the migration chain, account-family values, `NOT_RUN`, semantic-version-set FK, monthly-run check constraint, and continued insertion of a Phase 1 quarterly run.
+数据采集测试必须提交阶段 1 `IngestBatch` 数据集：`WELFARE_YTD`、`SALARY_YTD`、`DONATION_YTD`、`PROFIT_YTD`、`SAP_WELFARE_DETAIL` 及 `SAP_DONATION_DETAIL`；校验这些数据集后发布一个 SnapshotSet。断言来源规范化会创建带 `source_record_id` 且不含快照外键的观测记录，同时同一发布事务会创建每个非空 `SapExpenseVoucherSnapshotProjection`、通过完整质量门禁、设置数据库 UTC `published_at`，并将集合标记为 PUBLISHED。证明非 PUBLISHED 集合、以前年度明细、7 月明细、后续来源批次及其他 SnapshotSet 均被排除。拒绝投影 UPDATE/DELETE、投影外键为空以及发布后任何挂接观测记录的尝试。模式测试必须断言迁移链、科目类别值、`NOT_RUN`、语义版本集合外键、月度运行检查约束，以及阶段 1 季度运行仍可继续插入。
 
-- [ ] **Step 2: Run the integration tests and verify the red state**
+- [ ] **步骤 2：运行集成测试并确认红灯状态**
 
-Run: `cd backend && pytest tests/integration/application/test_monthly_semantic_ingest_snapshot.py tests/integration/persistence/test_monthly_semantic_repository.py tests/integration/persistence/test_phase_3_schema.py -q`
+运行：`cd backend && pytest tests/integration/application/test_monthly_semantic_ingest_snapshot.py tests/integration/persistence/test_monthly_semantic_repository.py tests/integration/persistence/test_phase_3_schema.py -q`
 
-Expected: FAIL because the Phase 2 shared SAP observation contract does not yet accept the two Phase 3 account families and the repository methods are absent.
+预期：失败，因为阶段 2 共享 SAP 观测契约尚未接受阶段 3 的两个科目类别，且仓储方法缺失。
 
-- [ ] **Step 3: Extend the Phase 2 SAP observation authority; do not create another table**
+- [ ] **步骤 3：扩展阶段 2 SAP 观测权威来源；不得另建表**
 
 ```python
-# Extend backend/src/tax_risk/domain/semantic/sap_voucher.py
+# 扩展 backend/src/tax_risk/domain/semantic/sap_voucher.py
 from enum import StrEnum
 
 
@@ -740,7 +740,7 @@ class SapExpenseAccountFamily(StrEnum):
     DONATION = "DONATION"
 ```
 
-The existing Phase 2 `SapExpenseVoucherObservation` remains the immutable source normalization and must retain its UUID, non-null `source_record_id` FK, source key, `created_at`, signed Decimal amount, currency, posting date, current account, summary, department, payee, and reversal indicator. It must not gain a snapshot FK. Reuse Phase 2 `SapExpenseVoucherSnapshotProjection` and frozen `SnapshotBoundSapExpenseVoucher`; do not create variants. Extend the existing SAP-expense adapter's dataset-to-family map:
+阶段 2 现有的 `SapExpenseVoucherObservation` 仍作为不可变来源规范化记录，必须保留其 UUID、非空 `source_record_id` 外键、来源键、`created_at`、带符号 Decimal 金额、币种、过账日期、当前科目、摘要、部门、收款方及冲销标志。不得为其增加快照外键。复用阶段 2 的 `SapExpenseVoucherSnapshotProjection` 及已冻结的 `SnapshotBoundSapExpenseVoucher`；不得创建变体。扩展现有 SAP 费用适配器的数据集到科目类别映射：
 
 ```python
 DATASET_ACCOUNT_FAMILY = {
@@ -750,12 +750,12 @@ DATASET_ACCOUNT_FAMILY = {
 }
 ```
 
-Extend `application/snapshots.py` so the existing publication transaction resolves the new-family observations through SourceRecords, inserts their projections, validates completeness, and only then sets the SnapshotSet to PUBLISHED with database-UTC `published_at`; any failure rolls back projections and publication together. Use `backend/migrations/versions/0003_welfare_donation_agents.py` to extend the existing account-family check/enum to `WELFARE` and `DONATION` and extend the existing Phase 1 run control plane for Task 6. Add `NOT_RUN` to the per-company status enum, plus a nullable semantic-version-set FK and validated `monitoring_type` on `monitoring_run`; a database check requires both for `MONTHLY_SEMANTIC` runs while leaving quarterly rows compatible. The immutable version-set FK freezes rule, model, prompt, case-library, and account-dictionary versions as one approved bundle. Set `down_revision = "0002d_semantic_artifacts_calls"`; do not add a second run table, observation/projection table, dictionary-version column, or shadow snapshot ID.
+扩展 `application/snapshots.py`，使现有发布事务通过 SourceRecord 解析新科目类别观测记录，插入相应投影，校验完整性，之后才能以数据库 UTC `published_at` 将 SnapshotSet 设为 PUBLISHED；任何失败都必须同时回退投影及发布。使用 `backend/migrations/versions/0011_welfare_donation_agents.py` 将现有科目类别检查/枚举扩展至 `WELFARE` 和 `DONATION`，并为任务 6 扩展阶段 1 现有运行控制面。将 `NOT_RUN` 添加到按公司状态枚举中，并在 `monitoring_run` 上增加可空的语义版本集合外键及经过校验的 `monitoring_type`；数据库检查要求 `MONTHLY_SEMANTIC` 运行同时具备二者，同时保持季度运行记录兼容。不可变版本集合外键将规则、模型、提示词、案例库及科目字典版本冻结为一个已批准组合。设置 `revision = "0011_welfare_donation"`、`down_revision = "0010_semantic_artifacts"`；不得增加第二张运行表、观测/投影表、字典版本列或影子快照 ID。
 
-- [ ] **Step 4: Implement current-period scope and YTD SAP queries**
+- [ ] **步骤 4：实现本期范围及本年累计 SAP 查询**
 
 ```python
-# Add to backend/src/tax_risk/persistence/semantic_repositories.py
+# 添加到 backend/src/tax_risk/persistence/semantic_repositories.py
 from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
@@ -810,34 +810,34 @@ class MonthlySemanticRepository:
         )
 ```
 
-`_published_members` must be the same PUBLISHED-member resolver already used by Phase 2's frozen projection loader; `_source_metrics.unique_values` reads only SourceRecords reachable through that member's `SnapshotSource` rows and raises `DuplicateScopeMetric` on duplicates. Do not reproduce publication-state SQL in a second helper. For SAP detail, call the existing exact function `load_snapshot_bound_sap_vouchers(snapshot_set_id, account_family, company_code, period_end)`; its query must continue to join `SnapshotSet → SnapshotSetMember → SapExpenseVoucherSnapshotProjection → SapExpenseVoucherObservation`, require PUBLISHED with non-null `published_at`, and return `SnapshotBoundSapExpenseVoucher` ordered by posting date/voucher/line. Map `DuplicateScopeMetric` through the Phase 1 data-quality issue service to `MONTHLY_SCOPE_METRIC_DUPLICATE`; the company/monitor is `NOT_RUN` and the Agent is not invoked.
+`_published_members` 必须是阶段 2 冻结投影加载器已使用的同一个 PUBLISHED 成员解析器；`_source_metrics.unique_values` 仅读取可通过该成员 `SnapshotSource` 记录访问的 SourceRecord，并在重复时抛出 `DuplicateScopeMetric`。不得在第二个辅助函数中重复实现发布状态 SQL。对于 SAP 明细，调用现有准确函数 `load_snapshot_bound_sap_vouchers(snapshot_set_id, account_family, company_code, period_end)`；其查询必须继续联接 `SnapshotSet → SnapshotSetMember → SapExpenseVoucherSnapshotProjection → SapExpenseVoucherObservation`，要求状态为 PUBLISHED 且 `published_at` 非空，并返回按过账日期/凭证/行排序的 `SnapshotBoundSapExpenseVoucher`。通过阶段 1 数据质量问题服务将 `DuplicateScopeMetric` 映射为 `MONTHLY_SCOPE_METRIC_DUPLICATE`；该公司/监测状态为 `NOT_RUN`，且不调用 Agent。
 
-- [ ] **Step 5: Apply the migration and verify the full ingestion path**
+- [ ] **步骤 5：应用迁移并验证完整数据采集路径**
 
-Run: `cd backend && alembic upgrade head && pytest tests/integration/application/test_monthly_semantic_ingest_snapshot.py tests/integration/persistence/test_monthly_semantic_repository.py tests/integration/persistence/test_phase_3_schema.py -q`
+运行：`cd backend && alembic upgrade head && pytest tests/integration/application/test_monthly_semantic_ingest_snapshot.py tests/integration/persistence/test_monthly_semantic_repository.py tests/integration/persistence/test_phase_3_schema.py -q`
 
-Expected: PASS; values come through Phase 1 lineage, missing metrics remain missing, reversals retain sign, only immutable projections in the requested PUBLISHED SnapshotSet are returned, later source changes do not affect results, and schema assertions cover `NOT_RUN` plus the monthly semantic run check/FK without changing quarterly rows.
+预期：通过；数值通过阶段 1 血缘取得，缺失指标保持缺失，冲销保留符号，仅返回请求的 PUBLISHED SnapshotSet 中的不可变投影，后续来源变更不影响结果，且模式断言覆盖 `NOT_RUN` 及月度语义运行检查/外键，不改变季度记录。
 
-- [ ] **Step 6: Commit the shared ingestion and query extension**
+- [ ] **步骤 6：提交共享数据采集及查询扩展**
 
 ```bash
-git add backend/src/tax_risk/domain/semantic/sap_voucher.py backend/src/tax_risk/adapters/ingest/sap_expense.py backend/src/tax_risk/application/snapshots.py backend/src/tax_risk/persistence/models.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0003_welfare_donation_agents.py backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py backend/tests/integration/persistence/test_monthly_semantic_repository.py backend/tests/integration/persistence/test_phase_3_schema.py
+git add backend/src/tax_risk/domain/semantic/sap_voucher.py backend/src/tax_risk/adapters/ingest/sap_expense.py backend/src/tax_risk/application/snapshots.py backend/src/tax_risk/persistence/models.py backend/src/tax_risk/persistence/semantic_models.py backend/src/tax_risk/persistence/semantic_repositories.py backend/migrations/versions/0011_welfare_donation_agents.py backend/tests/integration/application/test_monthly_semantic_ingest_snapshot.py backend/tests/integration/persistence/test_monthly_semantic_repository.py backend/tests/integration/persistence/test_phase_3_schema.py
 git commit -m "feat(sap): extend versioned expense observations"
 ```
 
-## Chunk 2: Orchestration, Cases, UI, and Release Gates
+## 工作块 2：编排、风险事项、界面及发布门禁
 
-### Task 5: Orchestrate both monitors through one service and existing cases
+### 任务 5：通过统一服务及现有风险事项编排两项监测
 
-**Files:**
-- Create: `backend/src/tax_risk/application/semantic/sap_voucher_monitor.py`
-- Create: `backend/src/tax_risk/application/welfare/service.py`
-- Create: `backend/src/tax_risk/application/donation/service.py`
-- Test: `backend/tests/unit/semantic/test_sap_voucher_monitor.py`
-- Test: `backend/tests/integration/cases/test_welfare_donation_cases.py`
-- Test: `backend/tests/integration/application/test_sap_voucher_monitor_transaction.py`
+**文件：**
+- 新建：`backend/src/tax_risk/application/semantic/sap_voucher_monitor.py`
+- 新建：`backend/src/tax_risk/application/welfare/service.py`
+- 新建：`backend/src/tax_risk/application/donation/service.py`
+- 测试：`backend/tests/unit/semantic/test_sap_voucher_monitor.py`
+- 测试：`backend/tests/integration/cases/test_welfare_donation_cases.py`
+- 测试：`backend/tests/integration/application/test_sap_voucher_monitor_transaction.py`
 
-- [ ] **Step 1: Write failing orchestration and case tests**
+- [ ] **步骤 1：编写预期失败的编排及风险事项测试**
 
 ```python
 # backend/tests/unit/semantic/test_sap_voucher_monitor.py
@@ -924,7 +924,7 @@ async def test_insufficient_evidence_routes_to_task_not_risk(
     assert await case_repository.count(monitoring_type="WELFARE") == 0
 ```
 
-The unit fake must record every repository call. Assert `get_scope_fact(...)` receives the exact `snapshot_set_id` and member `snapshot_id`; assert the frozen projection loader receives that `snapshot_set_id`, company, family, and period; assert every returned view carries the same member `snapshot_id`. The existing Task 3 non-SAP `EvidencePack` rejection test is the type boundary proving these services cannot enter the OA/Hesi unlinked path; do not invent a business-document method on the SAP repository.
+单元测试替身必须记录每次仓储调用。断言 `get_scope_fact(...)` 接收到准确的 `snapshot_set_id` 及成员 `snapshot_id`；断言冻结投影加载器接收到该 `snapshot_set_id`、公司、类别及期间；断言每个返回视图都携带同一个成员 `snapshot_id`。任务 3 现有的非 SAP `EvidencePack` 拒绝测试是类型边界，用于证明这些服务不能进入未关联 OA/合思路径；不得在 SAP 仓储上虚构业务单据方法。
 
 ```python
 # backend/tests/integration/cases/test_welfare_donation_cases.py
@@ -945,15 +945,15 @@ async def test_rerun_upserts_same_sap_line_case(monthly_runner, case_repository)
     assert cases[0].voucher_no == "510001"
 ```
 
-The transaction integration test must inject failures after DetectionRecord insertion and after Phase 1 `CreateOrUpdateRisk`. In both cases assert the shared Unit of Work rolls back detection, evidence task, risk case, review action, and audit rows together. It must also assert a reasonable judgment saves only a detection, insufficient evidence saves detection plus one evidence task, a suspicious judgment saves detection plus one SAP-fingerprinted case, and reruns/new model versions follow Phase 2 idempotency rules.
+事务集成测试必须分别在插入 DetectionRecord 后及调用阶段 1 `CreateOrUpdateRisk` 后注入失败。两种情况下均需断言共享 Unit of Work 同时回退监测结果、补充证据任务、风险事项、复核操作及审计记录。还必须断言：合理判定仅保存监测结果；证据不足时保存监测结果及一项补充证据任务；可疑判定保存监测结果及一个以 SAP 信息生成指纹的风险事项；重跑/新模型版本遵循阶段 2 幂等性规则。
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [ ] **步骤 2：运行聚焦测试并确认失败**
 
-Run: `cd backend && pytest tests/unit/semantic/test_sap_voucher_monitor.py tests/integration/cases/test_welfare_donation_cases.py tests/integration/application/test_sap_voucher_monitor_transaction.py -q`
+运行：`cd backend && pytest tests/unit/semantic/test_sap_voucher_monitor.py tests/integration/cases/test_welfare_donation_cases.py tests/integration/application/test_sap_voucher_monitor_transaction.py -q`
 
-Expected: FAIL because the shared monitor and service factories do not exist.
+预期：失败，因为共享监测器及服务工厂尚不存在。
 
-- [ ] **Step 3: Implement the generic monitor once**
+- [ ] **步骤 3：统一实现通用监测器**
 
 ```python
 # backend/src/tax_risk/application/semantic/sap_voucher_monitor.py
@@ -1075,7 +1075,7 @@ class SapVoucherMonitor:
         )
 ```
 
-- [ ] **Step 4: Implement both factories without duplicating orchestration**
+- [ ] **步骤 4：实现两个工厂且不重复编排逻辑**
 
 ```python
 # backend/src/tax_risk/application/welfare/service.py
@@ -1115,45 +1115,45 @@ def build_donation_service(
     )
 ```
 
-Do not add a new case method. `route_sap_detection` must remain the sole write path: it validates SAP fiscal year/voucher/line, fingerprints `company + SAP fiscal year + voucher + line + monitoring type`, calls Phase 1 `CreateOrUpdateRisk`, and owns one Unit-of-Work transaction. Phase 3 passes only `SAP_LINKED` detections and never calls the Phase 2 business-document merge path. Map duplicate scope metrics through the same Phase 1 data-quality issue service as `MONTHLY_SCOPE_METRIC_DUPLICATE`, with company/monitor status `NOT_RUN` and no model call.
+不得增加新的风险事项方法。`route_sap_detection` 必须保持为唯一写入路径：校验 SAP 会计年度/凭证/行，按 `公司 + SAP 会计年度 + 凭证 + 行 + 监测类型` 生成指纹，调用阶段 1 `CreateOrUpdateRisk`，并负责一个 Unit-of-Work 事务。阶段 3 仅传递 `SAP_LINKED` 监测结果，绝不调用阶段 2 业务单据合并路径。通过阶段 1 同一个数据质量问题服务，将重复范围指标映射为 `MONTHLY_SCOPE_METRIC_DUPLICATE`；公司/监测状态设为 `NOT_RUN`，且不调用模型。
 
-- [ ] **Step 5: Run orchestration, case, and Phase 2 regression tests**
+- [ ] **步骤 5：运行编排、风险事项及阶段 2 回归测试**
 
-Run: `cd backend && pytest tests/unit/semantic/test_sap_voucher_monitor.py tests/integration/cases/test_welfare_donation_cases.py tests/integration/application/test_sap_voucher_monitor_transaction.py tests/unit/business_entertainment tests/integration/business_entertainment -q`
+运行：`cd backend && pytest tests/unit/semantic/test_sap_voucher_monitor.py tests/integration/cases/test_welfare_donation_cases.py tests/integration/application/test_sap_voucher_monitor_transaction.py tests/unit/business_entertainment tests/integration/business_entertainment -q`
 
-Expected: PASS; only strictly selected companies invoke the model, all selected SAP lines are processed, reruns are idempotent, and Phase 2 two-path behavior is unchanged.
+预期：通过；仅严格纳入范围的公司调用模型，所有纳入范围的 SAP 明细均被处理，重跑具有幂等性，且阶段 2 双路径行为保持不变。
 
-- [ ] **Step 6: Commit the monitor services**
+- [ ] **步骤 6：提交监测服务**
 
 ```bash
 git add backend/src/tax_risk/application/semantic/sap_voucher_monitor.py backend/src/tax_risk/application/welfare/service.py backend/src/tax_risk/application/donation/service.py backend/tests/unit/semantic/test_sap_voucher_monitor.py backend/tests/integration/cases/test_welfare_donation_cases.py backend/tests/integration/application/test_sap_voucher_monitor_transaction.py
 git commit -m "feat(monthly): orchestrate welfare and donation risks"
 ```
 
-### Task 6: Freeze runs, execute resilient workers, and reuse secured APIs/UI
+### 任务 6：冻结运行、执行韧性工作任务并复用安全 API/界面
 
-**Files:**
-- Create: `backend/src/tax_risk/application/monthly_semantic_runs.py`
-- Create: `backend/src/tax_risk/api/routes/monthly_semantic.py`
-- Modify: `backend/src/tax_risk/api/dependencies.py`
-- Modify: `backend/src/tax_risk/api/routes/cases.py`
-- Modify: `backend/src/tax_risk/api/schemas.py`
-- Modify: `backend/src/tax_risk/main.py`
-- Modify: `backend/src/tax_risk/persistence/repositories.py`
-- Create: `backend/src/tax_risk/workers/monthly_semantic.py`
-- Modify: `backend/src/tax_risk/workers/celery_app.py`
-- Modify: `web/src/features/risks/api.ts`
-- Modify: `web/src/features/risks/types.ts`
-- Create: `web/src/features/risks/MonitorTypeFilter.tsx`
-- Create: `web/src/features/risks/MonitorTypeFilter.test.tsx`
-- Modify: `web/src/features/risks/RiskListPage.tsx`
-- Modify: `web/src/features/risks/RiskDetailPage.tsx`
-- Modify: `web/src/features/risks/RiskPages.test.tsx`
-- Test: `backend/tests/integration/api/test_monthly_semantic_routes.py`
-- Test: `backend/tests/unit/workers/test_monthly_semantic_batch.py`
-- Test: `backend/tests/integration/workers/test_monthly_semantic_batch_eager.py`
+**文件：**
+- 新建：`backend/src/tax_risk/application/monthly_semantic_runs.py`
+- 新建：`backend/src/tax_risk/api/routes/monthly_semantic.py`
+- 修改：`backend/src/tax_risk/api/dependencies.py`
+- 修改：`backend/src/tax_risk/api/routes/cases.py`
+- 修改：`backend/src/tax_risk/api/schemas.py`
+- 修改：`backend/src/tax_risk/main.py`
+- 修改：`backend/src/tax_risk/persistence/repositories.py`
+- 新建：`backend/src/tax_risk/workers/monthly_semantic.py`
+- 修改：`backend/src/tax_risk/workers/celery_app.py`
+- 修改：`web/src/features/risks/api.ts`
+- 修改：`web/src/features/risks/types.ts`
+- 新建：`web/src/features/risks/MonitorTypeFilter.tsx`
+- 新建：`web/src/features/risks/MonitorTypeFilter.test.tsx`
+- 修改：`web/src/features/risks/RiskListPage.tsx`
+- 修改：`web/src/features/risks/RiskDetailPage.tsx`
+- 修改：`web/src/features/risks/RiskPages.test.tsx`
+- 测试：`backend/tests/integration/api/test_monthly_semantic_routes.py`
+- 测试：`backend/tests/unit/workers/test_monthly_semantic_batch.py`
+- 测试：`backend/tests/integration/workers/test_monthly_semantic_batch_eager.py`
 
-- [ ] **Step 1: Write failing run-freeze, API, worker, authorization, and UI tests**
+- [ ] **步骤 1：编写预期失败的运行冻结、API、工作任务、授权及界面测试**
 
 ```python
 # backend/tests/integration/api/test_monthly_semantic_routes.py
@@ -1187,7 +1187,7 @@ def test_risk_filter_returns_only_donation(client, group_tax_headers, seeded_ris
     assert {item["monitoring_type"] for item in response.json()["items"]} == {"DONATION"}
 ```
 
-Also assert POST rejects a draft/retired semantic version set, a snapshot set for another period, duplicate or non-member companies, and a company outside the principal's organization scope. GET for an out-of-scope run returns 404. A company-finance principal may request only its allowed companies; group-tax may request all members. Verify the persisted run freezes `snapshot_set_id`, `rule_version`, `model_version`, `prompt_version`, `case_library_version`, and `account_dictionary_version` before any Celery message is sent.
+还需断言 POST 拒绝草稿/已停用语义版本集合、其他期间的快照集合、重复公司或非成员公司，以及主体组织范围外的公司。对范围外运行执行 GET 时返回 404。公司财务主体只能请求其获准公司；集团税务主体可请求全部成员。验证在发送任何 Celery 消息前，持久化运行已冻结 `snapshot_set_id`、`rule_version`、`model_version`、`prompt_version`、`case_library_version` 及 `account_dictionary_version`。
 
 ```python
 # backend/tests/unit/workers/test_monthly_semantic_batch.py
@@ -1200,7 +1200,7 @@ def test_run_key_freezes_snapshot_and_all_semantic_versions(build_monthly_canvas
     )
 ```
 
-The eager worker test must run two companies where one model call times out and one succeeds. Assert the successful company commits, statuses become `SUCCEEDED` and `FAILED`, summary becomes `1 SUCCEEDED / 1 FAILED`, and failed-company-only retry succeeds. Simulate redelivery after worker loss and assert database keys prevent duplicate detections, evidence tasks, cases, review actions, and audit rows. Assert the task reloads the run and member snapshot by ID and never accepts caller-supplied version strings.
+eager 工作任务测试必须运行两家公司，其中一次模型调用超时，另一次成功。断言成功公司完成提交，状态分别变为 `SUCCEEDED` 和 `FAILED`，汇总变为 `1 SUCCEEDED / 1 FAILED`，且仅重试失败公司后成功。模拟工作任务进程丢失后的重新投递，并断言数据库键可防止监测结果、补充证据任务、风险事项、复核操作及审计记录重复。断言任务按 ID 重新加载运行及成员快照，绝不接受调用方提供的版本字符串。
 
 ```tsx
 // web/src/features/risks/MonitorTypeFilter.test.tsx
@@ -1216,35 +1216,35 @@ it('emits the welfare monitor filter', () => {
 });
 ```
 
-Extend `RiskPages.test.tsx` before implementation. The list test must select WELFARE and DONATION and assert requests use `monitoring_type=WELFARE|DONATION`. The detail test must render company, period, SAP fiscal year/voucher/line, current account, signed amount, cited evidence, suggested accounts, confidence, all frozen versions, review state, and workflow actions for both subjects. Assert confirm/dismiss/request-evidence actions continue using the shared Phase 1 case endpoint; do not create subject-specific pages.
+实现前先扩展 `RiskPages.test.tsx`。清单测试必须选择 WELFARE 和 DONATION，并断言请求使用 `monitoring_type=WELFARE|DONATION`。详情测试必须为两个主题渲染公司、期间、SAP 会计年度/凭证/行、当前科目、带符号金额、引用证据、建议科目、置信度、全部冻结版本、复核状态及流程操作。断言确认/驳回/要求补充证据操作继续使用阶段 1 共享风险事项端点；不得创建主题专属页面。
 
-- [ ] **Step 2: Run focused tests and verify the red state**
+- [ ] **步骤 2：运行聚焦测试并确认红灯状态**
 
-Run: `cd backend && pytest tests/integration/api/test_monthly_semantic_routes.py tests/unit/workers/test_monthly_semantic_batch.py tests/integration/workers/test_monthly_semantic_batch_eager.py -q`
+运行：`cd backend && pytest tests/integration/api/test_monthly_semantic_routes.py tests/unit/workers/test_monthly_semantic_batch.py tests/integration/workers/test_monthly_semantic_batch_eager.py -q`
 
-Run: `cd web && npm test -- --run src/features/risks/MonitorTypeFilter.test.tsx src/features/risks/RiskPages.test.tsx`
+运行：`cd web && npm test -- --run src/features/risks/MonitorTypeFilter.test.tsx src/features/risks/RiskPages.test.tsx`
 
-Expected: FAIL because frozen monthly runs, worker wiring, routes, and filter behavior do not exist.
+预期：失败，因为已冻结的月度运行、工作任务接线、路由及筛选行为尚不存在。
 
-- [ ] **Step 3: Implement and persist one frozen run contract before enqueue**
+- [ ] **步骤 3：入队前实现并持久化统一的冻结运行契约**
 
-Add `MonthlySemanticRunService.create(...)`. In one transaction it must:
+添加 `MonthlySemanticRunService.create(...)`。必须在同一事务中：
 
-1. authorize every requested company;
-2. load a PUBLISHED `SnapshotSet`, require the requested `period`, and resolve one immutable member `snapshot_id` per company;
-3. load an approved/effective `SemanticVersionSet` and copy its rule, model, prompt, case-library, and account-dictionary versions into the run;
-4. persist the existing Phase 1 `MonitoringRun` plus per-company records with unique run key `MONTHLY_SEMANTIC:{period}:{snapshot_set_id}:{semantic_version_set_id}:{monitoring_type}`; and
-5. commit before dispatching the worker canvas.
+1. 授权每家请求的公司；
+2. 加载 PUBLISHED `SnapshotSet`，要求与请求的 `period` 一致，并为每家公司解析一个不可变成员 `snapshot_id`；
+3. 加载已批准且有效的 `SemanticVersionSet`，将其规则、模型、提示词、案例库及科目字典版本复制到运行；
+4. 持久化阶段 1 现有 `MonitoringRun` 及按公司记录，并使用唯一运行键 `MONTHLY_SEMANTIC:{period}:{snapshot_set_id}:{semantic_version_set_id}:{monitoring_type}`；
+5. 在分派工作任务画布前提交事务。
 
-Use the Task 4 `0003_welfare_donation_agents.py` columns on the existing control-plane tables rather than adding a second run framework. The run's immutable semantic-version-set FK is authoritative; status responses may expand it to the five human-readable versions but workers must reload the same row by ID.
+使用任务 4 `0011_welfare_donation_agents.py` 在现有控制面表中增加的列，不得添加第二套运行框架。运行的不可变语义版本集合外键是权威来源；状态响应可将其展开为五个便于阅读的版本，但工作任务必须按 ID 重新加载同一条记录。
 
-If broker dispatch fails after commit, reuse Phase 1's existing `FAILED` run status and persist `reason_code="BROKER_DISPATCH_FAILED"` in a second transaction; do not extend the status enum for transport details. GET exposes the reason, and retry dispatch reuses that run ID/key rather than creating another run. Add this case to the API integration test.
+如果提交后消息代理分派失败，复用阶段 1 现有 `FAILED` 运行状态，并在第二个事务中持久化 `reason_code="BROKER_DISPATCH_FAILED"`；不得为传输细节扩展状态枚举。GET 返回该原因，重试分派时复用此运行 ID/键，而不是创建其他运行。将该场景加入 API 集成测试。
 
-- [ ] **Step 4: Implement resilient worker orchestration after the run service exists**
+- [ ] **步骤 4：运行服务就绪后实现韧性工作任务编排**
 
-Implement `workers/monthly_semantic.py` using Phase 1's `quarterly_batch.py` group/chord conventions. One task handles one company and one frozen run, reads only IDs from its payload, reloads the run's `snapshot_set_id`, the company's member `snapshot_id`, and the exact semantic version set, then calls WELFARE or DONATION service with both snapshot IDs. It returns IDs/status only. The finalizer calculates persisted counts. Configure JSON serialization, UTC, late acknowledgement, reject-on-worker-lost, time limits, exponential backoff/jitter, and the `monthly-semantic` queue. Retries target failed company rows only. Database uniqueness—not Celery task IDs—guarantees idempotency.
+使用阶段 1 `quarterly_batch.py` 的 group/chord 约定实现 `workers/monthly_semantic.py`。每个任务处理一家公司及一个冻结运行，只从载荷中读取 ID，重新加载运行的 `snapshot_set_id`、该公司的成员 `snapshot_id` 及准确的语义版本集合，然后使用两个快照 ID 调用 WELFARE 或 DONATION 服务。任务仅返回 ID/状态。终结器计算持久化数量。配置 JSON 序列化、UTC、延迟确认、reject-on-worker-lost、时限、指数退避/抖动及 `monthly-semantic` 队列。重试仅针对失败公司记录。由数据库唯一性而非 Celery 任务 ID 保证幂等性。
 
-- [ ] **Step 5: Implement schemas, dependencies, trigger/status routes, and risk filter**
+- [ ] **步骤 5：实现模式、依赖、触发/状态路由及风险筛选**
 
 ```python
 # backend/src/tax_risk/api/schemas.py
@@ -1261,7 +1261,7 @@ class MonthlyRunRequest(BaseModel):
     semantic_version_set_id: UUID
 ```
 
-`MonthlyRunResponse` contains `run_id`, `monitoring_type`, `status`, and the frozen snapshot/version-set IDs. `MonthlyRunStatusResponse` additionally contains the expanded five-version bundle, summary counts, and scoped per-company rows (`company_code`, member `snapshot_id`, status, selected, adjustment, processed line count, case count, issue code, retry count). Decimal adjustments serialize as strings.
+`MonthlyRunResponse` 包含 `run_id`、`monitoring_type`、`status` 以及已冻结的快照/版本集合 ID。`MonthlyRunStatusResponse` 还包含展开后的五版本组合、汇总数量，以及范围受控的按公司记录（`company_code`、成员 `snapshot_id`、状态、是否纳入范围、调增金额、已处理明细数、风险事项数、问题代码、重试次数）。Decimal 调增金额序列化为字符串。
 
 ```python
 # backend/src/tax_risk/api/routes/monthly_semantic.py
@@ -1305,9 +1305,9 @@ async def get_run_status(
     return await service.get_scoped_status(run_id, principal)
 ```
 
-Define `get_monthly_run_service` in `api/dependencies.py`, register the router in `main.py`, and keep routes thin. Extend `api/routes/cases.py`/schemas with validated `monitoring_type: MonitorType | None`; pass it through the Phase 2/Phase 1 repository SQL and principal scope rather than filtering in memory. Keep the Phase 1 `monitoring_type` name end to end.
+在 `api/dependencies.py` 中定义 `get_monthly_run_service`，在 `main.py` 中注册路由，并保持路由层轻量。为 `api/routes/cases.py`/模式增加经过校验的 `monitoring_type: MonitorType | None`；将其传递至阶段 2/阶段 1 仓储 SQL 及主体范围控制，不得在内存中筛选。端到端保持阶段 1 的 `monitoring_type` 命名。
 
-- [ ] **Step 6: Implement the reusable frontend filter and shared detail fields**
+- [ ] **步骤 6：实现可复用的前端筛选器及共享详情字段**
 
 ```tsx
 // web/src/features/risks/MonitorTypeFilter.tsx
@@ -1340,36 +1340,36 @@ export function MonitorTypeFilter(props: {
 }
 ```
 
-Extend the existing `MonitorType` union with `'WELFARE' | 'DONATION'`; pass it through the existing TanStack Query key and API query. In the detail page render SAP voucher, line, current account, cited summary, suggested accounts, confidence, and review status using the existing shared components.
+将现有 `MonitorType` 联合类型扩展为包含 `'WELFARE' | 'DONATION'`；通过现有 TanStack Query 键及 API 查询传递。在详情页面中使用现有共享组件渲染 SAP 凭证、行、当前科目、引用摘要、建议科目、置信度及复核状态。
 
-- [ ] **Step 7: Run backend, worker, authorization, and frontend tests**
+- [ ] **步骤 7：运行后端、工作任务、授权及前端测试**
 
-Run: `cd backend && CELERY_TASK_ALWAYS_EAGER=true pytest tests/integration/api/test_monthly_semantic_routes.py tests/unit/workers/test_monthly_semantic_batch.py tests/integration/workers/test_monthly_semantic_batch_eager.py -q`
+运行：`cd backend && CELERY_TASK_ALWAYS_EAGER=true pytest tests/integration/api/test_monthly_semantic_routes.py tests/unit/workers/test_monthly_semantic_batch.py tests/integration/workers/test_monthly_semantic_batch_eager.py -q`
 
-Run: `cd web && npm test -- --run src/features/risks/MonitorTypeFilter.test.tsx src/features/risks/RiskPages.test.tsx`
+运行：`cd web && npm test -- --run src/features/risks/MonitorTypeFilter.test.tsx src/features/risks/RiskPages.test.tsx`
 
-Expected: PASS; trigger/status authorization, frozen inputs, partial-failure isolation, failed-only retry, worker-loss idempotency, list filters, detail evidence, and shared workflow actions are covered.
+预期：通过；覆盖触发/状态授权、冻结输入、部分失败隔离、仅重试失败公司、工作任务进程丢失幂等性、清单筛选、详情证据及共享流程操作。
 
-- [ ] **Step 8: Commit the frozen run, worker, API, and UI reuse**
+- [ ] **步骤 8：提交冻结运行、工作任务、API 及界面复用**
 
 ```bash
 git add backend/src/tax_risk/application/monthly_semantic_runs.py backend/src/tax_risk/api backend/src/tax_risk/main.py backend/src/tax_risk/persistence/repositories.py backend/src/tax_risk/workers backend/tests/integration/api/test_monthly_semantic_routes.py backend/tests/unit/workers/test_monthly_semantic_batch.py backend/tests/integration/workers/test_monthly_semantic_batch_eager.py web/src/features/risks
 git commit -m "feat(monthly): run and review frozen semantic monitoring"
 ```
 
-### Task 7: Gate release with per-subject gold sets, boundaries, and E2E
+### 任务 7：使用分主题黄金集、边界及端到端测试执行发布门禁
 
-**Files:**
-- Create: `backend/src/tax_risk/application/semantic/evaluation.py`
-- Create: `backend/tests/fixtures/golden/welfare.jsonl`
-- Create: `backend/tests/fixtures/golden/donation.jsonl`
-- Create: `backend/tests/fixtures/golden/manifest.json`
-- Create: `backend/tests/evaluation/test_welfare_donation_golden.py`
-- Create: `backend/tests/evaluation/test_welfare_donation_golden_governance.py`
-- Create: `backend/tests/e2e/test_phase_3_monthly_semantic_flow.py`
-- Create: `web/e2e/phase-3-welfare-donation.spec.ts`
+**文件：**
+- 新建：`backend/src/tax_risk/application/semantic/evaluation.py`
+- 新建：`backend/tests/fixtures/golden/welfare.jsonl`
+- 新建：`backend/tests/fixtures/golden/donation.jsonl`
+- 新建：`backend/tests/fixtures/golden/manifest.json`
+- 新建：`backend/tests/evaluation/test_welfare_donation_golden.py`
+- 新建：`backend/tests/evaluation/test_welfare_donation_golden_governance.py`
+- 新建：`backend/tests/e2e/test_phase_3_monthly_semantic_flow.py`
+- 新建：`web/e2e/phase-3-welfare-donation.spec.ts`
 
-- [ ] **Step 1: Define a closed gold-row schema and dual-review governance**
+- [ ] **步骤 1：定义封闭的黄金集记录模式及双人复核治理**
 
 ```jsonl
 {"subject":"WELFARE","company_code":"1001","period":"2026-06","sap_fiscal_year":2026,"line_item_no":"001","current_account":"职工福利费","currency":"CNY","gold_set_version":"welfare-gold-v1","approval_status":"APPROVED","approved_by":"gold-owner","approved_at":"2026-07-01T10:00:00Z","frozen":true,"frozen_at":"2026-07-01T10:00:00Z","id":"w-001","voucher_no":"510001","amount":"800.00","summary":"客户商务宴请","case_tags":["WELFARE_CUSTOMER_SUPPLIER_GOV_RECEPTION"],"expected_label":"BUSINESS_ENTERTAINMENT","expected_risk":true,"finance_review":{"role":"FINANCE","reviewer_id":"finance-02","label":"BUSINESS_ENTERTAINMENT","risk":true,"reviewed_at":"2026-06-28T09:00:00Z"},"tax_review":{"role":"TAX","reviewer_id":"tax-01","label":"BUSINESS_ENTERTAINMENT","risk":true,"reviewed_at":"2026-06-28T10:00:00Z"},"adjudication":{"adjudicator_id":"tax-lead","label":"BUSINESS_ENTERTAINMENT","risk":true,"adjudicated_at":"2026-06-29T09:00:00Z"},"row_checksum":"efdd51cc4700e3605175d1a234f6137eded693c62281855414ffab4ff6e06621"}
@@ -1381,11 +1381,11 @@ git commit -m "feat(monthly): run and review frozen semantic monitoring"
 {"subject":"DONATION","company_code":"1002","period":"2026-06","sap_fiscal_year":2026,"line_item_no":"001","current_account":"公益性捐赠","currency":"CNY","gold_set_version":"donation-gold-v1","approval_status":"APPROVED","approved_by":"gold-owner","approved_at":"2026-07-01T10:00:00Z","frozen":true,"frozen_at":"2026-07-01T10:00:00Z","id":"d-002","voucher_no":"610002","amount":"30000.00","summary":"无对价公益捐赠且材料完整","case_tags":["DONATION_REASONABLE_NO_CONSIDERATION"],"expected_label":"CURRENT_ACCOUNT_REASONABLE","expected_risk":false,"finance_review":{"role":"FINANCE","reviewer_id":"finance-02","label":"CURRENT_ACCOUNT_REASONABLE","risk":false,"reviewed_at":"2026-06-28T09:15:00Z"},"tax_review":{"role":"TAX","reviewer_id":"tax-01","label":"CURRENT_ACCOUNT_REASONABLE","risk":false,"reviewed_at":"2026-06-28T10:15:00Z"},"adjudication":{"adjudicator_id":"tax-lead","label":"CURRENT_ACCOUNT_REASONABLE","risk":false,"adjudicated_at":"2026-06-29T09:15:00Z"},"row_checksum":"19a8b1316f05fe7344cd49d17b7234a9f5ac87a125dad85da455f60da629bd15"}
 ```
 
-Implement strict Pydantic `IndependentReview`, `Adjudication`, `GoldRow`, `GoldManifest`, and `EvaluatedRow` (`extra="forbid"`) so fixture keys and evaluator keys cannot drift. Each subject requires at least 50 SAP-voucher rows with separate FINANCE/TAX reviewer identity, independent label/risk/time, a third-party adjudication, approved/frozen timestamps, and a canonical-row SHA-256. `manifest.json` stores each file's exact SHA-256, row count, version, `APPROVED` status, `frozen=true`, approver, and approval time; tests recompute both row and file hashes. Cover every allowed label, negatives, insufficient evidence, wording variants, reversals, and ambiguous customer-gift/branding disagreements. No OA/Hesi row is canonical.
+实现严格的 Pydantic `IndependentReview`、`Adjudication`、`GoldRow`、`GoldManifest` 及 `EvaluatedRow`（`extra="forbid"`），防止夹具键与评估器键发生漂移。每个主题至少需要 50 条 SAP 凭证记录，具备彼此独立的财务/税务复核人身份、独立的标签/风险/时间、第三方裁决、已批准/已冻结时间戳及规范记录 SHA-256。`manifest.json` 存储每个文件的准确 SHA-256、记录数、版本、`APPROVED` 状态、`frozen=true`、批准人及批准时间；测试重新计算记录及文件哈希。覆盖所有允许标签、负例、证据不足、措辞变体、冲销及存在分歧的客户礼品/品牌推广模糊场景。任何 OA/合思记录均不得作为规范记录。
 
-Define mandatory zero-miss risk tags for the user's known cases: `WELFARE_CUSTOMER_SUPPLIER_GOV_RECEPTION`, `WELFARE_TRAINING_LECTURER_EXAM`, `WELFARE_PROMOTIONAL_GIFT`, `WELFARE_CUSTOMER_GIFT`, `DONATION_SPONSORSHIP`, `DONATION_NAMING_BRAND_EXPOSURE`, and `DONATION_ADVERTISING_RIGHTS`. Every tag must appear in approved rows and every tagged row must be predicted as risk with its adjudicated label.
+为用户已知场景定义必须零漏检的风险标签：`WELFARE_CUSTOMER_SUPPLIER_GOV_RECEPTION`、`WELFARE_TRAINING_LECTURER_EXAM`、`WELFARE_PROMOTIONAL_GIFT`、`WELFARE_CUSTOMER_GIFT`、`DONATION_SPONSORSHIP`、`DONATION_NAMING_BRAND_EXPOSURE` 及 `DONATION_ADVERTISING_RIGHTS`。每个标签都必须出现在已批准记录中，且每条带标签的记录都必须被预测为风险，并给出其裁决标签。
 
-- [ ] **Step 2: Write failing metric, governance, boundary, and full-flow tests**
+- [ ] **步骤 2：编写预期失败的指标、治理、边界及全流程测试**
 
 ```python
 # backend/tests/evaluation/test_welfare_donation_golden.py
@@ -1488,15 +1488,15 @@ def test_scope_to_review_flow(api_client, seeded_phase_3_snapshot):
     assert all(item["recommended_accounts"] for item in risks)
 ```
 
-The E2E fixture must additionally run DONATION with exact equality, above threshold, negative profit, missing input, and zero SAP rows; assert strict-scope outcomes. Include one reasonable detection, one evidence task, one formal risk, successful workflow transition, one retryable company failure with partial success, GET status before/after failed-only retry, worker-loss redelivery, and full rerun. Assert no duplicate records and every persisted detection carries the frozen snapshot/rule/model/prompt/case-library/account-dictionary versions.
+端到端夹具还必须运行 DONATION 场景，包括精确等于限额、超过阈值、利润为负、输入缺失及 SAP 明细为零；断言严格范围判定结果。包括一条合理监测结果、一项补充证据任务、一个正式风险、成功的流程流转、一次可重试公司失败且其他公司部分成功、仅重试失败公司前后的 GET 状态、工作任务进程丢失后的重新投递，以及完整重跑。断言不存在重复记录，且每条持久化监测结果都携带已冻结的快照/规则/模型/提示词/案例库/科目字典版本。
 
-- [ ] **Step 3: Run the new gates and verify the initial red state**
+- [ ] **步骤 3：运行新门禁并确认初始红灯状态**
 
-Run: `cd backend && pytest tests/evaluation/test_welfare_donation_golden.py tests/evaluation/test_welfare_donation_golden_governance.py tests/e2e/test_phase_3_monthly_semantic_flow.py -q`
+运行：`cd backend && pytest tests/evaluation/test_welfare_donation_golden.py tests/evaluation/test_welfare_donation_golden_governance.py tests/e2e/test_phase_3_monthly_semantic_flow.py -q`
 
-Expected: FAIL until strict schemas, real-adapter evaluation, production thresholds, and the complete run/status/retry flow are connected.
+预期：在严格模式、真实适配器评估、生产阈值及完整运行/状态/重试流程接通前失败。
 
-- [ ] **Step 4: Implement the evaluator and real-adapter fixture**
+- [ ] **步骤 4：实现评估器及真实适配器夹具**
 
 ```python
 # backend/src/tax_risk/application/semantic/evaluation.py
@@ -1613,9 +1613,9 @@ def evaluate(rows: list[EvaluatedRow]) -> EvaluationMetrics:
     return EvaluationMetrics(recall, accuracy)
 ```
 
-Add immutable `EvaluationGate`; define `PILOT_GATE = EvaluationGate(0.90, 0.80)` and `PRODUCTION_GATE = EvaluationGate(0.95, 0.80)`. The release test uses `PRODUCTION_GATE`; pilot is reporting-only. The evaluation fixture must parse each approved `GoldRow`, ingest it through Phase 1 `IngestBatch → SourceRecord`, create the source-only `SapExpenseVoucherObservation`, and publish a PUBLISHED SnapshotSet whose projection is created in the same transaction. It then calls `load_snapshot_bound_sap_vouchers(...)`, asserts every returned `SnapshotBoundSapExpenseVoucher` has non-null `projection_id`, `snapshot_id`, and `source_record_id`, and passes that view to `build_sap_voucher_evidence_pack`. Invoke the actual `StructuredModelClient` test adapter through `SapVoucherAgent`, parse `SemanticDetection`, derive `predicted_risk` solely from the subject policy's `suspicious_labels`, create `EvaluatedRow`, then call `evaluate`. It must not build evidence directly from an observation, expand vague keywords, or accept hand-written predictions.
+添加不可变的 `EvaluationGate`；定义 `PILOT_GATE = EvaluationGate(0.90, 0.80)` 及 `PRODUCTION_GATE = EvaluationGate(0.95, 0.80)`。发布测试使用 `PRODUCTION_GATE`；试点门禁仅用于报告。评估夹具必须解析每条已批准的 `GoldRow`，通过阶段 1 `IngestBatch → SourceRecord` 采集，创建仅含来源的 `SapExpenseVoucherObservation`，并发布一个 PUBLISHED SnapshotSet，其投影在同一事务中创建。随后调用 `load_snapshot_bound_sap_vouchers(...)`，断言每个返回的 `SnapshotBoundSapExpenseVoucher` 都具有非空的 `projection_id`、`snapshot_id` 及 `source_record_id`，并将该视图传递给 `build_sap_voucher_evidence_pack`。通过 `SapVoucherAgent` 调用真实的 `StructuredModelClient` 测试适配器，解析 `SemanticDetection`，仅根据对应主题策略的 `suspicious_labels` 推导 `predicted_risk`，创建 `EvaluatedRow`，再调用 `evaluate`。不得直接从观测记录构建证据、扩展模糊关键词或接受手写预测结果。
 
-- [ ] **Step 5: Add the browser flow**
+- [ ] **步骤 5：添加浏览器流程**
 
 ```ts
 // web/e2e/phase-3-welfare-donation.spec.ts
@@ -1640,11 +1640,11 @@ test('filters and reviews welfare and donation risks', async ({ page }) => {
 });
 ```
 
-The browser test must also assert cited evidence, current account, confidence, review state, version metadata, request-evidence action, and return to the filtered list. Mock API contracts must use `monitoring_type`, not a frontend-only filter.
+浏览器测试还必须断言引用证据、当前科目、置信度、复核状态、版本元数据、要求补充证据操作，以及返回筛选后的清单。模拟 API 契约必须使用 `monitoring_type`，不得使用仅存在于前端的筛选条件。
 
-- [ ] **Step 6: Run the complete Phase 3 verification suite**
+- [ ] **步骤 6：运行完整的阶段 3 验证套件**
 
-Run:
+运行：
 
 ```bash
 cd backend
@@ -1654,11 +1654,11 @@ npm test -- --run
 npm run test:e2e -- phase-3-welfare-donation.spec.ts
 ```
 
-Expected: all commands PASS; each subject has at least 50 governed rows, production recall is at least 95%, high-confidence risk accuracy is at least 80%, zero high-confidence risk predictions fail the gate, all required typical cases have zero misses, and both end-to-end review flows pass.
+预期：全部命令通过；每个主题至少有 50 条受治理记录，生产召回率至少为 95%，高置信度风险准确率至少为 80%，高置信度风险预测数为零时门禁失败，所有必需典型场景零漏检，且两个端到端复核流程均通过。
 
-- [ ] **Step 7: Run accumulated Phase 1–3 regression and migration checks**
+- [ ] **步骤 7：运行累计的阶段 1–3 回归及迁移检查**
 
-Run:
+运行：
 
 ```bash
 cd backend
@@ -1669,25 +1669,25 @@ npm test -- --run
 npm run build
 ```
 
-Expected: PASS; quarterly formula oracles, Phase 2 evidence/link/merge tests, Phase 3 gates, workflow tests, and frontend build all remain green.
+预期：通过；季度公式基准、阶段 2 证据/关联/合并测试、阶段 3 门禁、流程测试及前端构建均保持绿灯。
 
-- [ ] **Step 8: Commit the evaluation and E2E gate**
+- [ ] **步骤 8：提交评估及端到端门禁**
 
 ```bash
 git add backend/src/tax_risk/application/semantic/evaluation.py backend/tests/fixtures/golden backend/tests/evaluation backend/tests/e2e web/e2e/phase-3-welfare-donation.spec.ts
 git commit -m "test(agents): gate welfare donation release quality"
 ```
 
-## Phase 3 Exit Gate
+## 阶段 3 退出门禁
 
-- [ ] Welfare runs only when `cumulative welfare - cumulative salary * 0.14 > 0`.
-- [ ] Donation runs only when `cumulative donation - cumulative accounting profit * 0.12 > 0`.
-- [ ] Equality, below-threshold, negative-profit, missing-data, empty-line, and rerun-idempotency tests pass.
-- [ ] Every selected SAP welfare/donation line is evaluated; neither monitor accepts OA/Hesi as a canonical record.
-- [ ] Every formal risk has SAP fiscal year, voucher, line, current account, amount, cited evidence, candidate account, confidence, versions, and review status.
-- [ ] `CURRENT_ACCOUNT_REASONABLE` stores a detection only; `INSUFFICIENT_EVIDENCE` creates an evidence task, not a formal risk.
-- [ ] Trigger/status APIs freeze and return SnapshotSet plus rule/model/prompt/case-library/account-dictionary versions; worker retries cannot change them.
-- [ ] Partial failures, failed-only retries, worker-loss redelivery, and full reruns preserve committed successes without duplicates.
-- [ ] Welfare and donation each have at least 50 independently FINANCE/TAX-reviewed and adjudicated rows; approved/frozen row/file checksums verify, every required typical-case tag has zero misses, and each subject independently meets 95% recall plus 80% high-confidence-risk accuracy.
-- [ ] Phase 1 quarterly and Phase 2 business-entertainment regressions remain green.
-- [ ] No automatic journal entry, tax conclusion, model-driven scope expansion, or duplicate semantic/case framework exists.
+- [ ] 仅当 `累计福利费 - 累计工资薪金 * 0.14 > 0` 时运行福利费监测。
+- [ ] 仅当 `累计公益性捐赠 - 累计会计利润 * 0.12 > 0` 时运行公益性捐赠监测。
+- [ ] 精确等于限额、低于阈值、利润为负、数据缺失、明细为空及重跑幂等性测试通过。
+- [ ] 对纳入范围的每条 SAP 福利费/公益性捐赠明细进行评估；两项监测均不接受 OA/合思记录作为规范记录。
+- [ ] 每个正式风险都包含 SAP 会计年度、凭证、行、当前科目、金额、引用证据、候选科目、置信度、版本及复核状态。
+- [ ] `CURRENT_ACCOUNT_REASONABLE` 仅存储监测结果；`INSUFFICIENT_EVIDENCE` 创建补充证据任务，而不是正式风险。
+- [ ] 触发/状态 API 冻结并返回 SnapshotSet 以及规则/模型/提示词/案例库/科目字典版本；工作任务重试不得改变这些版本。
+- [ ] 部分失败、仅重试失败公司、工作任务进程丢失后重新投递及完整重跑均保留已提交的成功结果，且不产生重复记录。
+- [ ] 福利费和公益性捐赠各自至少有 50 条经独立财务/税务复核并完成裁决的记录；已批准/冻结的记录/文件校验和验证通过，每个必需典型场景标签零漏检，且每个主题独立达到 95% 召回率及 80% 高置信度风险准确率。
+- [ ] 阶段 1 季度监测及阶段 2 业务招待费回归测试保持绿灯。
+- [ ] 不存在自动过账凭证、自动税务定性、模型驱动的范围扩张或重复的语义/风险事项框架。

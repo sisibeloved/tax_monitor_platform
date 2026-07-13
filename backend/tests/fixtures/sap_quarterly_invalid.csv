@@ -1,0 +1,5 @@
+source_record_key,company_code,fiscal_year,period,currency,amount_scale,metric_code,amount,extracted_at
+sap-bad-001,C001,2026,2026-03-31,CNY,2,cumulative_profit,100.00,2026-04-01T08:00:00+00:00
+sap-bad-002,C999,2026,2026-03-31,CNY,2,cumulative_revenue,50.00,2026-04-01T08:00:00+00:00
+sap-bad-003,C001,2026,2026-03-31,CNY,2,fair_value_change,not-a-decimal,2026-04-01T08:00:00+00:00
+sap-bad-004,C001,2026,2026-03-31,CNY,2,received_dividends,-25.25,2026-04-01T08:00:00+00:00

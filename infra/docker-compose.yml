@@ -1,0 +1,146 @@
+name: tax-risk
+
+x-backend-image: &backend-image ${BACKEND_IMAGE:-tax-risk-backend:local}
+x-backend-environment: &backend-environment
+  # Local fallback only. Production deployments must override credentials via their secret store.
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://tax_risk:tax-risk-local-only@postgres:5432/tax_risk}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  DEVELOPMENT_PRINCIPAL_ENABLED: ${DEVELOPMENT_PRINCIPAL_ENABLED:-false}
+  DEVELOPMENT_PRINCIPAL_SECRET: ${DEVELOPMENT_PRINCIPAL_SECRET:-}
+  QUARTERLY_WORKER_CONCURRENCY: ${QUARTERLY_WORKER_CONCURRENCY:-4}
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tax_risk}
+      POSTGRES_USER: ${POSTGRES_USER:-tax_risk}
+      # Local fallback keeps `docker compose up postgres` usable; override in every deployment.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tax-risk-local-only}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  migrate:
+    image: *backend-image
+    build:
+      context: ../backend
+    restart: "no"
+    environment: *backend-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: *backend-image
+    build:
+      context: ../backend
+    restart: unless-stopped
+    environment: *backend-environment
+    command:
+      - uvicorn
+      - tax_risk.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker-quarterly:
+    image: *backend-image
+    restart: unless-stopped
+    environment: *backend-environment
+    command:
+      - celery
+      - -A
+      - tax_risk.workers.celery_app:celery_app
+      - worker
+      - --queues=quarterly
+      - --concurrency=${QUARTERLY_WORKER_CONCURRENCY:-4}
+      - --loglevel=INFO
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          celery -A tax_risk.workers.celery_app:celery_app inspect ping
+          --destination celery@$${HOSTNAME} --timeout 5 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    image: ${WEB_IMAGE:-tax-risk-web:local}
+    build:
+      context: ../web
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    restart: unless-stopped
+    environment:
+      NGINX_ENVSUBST_FILTER: ^DEVELOPMENT_PRINCIPAL(_SIGNATURE)?$
+      DEVELOPMENT_PRINCIPAL: ${DEVELOPMENT_PRINCIPAL:-}
+      DEVELOPMENT_PRINCIPAL_SIGNATURE: ${DEVELOPMENT_PRINCIPAL_SIGNATURE:-}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:

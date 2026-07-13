@@ -1,3 +1,21 @@
 .superpowers/
 .worktrees/
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+.coverage
+build/
+
+# Frontend
+node_modules/
+dist/
+
+# Local configuration
+.env
