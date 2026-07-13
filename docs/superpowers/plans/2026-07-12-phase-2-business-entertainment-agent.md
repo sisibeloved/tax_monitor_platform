@@ -134,7 +134,8 @@ npm --prefix web test -- --run
 |---|---|---|
 | `0007_business_entertainment_scope.py` | `0007_entertainment_scope` | `0006_review_action_assignee` |
 | `0008_business_entertainment_observations.py` | `0008_entertainment_observations` | `0007_entertainment_scope` |
-| `0009_semantic_contracts_accounts.py` | `0009_semantic_accounts` | `0008_entertainment_observations` |
+| `0008a_entertainment_snapshot_guard.py` | `0008a_ent_snapshot_guard` | `0008_entertainment_observations` |
+| `0009_semantic_contracts_accounts.py` | `0009_semantic_accounts` | `0008a_ent_snapshot_guard` |
 | `0010_semantic_artifacts_calls.py` | `0010_semantic_artifacts` | `0009_semantic_accounts` |
 | 阶段3 `0011_welfare_donation_agents.py` | `0011_welfare_donation` | `0010_semantic_artifacts` |
 
@@ -977,7 +978,7 @@ npm --prefix web run build
 npm --prefix web run test:e2e -- business-entertainment.spec.ts
 ~~~
 
-预期：所有命令均通过（PASS）；迁移链为 `0006→0007→0008→0009→0010`，且只有一个Alembic迁移头；范围/导入/血缘/schema/安全/合并/聚合测试通过；发布指标达到已审批阈值。
+预期：所有命令均通过（PASS）；迁移链为 `0006→0007→0008→0008a→0009→0010`，且只有一个Alembic迁移头；范围/导入/血缘/schema/安全/合并/聚合测试通过；发布指标达到已审批阈值。
 
 - [ ] **步骤22：提交任务11**
 

@@ -37,6 +37,7 @@ from tax_risk.persistence.snapshot_models import (
     SnapshotSource,
     SnapshotStatus,
 )
+from tax_risk.persistence.semantic_models import SapExpenseVoucherSnapshotProjection
 from tax_risk.snapshot_limits import (
     MAX_SNAPSHOT_SET_MEMBERS,
     MAX_SNAPSHOT_SOURCE_BATCHES,
@@ -655,6 +656,31 @@ class SnapshotService:
                     )
                 uow.session.flush()
                 self._inject("snapshot_set_member_created")
+                for expected in members:
+                    # A snapshot that has already appeared in a published set is frozen.
+                    # Reusing it must never attach observations ingested later.
+                    if uow.semantic.snapshot_is_in_published_set(expected.snapshot_id):
+                        continue
+                    company = companies_by_id[expected.company_id]
+                    projected_ids = uow.semantic.projected_observation_ids(
+                        expected.snapshot_id
+                    )
+                    for observation in uow.semantic.sap_observations_for_company_ytd(
+                        company.company_code,
+                        period,
+                    ):
+                        if observation.id in projected_ids:
+                            continue
+                        uow.semantic.add_sap_projection(
+                            SapExpenseVoucherSnapshotProjection(
+                                observation_id=observation.id,
+                                snapshot_id=expected.snapshot_id,
+                                company_code=company.company_code,
+                                period=period,
+                            )
+                        )
+                uow.session.flush()
+                self._inject("snapshot_set_sap_projected")
                 snapshot_set.status = SnapshotSetStatus.VALIDATED
                 uow.session.flush()
                 self._inject("snapshot_set_validated")

@@ -11,6 +11,7 @@ from tax_risk.persistence.business_entertainment_models import (
     BusinessEntertainmentScopeCompany,
     BusinessEntertainmentScopeVersion,
     BusinessEntertainmentSourceObservation,
+    EvidenceLink,
 )
 from tax_risk.persistence.ingest_models import Company
 
@@ -30,6 +31,23 @@ class BusinessEntertainmentScopeRepository:
         observation: BusinessEntertainmentSourceObservation,
     ) -> None:
         self._session.add(observation)
+
+    def add_evidence_link(self, evidence_link: EvidenceLink) -> None:
+        self._session.add(evidence_link)
+
+    def evidence_links_for_snapshot(self, snapshot_id: UUID) -> list[EvidenceLink]:
+        return list(
+            self._session.scalars(
+                select(EvidenceLink)
+                .where(EvidenceLink.snapshot_id == snapshot_id)
+                .order_by(
+                    EvidenceLink.company_code,
+                    EvidenceLink.source_record_id,
+                    EvidenceLink.target_record_id,
+                    EvidenceLink.relation_kind,
+                )
+            )
+        )
 
     def source_observations_for_batch(
         self,
