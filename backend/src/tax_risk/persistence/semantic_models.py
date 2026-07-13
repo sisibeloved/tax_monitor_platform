@@ -246,6 +246,100 @@ class SemanticModelCallAudit(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class SemanticDetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "semantic_detection_record"
+    __table_args__ = (
+        UniqueConstraint("detection_key", name="uq_semantic_detection_key"),
+        CheckConstraint("fiscal_year BETWEEN 2000 AND 9999", name="fiscal_year"),
+        CheckConstraint("period BETWEEN 1 AND 12", name="period"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
+        CheckConstraint(
+            "source_mode IN ('SAP_LINKED', 'BUSINESS_DOCUMENT_UNLINKED')",
+            name="source_mode",
+        ),
+        CheckConstraint(
+            "(source_mode = 'SAP_LINKED' AND sap_observation_id IS NOT NULL "
+            "AND sap_document_number IS NOT NULL AND sap_line_item IS NOT NULL) OR "
+            "(source_mode = 'BUSINESS_DOCUMENT_UNLINKED' AND sap_observation_id IS NULL "
+            "AND sap_document_number IS NULL AND sap_line_item IS NULL)",
+            name="sap_identity",
+        ),
+        Index("ix_semantic_detection_candidate", "candidate_key"),
+        Index("ix_semantic_detection_company_period", "company_code", "fiscal_year", "period"),
+    )
+
+    detection_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    candidate_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    company_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    fiscal_year: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    period: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    source_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_source_record_id: Mapped[UUID] = mapped_column(
+        ForeignKey("source_record.id", name="fk_sem_detection_source", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sap_observation_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "sap_expense_voucher_observation.id",
+            name="fk_sem_detection_sap",
+            ondelete="RESTRICT",
+        )
+    )
+    sap_document_number: Mapped[str | None] = mapped_column(String(64))
+    sap_line_item: Mapped[str | None] = mapped_column(String(32))
+    amount: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    snapshot_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "accounting_snapshot.id",
+            name="fk_sem_detection_snapshot",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    exact_evidence_link_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "evidence_link.id",
+            name="fk_sem_detection_evidence_link",
+            ondelete="RESTRICT",
+        )
+    )
+    rule_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    case_library_version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    account_dictionary_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    semantic_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_refs: Mapped[list[dict[str, str]]] = mapped_column(JSONB, nullable=False)
+    recommended_account_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    rationale_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    missing_evidence: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SemanticEvidenceTask(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "semantic_evidence_task"
+    __table_args__ = (
+        UniqueConstraint("detection_id", name="uq_semantic_evidence_task_detection"),
+        CheckConstraint("status IN ('OPEN', 'COMPLETED', 'CANCELLED')", name="status"),
+        Index("ix_semantic_evidence_task_company", "company_code", "status"),
+    )
+
+    detection_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "semantic_detection_record.id",
+            name="fk_sem_evidence_task_detection",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    company_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    missing_evidence: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 __all__ = [
     "SapExpenseVoucherObservation",
     "SapExpenseVoucherSnapshotProjection",
@@ -253,4 +347,6 @@ __all__ = [
     "SuggestedAccountEntry",
     "SemanticArtifactVersion",
     "SemanticModelCallAudit",
+    "SemanticDetectionRecord",
+    "SemanticEvidenceTask",
 ]

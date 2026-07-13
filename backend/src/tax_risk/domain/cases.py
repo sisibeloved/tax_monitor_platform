@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 from hashlib import sha256
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
 
 
 class CaseStatus(StrEnum):
@@ -51,6 +54,43 @@ def case_fingerprint(
 
     canonical = f"{company_code}|{fiscal_year}|{quarter}|{monitor_type}"
     return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class SemanticCaseIdentity(BaseModel):
+    """Server-owned semantic-case identity used by phase-2 and later agents."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    monitor_type: str
+    canonical_source_record_id: UUID
+    source_mode: str
+    sap_link_status: str
+    sap_observation_id: UUID | None
+    risk_amount_source: str
+    confidence_tier: str
+    account_dictionary_version: str
+    merged_into_case_id: UUID | None = None
+
+
+def semantic_case_fingerprint(
+    company_code: str,
+    fiscal_year: int,
+    monitor_type: str,
+    source_mode: str,
+    canonical_source_record_id: UUID,
+    sap_observation_id: UUID | None,
+) -> str:
+    authority_id = sap_observation_id or canonical_source_record_id
+    canonical = "|".join(
+        (
+            company_code,
+            str(fiscal_year),
+            monitor_type,
+            source_mode,
+            str(authority_id),
+        )
+    )
+    return sha256(canonical.encode()).hexdigest()
 
 
 def transition_case(current: CaseStatus, target: CaseStatus) -> CaseStatus:

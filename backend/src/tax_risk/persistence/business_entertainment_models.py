@@ -248,8 +248,59 @@ class SapLinkCoverage(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     )
 
 
+class BusinessEntertainmentCaseDetail(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "business_entertainment_case_detail"
+    __table_args__ = (
+        UniqueConstraint("risk_case_id", name="uq_be_case_detail_case"),
+        CheckConstraint(
+            "source_mode IN ('SAP_LINKED', 'BUSINESS_DOCUMENT_UNLINKED')",
+            name="source_mode",
+        ),
+        CheckConstraint(
+            "sap_link_status IN ('LINKED', 'PENDING_LOCATION')",
+            name="sap_link_status",
+        ),
+        Index("ix_be_case_detail_detection", "semantic_detection_id"),
+    )
+
+    risk_case_id: Mapped[UUID] = mapped_column(
+        ForeignKey("risk_case.id", name="fk_be_case_detail_case", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    semantic_detection_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "semantic_detection_record.id",
+            name="fk_be_case_detail_detection",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    candidate_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    canonical_source_record_id: Mapped[UUID] = mapped_column(
+        ForeignKey("source_record.id", name="fk_be_case_detail_source", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    sap_link_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    sap_observation_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "sap_expense_voucher_observation.id",
+            name="fk_be_case_detail_sap",
+            ondelete="RESTRICT",
+        )
+    )
+    risk_amount_source: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    account_dictionary_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    exact_evidence_link_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evidence_link.id", name="fk_be_case_detail_link", ondelete="RESTRICT")
+    )
+    workflow_note: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 __all__ = [
     "BusinessEntertainmentEvaluation",
+    "BusinessEntertainmentCaseDetail",
     "BusinessEntertainmentScopeCompany",
     "BusinessEntertainmentScopeVersion",
     "BusinessEntertainmentSourceObservation",

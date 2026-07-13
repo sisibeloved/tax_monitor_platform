@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from tax_risk.domain.business_entertainment.company_scope import ScopeVersionStatus
 from tax_risk.domain.business_entertainment.evaluation import SapLinkCoverageItem
 from tax_risk.persistence.business_entertainment_models import (
+    BusinessEntertainmentCaseDetail,
     BusinessEntertainmentScopeCompany,
     BusinessEntertainmentScopeVersion,
     BusinessEntertainmentSourceObservation,
@@ -46,6 +47,22 @@ class BusinessEntertainmentScopeRepository:
 
     def add_evidence_link(self, evidence_link: EvidenceLink) -> None:
         self._session.add(evidence_link)
+
+    def add_case_detail(self, detail: BusinessEntertainmentCaseDetail) -> None:
+        self._session.add(detail)
+
+    def case_detail_for_case(
+        self,
+        risk_case_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> BusinessEntertainmentCaseDetail | None:
+        statement = select(BusinessEntertainmentCaseDetail).where(
+            BusinessEntertainmentCaseDetail.risk_case_id == risk_case_id
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return self._session.scalar(statement)
 
     def evidence_links_for_snapshot(self, snapshot_id: UUID) -> list[EvidenceLink]:
         return list(

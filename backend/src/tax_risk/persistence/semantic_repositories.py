@@ -14,6 +14,8 @@ from tax_risk.persistence.semantic_models import (
     SapExpenseVoucherObservation,
     SapExpenseVoucherSnapshotProjection,
     SemanticArtifactVersion,
+    SemanticDetectionRecord,
+    SemanticEvidenceTask,
     SemanticModelCallAudit,
     SuggestedAccountDictionaryVersion,
     SuggestedAccountEntry,
@@ -104,6 +106,32 @@ class SemanticRepository:
 
     def add_model_call_audit(self, audit: SemanticModelCallAudit) -> None:
         self._session.add(audit)
+
+    def add_semantic_detection(self, detection: SemanticDetectionRecord) -> None:
+        self._session.add(detection)
+
+    def get_semantic_detection_by_key(
+        self,
+        detection_key: str,
+    ) -> SemanticDetectionRecord | None:
+        return self._session.scalar(
+            select(SemanticDetectionRecord).where(
+                SemanticDetectionRecord.detection_key == detection_key
+            )
+        )
+
+    def add_semantic_evidence_task(self, task: SemanticEvidenceTask) -> None:
+        self._session.add(task)
+
+    def get_evidence_task_for_detection(
+        self,
+        detection_id: UUID,
+    ) -> SemanticEvidenceTask | None:
+        return self._session.scalar(
+            select(SemanticEvidenceTask).where(
+                SemanticEvidenceTask.detection_id == detection_id
+            )
+        )
 
     def get_account_dictionary_version(
         self,

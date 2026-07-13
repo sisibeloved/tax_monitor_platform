@@ -88,6 +88,7 @@ class SemanticDetection(BaseModel):
     amount: Decimal
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     snapshot_id: UUID
+    exact_evidence_link_id: UUID | None = None
     versions: SemanticVersionSet
     semantic_label: SemanticLabel
     confidence_tier: ConfidenceTier
