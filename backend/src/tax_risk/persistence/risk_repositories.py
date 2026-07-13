@@ -113,6 +113,17 @@ class RiskRepository:
             select(RiskCase).where(RiskCase.fingerprint == fingerprint).with_for_update()
         )
 
+    def get_case(
+        self,
+        case_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> RiskCase | None:
+        statement = select(RiskCase).where(RiskCase.id == case_id)
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return self._session.scalar(statement)
+
     def add_review_action(self, review_action: ReviewAction) -> None:
         self._session.add(review_action)
 

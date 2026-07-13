@@ -120,6 +120,22 @@ class SemanticRepository:
             )
         )
 
+    def get_semantic_detection(
+        self,
+        detection_id: UUID,
+    ) -> SemanticDetectionRecord | None:
+        return self._session.get(SemanticDetectionRecord, detection_id)
+
+    def sap_observation_by_source_record(
+        self,
+        source_record_id: UUID,
+    ) -> SapExpenseVoucherObservation | None:
+        return self._session.scalar(
+            select(SapExpenseVoucherObservation).where(
+                SapExpenseVoucherObservation.source_record_id == source_record_id
+            )
+        )
+
     def add_semantic_evidence_task(self, task: SemanticEvidenceTask) -> None:
         self._session.add(task)
 

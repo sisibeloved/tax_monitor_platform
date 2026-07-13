@@ -68,7 +68,7 @@ class SemanticCaseRouter:
             persisted = uow.semantic.get_semantic_detection_by_key(detection.detection_key)
             detection_created = persisted is None
             if persisted is None:
-                persisted = _detection_model(detection)
+                persisted = semantic_detection_model(detection)
                 uow.semantic.add_semantic_detection(persisted)
                 uow.session.flush()
             else:
@@ -140,7 +140,7 @@ def _validate_authoritative_lineage(
             raise ValueError("persisted exact evidence does not match the detection")
 
 
-def _detection_model(detection: SemanticDetection) -> SemanticDetectionRecord:
+def semantic_detection_model(detection: SemanticDetection) -> SemanticDetectionRecord:
     return SemanticDetectionRecord(
         detection_key=detection.detection_key,
         candidate_key=detection.candidate_key,
@@ -200,4 +200,5 @@ __all__ = [
     "RoutingResult",
     "SemanticCaseRouter",
     "decide_detection_route",
+    "semantic_detection_model",
 ]

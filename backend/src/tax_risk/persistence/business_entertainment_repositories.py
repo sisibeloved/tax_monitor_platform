@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
 from datetime import date
 from uuid import UUID
 
@@ -22,7 +22,9 @@ from tax_risk.persistence.ingest_models import Company
 from tax_risk.persistence.semantic_models import (
     SapExpenseVoucherObservation,
     SapExpenseVoucherSnapshotProjection,
+    SemanticDetectionRecord,
 )
+from tax_risk.persistence.risk_models import MonitorType, RiskCase
 
 
 class SapCoverageConflictError(Exception):
@@ -64,6 +66,40 @@ class BusinessEntertainmentScopeRepository:
             statement = statement.with_for_update().execution_options(populate_existing=True)
         return self._session.scalar(statement)
 
+    def root_case_rows(
+        self,
+        *,
+        company_scope: Set[UUID] | None,
+    ) -> list[tuple[RiskCase, BusinessEntertainmentCaseDetail, SemanticDetectionRecord, Company]]:
+        statement = (
+            select(
+                RiskCase,
+                BusinessEntertainmentCaseDetail,
+                SemanticDetectionRecord,
+                Company,
+            )
+            .join(
+                BusinessEntertainmentCaseDetail,
+                BusinessEntertainmentCaseDetail.risk_case_id == RiskCase.id,
+            )
+            .join(
+                SemanticDetectionRecord,
+                SemanticDetectionRecord.id
+                == BusinessEntertainmentCaseDetail.semantic_detection_id,
+            )
+            .join(Company, Company.id == RiskCase.company_id)
+            .where(
+                RiskCase.monitor_type == MonitorType.BUSINESS_ENTERTAINMENT,
+                RiskCase.merged_into_case_id.is_(None),
+            )
+            .order_by(Company.company_code, RiskCase.id)
+        )
+        if company_scope is not None:
+            if not company_scope:
+                return []
+            statement = statement.where(RiskCase.company_id.in_(company_scope))
+        return [tuple(row) for row in self._session.execute(statement).all()]
+
     def evidence_links_for_snapshot(self, snapshot_id: UUID) -> list[EvidenceLink]:
         return list(
             self._session.scalars(
@@ -77,6 +113,17 @@ class BusinessEntertainmentScopeRepository:
                 )
             )
         )
+
+    def get_evidence_link(
+        self,
+        evidence_link_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> EvidenceLink | None:
+        statement = select(EvidenceLink).where(EvidenceLink.id == evidence_link_id)
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return self._session.scalar(statement)
 
     def persist_sap_link_coverages(
         self,

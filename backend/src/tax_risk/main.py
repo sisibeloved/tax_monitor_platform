@@ -11,6 +11,7 @@ from tax_risk.api.routes.master_data import router as master_data_router
 from tax_risk.api.routes.runs import router as runs_router
 from tax_risk.api.routes.snapshots import router as snapshots_router
 from tax_risk.api.routes.semantic_governance import router as semantic_governance_router
+from tax_risk.api.routes.exports import router as exports_router
 from tax_risk.adapters.ingest.tax_master_xlsx import XlsxResourceLimits
 from tax_risk.application.ingest import (
     AdapterFactory,
@@ -67,6 +68,7 @@ def create_app(
     app.include_router(snapshots_router)
     app.include_router(runs_router)
     app.include_router(semantic_governance_router)
+    app.include_router(exports_router)
     return app
 
 
