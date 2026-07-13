@@ -1,11 +1,11 @@
-# Phase 1 backend
+# 第一阶段后端
 
-The backend is a Python 3.12 FastAPI, SQLAlchemy/Alembic, PostgreSQL, and Celery application
-for deterministic quarterly group income-tax monitoring.
+后端基于 Python 3.12、FastAPI、SQLAlchemy/Alembic、PostgreSQL 和 Celery 构建，
+用于执行集团所得税季度确定性监测。
 
-## Setup
+## 环境准备
 
-Create the development environment from the repository root:
+在仓库根目录创建开发环境：
 
 ```bash
 python3.12 -m venv backend/.venv
@@ -14,12 +14,12 @@ backend/.venv/bin/pip install --constraint backend/requirements.lock -e 'backend
 backend/.venv/bin/python -m pip check
 ```
 
-The container build also applies `backend/requirements.lock` as a constraint. Update
-`pyproject.toml` and the lock together whenever a runtime or development dependency changes.
+容器构建同样使用 `backend/requirements.lock` 约束依赖版本。运行时依赖或开发依赖发生变化时，
+必须同步更新 `pyproject.toml` 和锁定文件。
 
-## Database
+## 数据库
 
-Start the loopback-only local datastores and point host-side backend commands at PostgreSQL:
+启动仅监听本机回环地址的数据存储服务，并让宿主机上的后端命令连接 PostgreSQL：
 
 ```bash
 cp infra/env.example infra/.env
@@ -28,12 +28,12 @@ export DATABASE_URL='postgresql+psycopg://tax_risk:replace-for-local-development
 export REDIS_URL='redis://127.0.0.1:6379/0'
 ```
 
-Application containers use the Compose service names `postgres` and `redis`; host-side tests
-use `127.0.0.1`. Replace all local-only credentials in any shared or deployed environment.
+应用容器使用 Compose 服务名 `postgres` 和 `redis`；宿主机测试使用 `127.0.0.1`。
+在任何共享环境或部署环境中，都必须替换全部仅供本地使用的凭据。
 
-## Migrations
+## 数据库迁移
 
-Inspect and upgrade the configured database:
+检查并升级已配置的数据库：
 
 ```bash
 cd backend
@@ -42,8 +42,8 @@ cd backend
 .venv/bin/alembic check
 ```
 
-Never run `alembic downgrade` against the primary or only copy of a database. After restoring
-a verified backup into a disposable database, a downgrade rehearsal may use that copy only:
+严禁对主数据库或数据库的唯一副本执行 `alembic downgrade`。将已验证的备份恢复至一次性数据库后，
+仅可在该副本上演练降级：
 
 ```bash
 cd backend
@@ -52,75 +52,70 @@ export DATABASE_URL='postgresql+psycopg://tax_risk:replace-for-local-development
 .venv/bin/alembic upgrade head
 ```
 
-Discard the rehearsal database after verifying the migration path. Production downgrade is
-permitted only after the same downgrade succeeds on a restored copy and the approved rollback
-process authorizes it.
+验证迁移路径后，应销毁演练数据库。只有同一降级操作已在恢复副本上成功完成，且经批准的回滚流程明确授权后，
+才允许执行生产降级。
 
 ## API
 
-Run the API directly for backend development:
+后端开发时，可直接运行 API：
 
 ```bash
 cd backend
 .venv/bin/uvicorn tax_risk.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-Implemented endpoints are:
+已实现的端点如下：
 
 - `GET /health`
-- `POST /api/v1/ingest-batches`, `POST /api/v1/ingest-batches/{id}/files`, and
+- `POST /api/v1/ingest-batches`、`POST /api/v1/ingest-batches/{id}/files` 和
   `GET /api/v1/ingest-batches/{id}`
-- `POST /api/v1/tax-master/import`, `POST /api/v1/tax-master/{id}/approve`, and
+- `POST /api/v1/tax-master/import`、`POST /api/v1/tax-master/{id}/approve` 和
   `GET /api/v1/tax-master/{company_code}`
-- `POST /api/v1/snapshots/validate`, `POST /api/v1/snapshots/{id}/publish`, and
+- `POST /api/v1/snapshots/validate`、`POST /api/v1/snapshots/{id}/publish` 和
   `POST /api/v1/snapshot-sets`
-- `POST /api/v1/quarterly-runs` and `GET /api/v1/quarterly-runs/{id}`
-- `GET /api/v1/dashboard/quarterly`, `GET /api/v1/risk-cases`,
-  `POST /api/v1/risk-cases/{id}/actions`, and `GET /api/v1/detections/{id}`
+- `POST /api/v1/quarterly-runs` 和 `GET /api/v1/quarterly-runs/{id}`
+- `GET /api/v1/dashboard/quarterly`、`GET /api/v1/risk-cases`、
+  `POST /api/v1/risk-cases/{id}/actions` 和 `GET /api/v1/detections/{id}`
 
-Every ingest-batch, tax-master, and snapshot control-plane route requires the `group-tax`
-administrative role. Quarterly, risk, dashboard, and detection endpoints also enforce the
-Principal's role and company scope in server-side SQL. The legacy `uploaded_by` and
-`reviewed_by` transport fields are accepted for wire compatibility only; persisted maker and
-reviewer identities come from `Principal.subject` and cannot be supplied by the request body.
-Signed development headers are accepted only when both `ENVIRONMENT=development` and
-`DEVELOPMENT_PRINCIPAL_ENABLED=true`. Production requires an injected IdP verifier and
-otherwise returns HTTP 401; health remains public for orchestration.
+所有 ingest-batch、tax-master 和 snapshot 控制面路由均要求 `group-tax` 管理角色。
+季度监测、风险、驾驶舱和检测端点还会在服务端 SQL 中强制校验 `Principal` 的角色和公司权限范围。
+旧版传输字段 `uploaded_by` 和 `reviewed_by` 仅为保持接口兼容而接收；持久化的制单人和复核人身份取自
+`Principal.subject`，请求正文不能指定这些身份。只有同时满足 `ENVIRONMENT=development` 和
+`DEVELOPMENT_PRINCIPAL_ENABLED=true` 时，系统才接受已签名的开发请求头。生产环境必须注入 IdP
+验证器，否则返回 HTTP 401；健康检查端点保持公开，供编排系统使用。
 
-## Quarterly Worker
+## 季度任务
 
-Run the real quarterly queue locally:
+在本地运行真实的季度任务队列：
 
 ```bash
 cd backend
 .venv/bin/celery -A tax_risk.workers.celery_app:celery_app worker --queues=quarterly --concurrency=4 --loglevel=INFO
 ```
 
-The Compose equivalent is:
+对应的 Compose 命令如下：
 
 ```bash
 docker compose --env-file infra/.env -f infra/docker-compose.yml up -d worker-quarterly
 docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f worker-quarterly
 ```
 
-Tasks carry durable IDs only. The worker reloads the frozen snapshot, tax-master version, and
-rule version from PostgreSQL; it uses JSON serialization, late acknowledgement, worker-loss
-rejection, bounded task timeouts, and per-company retry isolation.
+任务仅携带可持久化 ID。工作进程会从 PostgreSQL 重新加载冻结快照、tax-master 版本和规则版本；
+系统采用 JSON 序列化、延迟确认、工作进程丢失时拒绝确认、有限任务超时，以及按公司隔离的重试机制。
 
-## Retry
+## 重试
 
-Automatic Celery retry applies only to a failed company attempt. Manual batch retry is the
-`QuarterlyBatchService.retry_failed(run_id=...)` application operation: it is allowed only for
-a terminal `PARTIAL_SUCCESS` or `FAILED` run and resets every and only `FAILED` company row.
-It never recomputes `SUCCEEDED` companies and never retries data/control `BLOCKED` companies.
+Celery 自动重试仅适用于单家公司执行失败。手工批量重试通过应用操作
+`QuarterlyBatchService.retry_failed(run_id=...)` 执行：仅终态为 `PARTIAL_SUCCESS` 或 `FAILED`
+的运行批次可以重试，并且会重置全部且仅重置状态为 `FAILED` 的公司记录。该操作绝不会重新计算
+`SUCCEEDED` 公司，也绝不会重试因数据或控制原因处于 `BLOCKED` 状态的公司。
 
-Phase 1 does not expose this operation as a public HTTP endpoint. Authorized operators must
-use the controlled internal command in `infra/README.md`, record its returned company-task
-IDs, and allow the normal Celery canvas to summarize the run again.
+第一阶段不将该操作开放为公共 HTTP 端点。获授权的运维人员必须使用 `infra/README.md` 中受控的内部命令，
+记录命令返回的公司任务 ID，并由正常的 Celery `canvas` 重新汇总运行结果。
 
-## Tests
+## 测试
 
-Run the backend quality gates from the repository root:
+在仓库根目录执行后端质量门禁：
 
 ```bash
 backend/.venv/bin/pytest backend/tests -q
@@ -128,14 +123,13 @@ backend/.venv/bin/ruff check backend/src backend/tests infra/tests
 backend/.venv/bin/mypy backend/src
 ```
 
-Run the isolated deterministic E2E contracts against the loopback PostgreSQL service:
+针对本机回环地址上的 PostgreSQL 服务执行隔离的确定性 E2E 契约测试：
 
 ```bash
 backend/.venv/bin/pytest -q backend/tests/e2e/test_quarterly_standard_scenario.py backend/tests/e2e/test_quarterly_eager_worker_contract.py
 ```
 
-Run the deployed-service E2E only after the Compose API, Redis, and real quarterly worker are
-healthy:
+只有在 Compose API、Redis 和真实季度任务工作进程均健康后，才可执行部署服务 E2E 测试：
 
 ```bash
 export E2E_BASE_URL=http://127.0.0.1:8000
@@ -147,29 +141,21 @@ export E2E_WORKER_TIMEOUT_SECONDS=300
 backend/.venv/bin/pytest -q -s backend/tests/e2e/test_quarterly_api_worker_flow.py
 ```
 
-This external test signs every control-plane request with separate group-tax maker and
-reviewer subjects, seeds through HTTP, and exercises the real broker and worker. It is not
-the in-process eager-worker contract.
+此外部测试使用不同的 `group-tax` 制单人和复核人主体标识对每个控制面请求签名，通过 HTTP 注入种子数据，
+并实际调用消息代理和工作进程。该测试不是进程内 `eager-worker` 契约测试。
 
-## Numeric Contract
+## 数值契约
 
-- Construct `Decimal` values from strings; never route accounting or tax amounts through
-  binary floating point.
-- Quantize monetary outputs with the governed currency and amount scale using
-  `ROUND_HALF_UP`.
-- Preserve full database precision for inputs and evidence. API Decimal values are exact
-  strings accompanied by currency and scale where applicable.
-- Rates are decimals, not percentages: `0.25` means 25%, and the alert threshold `0.05` means
-  five percentage points.
-- Formula replay uses the frozen snapshot, tax-master version, rule version, and persisted
-  formula substitution. The browser does not recompute tax results.
+- 必须从字符串构造 `Decimal` 值；会计金额和税务金额严禁经过二进制浮点数处理。
+- 货币输出必须按照受控币种和金额精度，并使用 `ROUND_HALF_UP` 进行量化。
+- 输入和证据必须保留数据库的完整精度。API 中的 Decimal 值使用精确字符串表示，并在适用时附带币种和精度。
+- 税率使用小数而非百分数表示：`0.25` 表示 25%，预警阈值 `0.05` 表示五个百分点。
+- 公式重放必须使用冻结快照、tax-master 版本、规则版本及已持久化的公式代入值。浏览器不得重新计算税务结果。
 
-## Phase 1 Boundary
+## 第一阶段边界
 
-Phase 1 implements controlled ingestion, immutable published snapshot sets, the three approved
-quarterly deterministic checks, auditable risk cases, scoped APIs, and the quarterly dashboard.
-`SnapshotSet.published_at` is the sole data-ready timestamp.
+第一阶段实现受控数据采集、不可变的已发布快照集、三项已批准的季度确定性检查、可审计风险事项、
+受权限范围控制的 API，以及季度驾驶舱。`SnapshotSet.published_at` 是唯一的数据就绪时间戳。
 
-Phase 1 contains no semantic Agent, LLM adapter, model server, prompt, embedding index, or model
-credential. Business-entertainment, welfare, and donation semantic classification are later
-phases and must not be introduced into this runtime or worker queue.
+第一阶段不包含语义 Agent、LLM 适配器、模型服务器、提示词、向量索引或模型凭据。业务招待费、福利费和
+捐赠支出的语义分类属于后续阶段，严禁引入当前运行环境或工作进程队列。

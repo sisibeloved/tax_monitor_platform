@@ -220,15 +220,15 @@ def test_container_files_enforce_locked_dependencies_and_server_side_auth_header
 def test_operations_guide_has_an_explicit_production_go_no_go_gate() -> None:
     guide = OPERATIONS_GUIDE.read_text()
 
-    assert "## Production Go/No-Go" in guide
+    assert "## 生产上线准入" in guide
     for required_evidence in (
-        "Field mapping sign-off",
-        "Amount scale sign-off",
+        "字段映射签字确认",
+        "金额精度签字确认",
         "E2E_SEED_TOKEN",
         "E2E_STANDARD_COMPANY_CODE",
         "105 requested / 103 succeeded / 2 blocked / 0 failed",
-        "Playwright result",
-        "Business approver",
-        "MUST NOT be deployed to production",
+        "Playwright 结果",
+        "业务批准人",
+        "严禁部署至生产环境",
     ):
         assert required_evidence in guide

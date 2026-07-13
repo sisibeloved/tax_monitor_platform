@@ -23,15 +23,15 @@
 | V0.7 | 2026-07-12 | 增加业务招待费未关联SAP时基于OA/合思直接判断及后续案件合并 |
 | V0.8 | 2026-07-12 | 未关联业务单据双路径修订通过独立规格评审 |
 
-## 1.4 Keywords 关键词
+## 1.4 关键词
 
 数据契约、公式、定点金额、风险指纹、证据关联、Agent输出schema、异常处理、验收案例。
 
-## 1.5 Abstract 摘要
+## 1.5 摘要
 
 本文定义四类监测的算法、数据结构、接口、正常/异常行为、去重、证据关联、金额精度、安全和测试要求，可直接作为实施计划和开发验收的输入。
 
-## 1.6 List of abbreviations 缩略语清单
+## 1.6 缩略语清单
 
 | 缩略语 | 英文全称 | 中文名 |
 |---|---|---|
@@ -60,19 +60,19 @@
 ## 3.2 关键算法与流程
 
 ```text
-for each source_batch:
-    verify schema_version, source_primary_key, period
-    reconcile record_count and control_total
-    reject duplicate source_primary_key
-    normalize company_code, currency, amount_scale, sign
+对每个 source_batch：
+    校验 schema_version、source_primary_key、period
+    核对 record_count 与 control_total
+    拒绝重复的 source_primary_key
+    标准化 company_code、currency、amount_scale、sign
 
-for each company_period:
-    require one effective TaxMasterData row
-    require all source datasets needed by selected monitor
-    if any blocking check fails:
-        emit DataIssue; mark NOT_RUN
-    else:
-        seal AccountingSnapshot; emit SnapshotReady
+对每个 company_period：
+    要求存在且仅存在一条有效 TaxMasterData 记录
+    要求选定监测所需的全部来源数据集均已就绪
+    若任一阻断性检查失败：
+        生成 DataIssue；标记为 NOT_RUN
+    否则：
+        封存 AccountingSnapshot；生成 SnapshotReady
 ```
 
 金额使用十进制定点类型；来源金额保留SAP公司账簿币种小数位，跨币种不在首期公式内混算。SAP信用方向、红字和冲销由数据字典转换为业务代数金额。
@@ -187,20 +187,20 @@ quarter_tax_difference =
     quarter_tax_should_accrue
   - sap_current_quarter_current_tax_provision
 
-if round_to_ledger_scale(quarter_tax_difference) != 0:
-    emit PROVISION_DIFFERENCE
+若 round_to_ledger_scale(quarter_tax_difference) != 0：
+    生成 PROVISION_DIFFERENCE
 ```
 
 `sap_cumulative_dividend_received`为SAP账上本年累计收到分红；不取向股东支付的分红。`sap_*_current_tax_provision`只包括当期所得税，不包括递延所得税和以前年度调整。本季度应计提可为负数。
 
 ```text
-if cumulative_revenue <= 0:
-    emit REVENUE_NON_POSITIVE; tax_burden = NOT_CALCULATED
-else:
+若 cumulative_revenue <= 0：
+    生成 REVENUE_NON_POSITIVE；tax_burden = NOT_CALCULATED
+否则：
     current_tax_burden = cumulative_tax_payable / cumulative_revenue
     deviation = current_tax_burden - offline_average_tax_burden_rate_3y
-    if abs(deviation) >= 0.05:
-        emit TAX_BURDEN_HIGH if deviation > 0 else TAX_BURDEN_LOW
+    若 abs(deviation) >= 0.05：
+        deviation > 0 时生成 TAX_BURDEN_HIGH，否则生成 TAX_BURDEN_LOW
 ```
 
 ```text
@@ -215,8 +215,8 @@ potential_tax_payable =
 potential_tax_cost =
     potential_tax_payable - cumulative_tax_payable
 
-if round_to_ledger_scale(potential_tax_cost) != 0:
-    emit POTENTIAL_TAX_COST
+若 round_to_ledger_scale(potential_tax_cost) != 0：
+    生成 POTENTIAL_TAX_COST
 ```
 
 两项潜在调增来源均按风险正数口径进入公式。
@@ -304,39 +304,39 @@ CalculateQuarterly(company_code, quarter, snapshot_id,
 ```text
 scope = select_company_scope(monitor_type, month)
 
-if monitor_type == BUSINESS_ENTERTAINMENT:
+若 monitor_type == BUSINESS_ENTERTAINMENT：
     sap_items = load_ytd_sap_items(scope, month)
     business_docs = load_ytd_oa_hesi_business_documents(scope, month)
     exact_links = build_exact_links(sap_items, business_docs)
     items = build_sap_linked_packs(exact_links)
     items += build_unlinked_business_document_packs(
-                 business_docs not in exact_links,
+                 business_docs 中不属于 exact_links 的记录,
                  canonical_priority = HESI_REIMBURSEMENT_THEN_OA_APPLICATION)
-    save_unlinked_sap_coverage_list(sap_items not in exact_links)
-else:
+    save_unlinked_sap_coverage_list(sap_items 中不属于 exact_links 的记录)
+否则：
     items = load_ytd_sap_items(scope, month)
 
-for each item:
+对每个 item：
     candidate = keyword_or_semantic_recall_filter(item)
-    if not candidate:
-        continue
+    若不存在 candidate：
+        继续处理下一项
     evidence_pack = link_evidence(item)
     source_mode = determine_source_mode(item, evidence_pack)
     result = domain_agent.classify(source_mode, evidence_pack)
     validate_output_schema(result)
     evidence_reviewer.verify(result, evidence_pack)
     save_detection(result)
-    if result.semantic_label in SUSPECTED_MISPOSTING_LABELS:
-        if source_mode == SAP_LINKED:
+    若 result.semantic_label 属于 SUSPECTED_MISPOSTING_LABELS：
+        若 source_mode == SAP_LINKED：
             upsert_sap_risk_case(result)
-        else if monitor_type == BUSINESS_ENTERTAINMENT
-                and item.is_oa_or_hesi_business_document:
-            upsert_business_document_risk_case(result)  // UNLINKED
-        else:
+        否则，若 monitor_type == BUSINESS_ENTERTAINMENT
+                且 item.is_oa_or_hesi_business_document：
+            upsert_business_document_risk_case(result)  // 未关联
+        否则：
             create_or_update_evidence_task(result)
-    else if result.semantic_label == INSUFFICIENT_EVIDENCE:
+    否则，若 result.semantic_label == INSUFFICIENT_EVIDENCE：
         create_or_update_evidence_task(result)
-    // CURRENT_ACCOUNT_REASONABLE只保留检测记录
+    // CURRENT_ACCOUNT_REASONABLE 只保留检测记录
 ```
 
 公司范围：
@@ -487,15 +487,15 @@ business_document_case_key = hash(company_code,
                                   monitor_type)
 
 detection_subject_key = numeric_case_key
-                        or semantic_candidate_key
+                        或 semantic_candidate_key
 
 detection_key = hash(detection_subject_key, batch_id,
                      rule_version, model_version,
                      prompt_version, snapshot_id)
 
-upsert RiskCase by case_key
-insert DetectionRecord by detection_key
-attach all exact/fuzzy evidence refs
+按 case_key 新增或更新 RiskCase
+按 detection_key 插入 DetectionRecord
+附加全部精确/模糊证据引用
 ```
 
 数值类以公司/财年/季度/监测类型区分案件；已关联业务招待费及福利费/捐赠以SAP凭证行为主记录；未关联业务招待费以OA/合思业务单据为主记录。案件指纹不含规则/模型版本；检测键始终基于数值主体键或语义候选键，并包含版本。FUZZY关联不生成`semantic_case_key`，但未关联业务单据如形成疑似错入使用`business_document_case_key`建正式风险。后续建立EXACT关联时，事务性合并业务单据案件到SAP案件并设置`merged_into_case_id`，不重复累计风险数量和金额。

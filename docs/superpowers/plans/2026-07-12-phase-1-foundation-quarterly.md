@@ -1,99 +1,99 @@
-# Phase 1 Foundation and Quarterly Monitoring Implementation Plan
+# 阶段 1 基础底座与季度监测实施计划
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **面向 Agent 工作单元：** 必须使用 superpowers:subagent-driven-development（如可使用子 Agent）或 superpowers:executing-plans 来实施本计划。各步骤使用复选框（`- [ ]`）语法跟踪。
 
-**Goal:** Build a production-shaped Phase 1 foundation that ingests controlled quarterly data for 100+ companies, publishes immutable quality-gated snapshots, executes the three approved deterministic tax calculations, creates auditable risk cases, and exposes a minimal quarterly dashboard.
+**目标：** 构建具备生产形态的阶段 1 基础底座，采集 100 多家公司的受控季度数据，发布通过质量门禁的不可变快照，执行三项已批准的确定性税务计算，创建可审计的风险事项，并提供最小可用的季度驾驶舱。
 
-**Architecture:** Use a modular Python service with pure domain calculations, SQLAlchemy repositories, FastAPI APIs, and Celery company-partitioned batch workers. PostgreSQL is the source of truth for control-plane, lineage, calculations, and cases; Redis carries durable task coordination; React consumes read-only quarterly APIs. No LLM, embedding, prompt, vector store, or semantic Agent code belongs in Phase 1.
+**架构：** 采用模块化 Python 服务，包含纯领域计算、SQLAlchemy 仓储、FastAPI API 以及按公司分片的 Celery 批处理工作任务。PostgreSQL 是控制面、数据血缘、计算结果及风险事项的唯一事实来源；Redis 承载持久化任务协调；React 调用只读季度 API。阶段 1 不包含任何 LLM、嵌入、提示词、向量存储或语义 Agent 代码。
 
-**Tech Stack:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2/Alembic, PostgreSQL 16, Celery 5/Redis 7, pytest/Hypothesis; React 18, TypeScript, Vite, Ant Design, TanStack Query, Vitest/Testing Library; Docker Compose for local infrastructure.
+**技术栈：** Python 3.12、FastAPI、Pydantic v2、SQLAlchemy 2/Alembic、PostgreSQL 16、Celery 5/Redis 7、pytest/Hypothesis；React 18、TypeScript、Vite、Ant Design、TanStack Query、Vitest/Testing Library；Docker Compose 用于本地基础设施。
 
 ---
 
-**Source specification:** docs/superpowers/specs/2026-07-12-group-income-tax-risk-monitoring-platform-design.md
+**源规格说明书：** docs/superpowers/specs/2026-07-12-group-income-tax-risk-monitoring-platform-design.md
 
-**Execution rules:** Follow @superpowers:test-driven-development for every behavior, @superpowers:verification-before-completion before each chunk handoff, and commit only after the named focused checks pass. Commands assume the repository root unless a command begins with cd.
+**执行规则：** 每项行为均遵循 @superpowers:test-driven-development，每个工作块移交前均遵循 @superpowers:verification-before-completion，并且只有在指定的聚焦检查通过后才能提交。除非命令以 cd 开头，否则均假定从仓库根目录执行。
 
-## Planned File Map
+## 计划文件清单
 
-### Backend foundation
+### 后端基础底座
 
-- **backend/pyproject.toml** — Python package, runtime and test dependencies, pytest/coverage configuration.
-- **backend/src/tax_risk/config.py** — environment-backed settings.
-- **backend/src/tax_risk/db.py** — SQLAlchemy engine, session factory, declarative base.
-- **backend/src/tax_risk/main.py** — FastAPI application factory.
-- **backend/src/tax_risk/domain/money.py** — Money, Rate, ROUND_HALF_UP contract.
-- **backend/src/tax_risk/domain/quarterly.py** — pure quarterly inputs, results, and formulas.
-- **backend/src/tax_risk/domain/cases.py** — risk fingerprint and state transition policy.
-- **backend/src/tax_risk/persistence/models.py** — canonical SQLAlchemy Base and focused-model import registry; later phases keep this canonical path.
-- **backend/src/tax_risk/persistence/repositories.py** — canonical transaction-scoped UnitOfWork and focused-repository composition; later phases keep this canonical path.
-- **backend/src/tax_risk/persistence/ingest_models.py** — Company, IngestBatch, IngestError, and SourceRecord tables.
-- **backend/src/tax_risk/persistence/master_models.py** — effective-dated tax-master and rule-version tables.
-- **backend/src/tax_risk/persistence/snapshot_models.py** — AccountingSnapshot, SnapshotSource, SnapshotSet, and SnapshotSetMember tables.
-- **backend/src/tax_risk/persistence/risk_models.py** — MonitoringRun, DetectionRecord, RiskCase, ReviewAction, and AuditEvent tables.
-- **backend/src/tax_risk/persistence/ingest_repositories.py** — company and ingestion persistence operations.
-- **backend/src/tax_risk/persistence/master_repositories.py** — tax-master and rule-version operations.
-- **backend/src/tax_risk/persistence/snapshot_repositories.py** — quality-gate, locking, and snapshot publication operations.
-- **backend/src/tax_risk/persistence/risk_repositories.py** — run, detection, case, review, and audit operations.
-- **backend/src/tax_risk/application/ingest.py** — IngestBatch use cases.
-- **backend/src/tax_risk/application/companies.py** — SAP company reference import and active-company lookup.
-- **backend/src/tax_risk/application/master_data.py** — versioned tax master import and lookup.
-- **backend/src/tax_risk/application/snapshots.py** — quality gate and immutable snapshot publication.
-- **backend/src/tax_risk/application/quarterly_runs.py** — formula execution, detections, and cases.
-- **backend/src/tax_risk/adapters/ingest/base.py** — canonical batch adapter protocol.
-- **backend/src/tax_risk/adapters/ingest/csv_adapter.py** — reference CSV adapter.
-- **backend/src/tax_risk/adapters/ingest/tax_master_xlsx.py** — controlled XLSX master adapter.
-- **backend/src/tax_risk/api/schemas.py** — Pydantic v2 transport schemas.
-- **backend/src/tax_risk/api/dependencies.py** — sessions and principal scope.
-- **backend/src/tax_risk/api/routes/** — health, ingest, master data, snapshots, runs, cases, dashboard.
-- **backend/src/tax_risk/workers/celery_app.py** — Celery configuration and routing.
-- **backend/src/tax_risk/workers/quarterly_batch.py** — fan-out, company task, fan-in summary.
-- **backend/migrations/** — Alembic environment and numbered schema migrations.
-- **backend/tests/unit/** — pure domain and application tests.
-- **backend/tests/integration/** — PostgreSQL/API/Celery eager-mode tests.
-- **backend/tests/e2e/** — standard-data full quarterly acceptance.
+- **backend/pyproject.toml** — Python 包、运行时及测试依赖、pytest/覆盖率配置。
+- **backend/src/tax_risk/config.py** — 基于环境变量的配置。
+- **backend/src/tax_risk/db.py** — SQLAlchemy 引擎、会话工厂及声明式基类。
+- **backend/src/tax_risk/main.py** — FastAPI 应用工厂。
+- **backend/src/tax_risk/domain/money.py** — Money、Rate 及 ROUND_HALF_UP 契约。
+- **backend/src/tax_risk/domain/quarterly.py** — 纯季度输入、结果及公式。
+- **backend/src/tax_risk/domain/cases.py** — 风险指纹及状态流转策略。
+- **backend/src/tax_risk/persistence/models.py** — 规范 SQLAlchemy Base 及聚焦模型导入登记；后续阶段继续使用此规范路径。
+- **backend/src/tax_risk/persistence/repositories.py** — 规范的事务范围 UnitOfWork 及聚焦仓储组合；后续阶段继续使用此规范路径。
+- **backend/src/tax_risk/persistence/ingest_models.py** — Company、IngestBatch、IngestError 及 SourceRecord 表。
+- **backend/src/tax_risk/persistence/master_models.py** — 带生效日期的税务主数据表及规则版本表。
+- **backend/src/tax_risk/persistence/snapshot_models.py** — AccountingSnapshot、SnapshotSource、SnapshotSet 及 SnapshotSetMember 表。
+- **backend/src/tax_risk/persistence/risk_models.py** — MonitoringRun、DetectionRecord、RiskCase、ReviewAction 及 AuditEvent 表。
+- **backend/src/tax_risk/persistence/ingest_repositories.py** — 公司及数据采集持久化操作。
+- **backend/src/tax_risk/persistence/master_repositories.py** — 税务主数据及规则版本操作。
+- **backend/src/tax_risk/persistence/snapshot_repositories.py** — 质量门禁、锁定及快照发布操作。
+- **backend/src/tax_risk/persistence/risk_repositories.py** — 运行、监测结果、风险事项、复核及审计操作。
+- **backend/src/tax_risk/application/ingest.py** — IngestBatch 用例。
+- **backend/src/tax_risk/application/companies.py** — SAP 公司基础信息导入及有效公司查询。
+- **backend/src/tax_risk/application/master_data.py** — 版本化税务主数据导入及查询。
+- **backend/src/tax_risk/application/snapshots.py** — 质量门禁及不可变快照发布。
+- **backend/src/tax_risk/application/quarterly_runs.py** — 公式执行、监测结果及风险事项。
+- **backend/src/tax_risk/adapters/ingest/base.py** — 规范批量适配器协议。
+- **backend/src/tax_risk/adapters/ingest/csv_adapter.py** — 参考 CSV 适配器。
+- **backend/src/tax_risk/adapters/ingest/tax_master_xlsx.py** — 受控 XLSX 主数据适配器。
+- **backend/src/tax_risk/api/schemas.py** — Pydantic v2 传输模式。
+- **backend/src/tax_risk/api/dependencies.py** — 会话及主体范围。
+- **backend/src/tax_risk/api/routes/** — 健康检查、数据采集、主数据、快照、运行、风险事项及驾驶舱。
+- **backend/src/tax_risk/workers/celery_app.py** — Celery 配置及路由。
+- **backend/src/tax_risk/workers/quarterly_batch.py** — 扇出、公司任务及扇入汇总。
+- **backend/migrations/** — Alembic 环境及编号模式迁移。
+- **backend/tests/unit/** — 纯领域及应用测试。
+- **backend/tests/integration/** — PostgreSQL/API/Celery eager 模式测试。
+- **backend/tests/e2e/** — 标准数据的完整季度验收。
 
-### Frontend and infrastructure
+### 前端与基础设施
 
-- **web/src/api/client.ts** — typed HTTP client.
-- **web/src/api/quarterly.ts** — dashboard/run/case queries.
-- **web/src/features/quarterly/types.ts** — UI contracts.
-- **web/src/features/quarterly/QuarterlyDashboardPage.tsx** — minimum dashboard.
-- **web/src/features/quarterly/QuarterlyRunTable.tsx** — company status and risk table.
-- **web/src/features/quarterly/FormulaDrawer.tsx** — calculation substitution and lineage.
-- **web/src/App.tsx** — router and query provider.
-- **web/src/**/*.test.tsx** — component tests.
-- **web/e2e/quarterly-dashboard.spec.ts** — browser acceptance.
-- **infra/docker-compose.yml** — PostgreSQL, Redis, API, worker, and web.
-- **infra/env.example** — non-secret local configuration.
-- **infra/README.md** — start, migrate, seed, run, and verify commands.
+- **web/src/api/client.ts** — 类型化 HTTP 客户端。
+- **web/src/api/quarterly.ts** — 驾驶舱、运行及风险事项查询。
+- **web/src/features/quarterly/types.ts** — 界面契约。
+- **web/src/features/quarterly/QuarterlyDashboardPage.tsx** — 最小可用驾驶舱。
+- **web/src/features/quarterly/QuarterlyRunTable.tsx** — 公司状态及风险表。
+- **web/src/features/quarterly/FormulaDrawer.tsx** — 计算代入过程及数据血缘。
+- **web/src/App.tsx** — 路由及查询提供器。
+- **web/src/**/*.test.tsx** — 组件测试。
+- **web/e2e/quarterly-dashboard.spec.ts** — 浏览器验收。
+- **infra/docker-compose.yml** — PostgreSQL、Redis、API、工作任务及 Web。
+- **infra/env.example** — 不含密钥的本地配置。
+- **infra/README.md** — 启动、迁移、数据准备、运行及验证命令。
 
-## Chunk 1: Foundation, Data Contracts, and Immutable Snapshot
+## 工作块 1：基础底座、数据契约与不可变快照
 
-### Task 1: Bootstrap the greenfield backend and frontend
+### 任务 1：初始化全新后端与前端
 
-**Files:**
-- Create: **backend/pyproject.toml**
-- Create: **backend/src/tax_risk/__init__.py**
-- Create: **backend/src/tax_risk/config.py**
-- Create: **backend/src/tax_risk/db.py**
-- Create: **backend/src/tax_risk/main.py**
-- Create: **backend/src/tax_risk/api/routes/health.py**
-- Create: **backend/tests/unit/api/test_health.py**
-- Create: **web/package.json**
-- Create: **web/tsconfig.json**
-- Create: **web/vite.config.ts**
-- Create: **web/index.html**
-- Create: **web/src/main.tsx**
-- Create: **web/src/App.tsx**
-- Create: **web/src/App.test.tsx**
-- Create: **infra/docker-compose.yml**
-- Create: **infra/env.example**
-- Create: **.gitignore**
+**文件：**
+- 新建：**backend/pyproject.toml**
+- 新建：**backend/src/tax_risk/__init__.py**
+- 新建：**backend/src/tax_risk/config.py**
+- 新建：**backend/src/tax_risk/db.py**
+- 新建：**backend/src/tax_risk/main.py**
+- 新建：**backend/src/tax_risk/api/routes/health.py**
+- 新建：**backend/tests/unit/api/test_health.py**
+- 新建：**web/package.json**
+- 新建：**web/tsconfig.json**
+- 新建：**web/vite.config.ts**
+- 新建：**web/index.html**
+- 新建：**web/src/main.tsx**
+- 新建：**web/src/App.tsx**
+- 新建：**web/src/App.test.tsx**
+- 新建：**infra/docker-compose.yml**
+- 新建：**infra/env.example**
+- 新建：**.gitignore**
 
-- [ ] **Step 1: Add package manifests and the failing health tests**
+- [ ] **步骤 1：添加包清单及预期失败的健康检查测试**
 
-Use Python 3.12 and declare FastAPI, Pydantic Settings, SQLAlchemy, Alembic, psycopg, Celery, Redis, python-multipart, openpyxl, pytest, pytest-cov, Hypothesis, httpx, Ruff, and mypy in **backend/pyproject.toml**. Configure pytest with pythonpath=src and strict markers. Add this backend test:
+使用 Python 3.12，并在 **backend/pyproject.toml** 中声明 FastAPI、Pydantic Settings、SQLAlchemy、Alembic、psycopg、Celery、Redis、python-multipart、openpyxl、pytest、pytest-cov、Hypothesis、httpx、Ruff 及 mypy。为 pytest 配置 pythonpath=src 及严格标记。添加以下后端测试：
 
 ~~~python
 from fastapi.testclient import TestClient
@@ -108,49 +108,49 @@ def test_health_reports_service_ready() -> None:
     assert response.json() == {"status": "ok", "service": "tax-risk"}
 ~~~
 
-Configure React/Vite/TypeScript, Ant Design, @tanstack/react-query, Vitest, Testing Library, Playwright, ESLint, and Prettier. Add an App test expecting the heading “集团所得税风险监测”.
+配置 React/Vite/TypeScript、Ant Design、@tanstack/react-query、Vitest、Testing Library、Playwright、ESLint 及 Prettier。添加 App 测试，要求标题为“集团所得税风险监测”。
 
-- [ ] **Step 2: Run tests and verify the red state**
+- [ ] **步骤 2：运行测试并确认红灯状态**
 
-Run: cd backend && python3.12 -m pip install -e '.[dev]' && pytest tests/unit/api/test_health.py -q
+运行：cd backend && python3.12 -m pip install -e '.[dev]' && pytest tests/unit/api/test_health.py -q
 
-Expected: FAIL because tax_risk.main or create_app does not exist.
+预期：失败，因为 tax_risk.main 或 create_app 尚不存在。
 
-Run: cd web && npm install && npm test -- --run
+运行：cd web && npm install && npm test -- --run
 
-Expected: FAIL because App does not yet render the required heading.
+预期：失败，因为 App 尚未渲染要求的标题。
 
-- [ ] **Step 3: Implement the smallest application shells**
+- [ ] **步骤 3：实现最小应用外壳**
 
-Create a Settings class with database_url, redis_url, environment, and development_principal_enabled. Implement create_app as an application factory, include a GET /health router, and expose no business endpoints yet. Build App with Ant Design Layout and the required heading. Configure **infra/docker-compose.yml** with PostgreSQL 16 and Redis 7 health checks; do not add semantic-model services.
+创建包含 database_url、redis_url、environment 及 development_principal_enabled 的 Settings 类。将 create_app 实现为应用工厂，加入 GET /health 路由，暂不暴露业务端点。使用 Ant Design Layout 构建 App 并展示要求的标题。在 **infra/docker-compose.yml** 中配置 PostgreSQL 16 和 Redis 7 健康检查；不得添加语义模型服务。
 
-- [ ] **Step 4: Verify the green state and static checks**
+- [ ] **步骤 4：确认绿灯状态并执行静态检查**
 
-Run: cd backend && pytest tests/unit/api/test_health.py -q && ruff check src tests && mypy src
+运行：cd backend && pytest tests/unit/api/test_health.py -q && ruff check src tests && mypy src
 
-Expected: 1 passed; Ruff and mypy exit 0.
+预期：1 项测试通过；Ruff 和 mypy 均以 0 退出。
 
-Run: cd web && npm test -- --run && npm run build
+运行：cd web && npm test -- --run && npm run build
 
-Expected: App test passes and Vite build exits 0.
+预期：App 测试通过，Vite 构建以 0 退出。
 
-- [ ] **Step 5: Commit the scaffold**
+- [ ] **步骤 5：提交项目脚手架**
 
 ~~~bash
 git add .gitignore backend web infra
 git commit -m "chore: scaffold tax risk platform"
 ~~~
 
-### Task 2: Implement Money, Rate, and rounding invariants
+### 任务 2：实现 Money、Rate 及舍入不变量
 
-**Files:**
-- Create: **backend/src/tax_risk/domain/money.py**
-- Create: **backend/tests/unit/domain/test_money.py**
-- Create: **backend/tests/unit/domain/test_rate_properties.py**
+**文件：**
+- 新建：**backend/src/tax_risk/domain/money.py**
+- 新建：**backend/tests/unit/domain/test_money.py**
+- 新建：**backend/tests/unit/domain/test_rate_properties.py**
 
-- [ ] **Step 1: Write example and property tests first**
+- [ ] **步骤 1：先编写示例测试及属性测试**
 
-Cover: string-only Decimal construction, same-currency arithmetic, currency/scale mismatch rejection, final ROUND_HALF_UP, no intermediate rounding, Rate range 0..1, 25%=0.25, and Hypothesis-generated values. The decisive examples are:
+覆盖以下内容：仅允许字符串构造 Decimal、同币种运算、拒绝币种/精度不匹配、最终使用 ROUND_HALF_UP、中间过程不舍入、Rate 范围为 0..1、25%=0.25，以及 Hypothesis 生成值。决定性示例如下：
 
 ~~~python
 from decimal import Decimal
@@ -179,244 +179,244 @@ def test_rate_stores_fraction_not_percent_number() -> None:
         Rate.from_fraction("25")
 ~~~
 
-- [ ] **Step 2: Prove the tests fail**
+- [ ] **步骤 2：证明测试失败**
 
-Run: cd backend && pytest tests/unit/domain/test_money.py tests/unit/domain/test_rate_properties.py -q
+运行：cd backend && pytest tests/unit/domain/test_money.py tests/unit/domain/test_rate_properties.py -q
 
-Expected: collection FAIL because tax_risk.domain.money is missing.
+预期：测试收集失败，因为 tax_risk.domain.money 缺失。
 
-- [ ] **Step 3: Implement the exact value-object contract**
+- [ ] **步骤 3：实现精确值对象契约**
 
-Money must retain unrounded Decimal amount, ISO-like currency, and non-negative scale; quantized returns a new Money using Decimal.quantize with ROUND_HALF_UP. Addition/subtraction require equal currency and scale. Multiplication by Rate returns unrounded Money. Rate accepts Decimal/string only, normalizes to Decimal, and rejects values outside 0..1. Do not accept float anywhere.
+Money 必须保留未舍入的 Decimal 金额、类似 ISO 的币种及非负精度；quantized 使用 Decimal.quantize 和 ROUND_HALF_UP 返回新的 Money。加减运算要求币种和精度相同。与 Rate 相乘时返回未舍入的 Money。Rate 仅接受 Decimal/字符串，统一转换为 Decimal，并拒绝 0..1 以外的值。任何位置都不得接受 float。
 
-- [ ] **Step 4: Verify examples and properties**
+- [ ] **步骤 4：验证示例及属性**
 
-Run: cd backend && pytest tests/unit/domain/test_money.py tests/unit/domain/test_rate_properties.py -q
+运行：cd backend && pytest tests/unit/domain/test_money.py tests/unit/domain/test_rate_properties.py -q
 
-Expected: all examples and at least 100 Hypothesis examples pass.
+预期：全部示例及至少 100 个 Hypothesis 示例通过。
 
-- [ ] **Step 5: Commit the numeric contract**
+- [ ] **步骤 5：提交数值契约**
 
 ~~~bash
 git add backend/src/tax_risk/domain/money.py backend/tests/unit/domain
 git commit -m "feat: add exact money and rate values"
 ~~~
 
-### Task 3: Create the control-plane database and first migration
+### 任务 3：创建控制面数据库及首次迁移
 
-**Files:**
-- Create: **backend/src/tax_risk/persistence/__init__.py**
-- Create: **backend/src/tax_risk/persistence/models.py**
-- Create: **backend/src/tax_risk/persistence/repositories.py**
-- Create: **backend/src/tax_risk/persistence/ingest_models.py**
-- Create: **backend/src/tax_risk/persistence/master_models.py**
-- Create: **backend/src/tax_risk/persistence/snapshot_models.py**
-- Create: **backend/src/tax_risk/persistence/risk_models.py**
-- Create: **backend/src/tax_risk/persistence/ingest_repositories.py**
-- Create: **backend/src/tax_risk/persistence/master_repositories.py**
-- Create: **backend/src/tax_risk/persistence/snapshot_repositories.py**
-- Create: **backend/src/tax_risk/persistence/risk_repositories.py**
-- Create: **backend/alembic.ini**
-- Create: **backend/migrations/env.py**
-- Create: **backend/migrations/script.py.mako**
-- Create: **backend/migrations/versions/0001_control_plane.py**
-- Create: **backend/tests/integration/persistence/test_schema.py**
-- Create: **backend/tests/integration/persistence/test_constraints.py**
+**文件：**
+- 新建：**backend/src/tax_risk/persistence/__init__.py**
+- 新建：**backend/src/tax_risk/persistence/models.py**
+- 新建：**backend/src/tax_risk/persistence/repositories.py**
+- 新建：**backend/src/tax_risk/persistence/ingest_models.py**
+- 新建：**backend/src/tax_risk/persistence/master_models.py**
+- 新建：**backend/src/tax_risk/persistence/snapshot_models.py**
+- 新建：**backend/src/tax_risk/persistence/risk_models.py**
+- 新建：**backend/src/tax_risk/persistence/ingest_repositories.py**
+- 新建：**backend/src/tax_risk/persistence/master_repositories.py**
+- 新建：**backend/src/tax_risk/persistence/snapshot_repositories.py**
+- 新建：**backend/src/tax_risk/persistence/risk_repositories.py**
+- 新建：**backend/alembic.ini**
+- 新建：**backend/migrations/env.py**
+- 新建：**backend/migrations/script.py.mako**
+- 新建：**backend/migrations/versions/0001_control_plane.py**
+- 新建：**backend/tests/integration/persistence/test_schema.py**
+- 新建：**backend/tests/integration/persistence/test_constraints.py**
 
-- [ ] **Step 1: Write schema and constraint tests**
+- [ ] **步骤 1：编写模式及约束测试**
 
-Tests must assert tables for company, ingest_batch, ingest_error, tax_master_version, accounting_snapshot, snapshot_source, monitoring_run, detection_record, risk_case, review_action, and audit_event. Assert:
+测试必须断言存在 company、ingest_batch、ingest_error、tax_master_version、accounting_snapshot、snapshot_source、monitoring_run、detection_record、risk_case、review_action 及 audit_event 表。断言：
 
-- unique SAP company_code and an auditable active/inactive lifecycle;
-- unique ingest source+source_batch_key;
-- unique source_record batch_id+source_record_key;
-- unique tax master company+valid_from+version;
-- unique immutable snapshot per company+period+source-version set and a SnapshotSet grouping the complete expected company-snapshot membership for one 100+ company run;
-- SnapshotSet.published_at is a non-null UTC TIMESTAMPTZ only in PUBLISHED state and is written exactly once;
-- published AccountingSnapshot, SnapshotSource, SnapshotSet, and SnapshotSetMember rows reject UPDATE/DELETE;
-- unique risk_case fingerprint;
-- Numeric(38,12) for calculation inputs/results and explicit currency/amount_scale;
-- JSONB lineage and formula_substitution fields.
+- SAP company_code 唯一，且有效/停用生命周期可审计；
+- 采集来源+source_batch_key 唯一；
+- source_record 的 batch_id+source_record_key 唯一；
+- 税务主数据的 company+valid_from+version 唯一；
+- 每个公司+期间+来源版本集合对应唯一不可变快照，并由 SnapshotSet 汇集一次 100 多家公司运行所预期的完整公司快照成员；
+- SnapshotSet.published_at 仅在 PUBLISHED 状态下为非空 UTC TIMESTAMPTZ，并且仅写入一次；
+- 已发布的 AccountingSnapshot、SnapshotSource、SnapshotSet 及 SnapshotSetMember 记录拒绝 UPDATE/DELETE；
+- risk_case 指纹唯一；
+- 计算输入/结果使用 Numeric(38,12)，并显式记录 currency/amount_scale；
+- 具备 JSONB 类型的 lineage 及 formula_substitution 字段。
 
-- [ ] **Step 2: Run against PostgreSQL and verify failure**
+- [ ] **步骤 2：针对 PostgreSQL 运行并确认失败**
 
-Run: docker compose -f infra/docker-compose.yml up -d postgres && cd backend && alembic upgrade head && pytest tests/integration/persistence -q
+运行：docker compose -f infra/docker-compose.yml up -d postgres && cd backend && alembic upgrade head && pytest tests/integration/persistence -q
 
-Expected: Alembic or tests FAIL because migration 0001 and models are absent.
+预期：Alembic 或测试失败，因为迁移 0001 及模型缺失。
 
-- [ ] **Step 3: Implement models, repositories, and migration**
+- [ ] **步骤 3：实现模型、仓储及迁移**
 
-Use UUID primary keys, UTC timestamptz audit fields, PostgreSQL enums for states, foreign keys, and check constraints. Keep the canonical Base in `persistence/models.py` and the canonical UnitOfWork/session boundary in `persistence/repositories.py`; focused model and repository files must not create another Base, engine, session factory, or UnitOfWork. Include SourceRecord, SnapshotSet, RuleVersion, and SnapshotSetMember in addition to the named tables. Store source money in Numeric(38,12); store Rate values in Numeric(20,12). Protect published AccountingSnapshot/SnapshotSource and PUBLISHED SnapshotSet/SnapshotSetMember rows with PostgreSQL triggers in migration 0001 that raise immutable_snapshot on UPDATE or DELETE.
+使用 UUID 主键、UTC timestamptz 审计字段、用于状态的 PostgreSQL 枚举、外键及检查约束。规范 Base 保留在 `persistence/models.py` 中，规范 UnitOfWork/会话边界保留在 `persistence/repositories.py` 中；聚焦模型及仓储文件不得另行创建 Base、引擎、会话工厂或 UnitOfWork。除已列出的表外，还应包括 SourceRecord、SnapshotSet、RuleVersion 及 SnapshotSetMember。来源金额以 Numeric(38,12) 存储，Rate 值以 Numeric(20,12) 存储。在迁移 0001 中使用 PostgreSQL 触发器保护已发布的 AccountingSnapshot/SnapshotSource 及 PUBLISHED 状态的 SnapshotSet/SnapshotSetMember 记录，在 UPDATE 或 DELETE 时抛出 immutable_snapshot。
 
-- [ ] **Step 4: Recreate and verify the database**
+- [ ] **步骤 4：重建并验证数据库**
 
-Run: docker compose -f infra/docker-compose.yml exec -T postgres dropdb -U tax_risk --if-exists tax_risk && docker compose -f infra/docker-compose.yml exec -T postgres createdb -U tax_risk tax_risk && cd backend && alembic upgrade head && pytest tests/integration/persistence -q
+运行：docker compose -f infra/docker-compose.yml exec -T postgres dropdb -U tax_risk --if-exists tax_risk && docker compose -f infra/docker-compose.yml exec -T postgres createdb -U tax_risk tax_risk && cd backend && alembic upgrade head && pytest tests/integration/persistence -q
 
-Expected: migration reaches head; all schema/constraint tests pass, including rejected UPDATE of a published snapshot.
+预期：迁移达到 head；所有模式/约束测试通过，包括拒绝对已发布快照执行 UPDATE。
 
-- [ ] **Step 5: Commit the persisted control plane**
+- [ ] **步骤 5：提交持久化控制面**
 
 ~~~bash
 git add backend/src/tax_risk/persistence backend/alembic.ini backend/migrations backend/tests/integration/persistence
 git commit -m "feat: add auditable control-plane schema"
 ~~~
 
-### Task 4: Add IngestBatch API and the reference bulk-file adapter
+### 任务 4：添加 IngestBatch API 及参考批量文件适配器
 
-**Files:**
-- Create: **backend/src/tax_risk/adapters/ingest/base.py**
-- Create: **backend/src/tax_risk/adapters/ingest/csv_adapter.py**
-- Create: **backend/src/tax_risk/application/ingest.py**
-- Create: **backend/src/tax_risk/api/schemas.py**
-- Create: **backend/src/tax_risk/api/routes/ingest.py**
-- Modify: **backend/src/tax_risk/main.py**
-- Create: **backend/tests/fixtures/sap_quarterly_valid.csv**
-- Create: **backend/tests/fixtures/sap_quarterly_invalid.csv**
-- Create: **backend/tests/unit/adapters/test_csv_adapter.py**
-- Create: **backend/tests/integration/api/test_ingest_batches.py**
+**文件：**
+- 新建：**backend/src/tax_risk/adapters/ingest/base.py**
+- 新建：**backend/src/tax_risk/adapters/ingest/csv_adapter.py**
+- 新建：**backend/src/tax_risk/application/ingest.py**
+- 新建：**backend/src/tax_risk/api/schemas.py**
+- 新建：**backend/src/tax_risk/api/routes/ingest.py**
+- 修改：**backend/src/tax_risk/main.py**
+- 新建：**backend/tests/fixtures/sap_quarterly_valid.csv**
+- 新建：**backend/tests/fixtures/sap_quarterly_invalid.csv**
+- 新建：**backend/tests/unit/adapters/test_csv_adapter.py**
+- 新建：**backend/tests/integration/api/test_ingest_batches.py**
 
-- [ ] **Step 1: Write failing adapter and endpoint tests**
+- [ ] **步骤 1：编写预期失败的适配器及端点测试**
 
-Define canonical rows with source_record_key, company_code, fiscal_year, period, currency, amount_scale, metric_code, amount, and extracted_at. Test POST /api/v1/ingest-batches, multipart POST /api/v1/ingest-batches/{batch_id}/files, and GET status. Required behavior:
+定义包含 source_record_key、company_code、fiscal_year、period、currency、amount_scale、metric_code、amount 及 extracted_at 的规范记录行。测试 POST /api/v1/ingest-batches、多部分 POST /api/v1/ingest-batches/{batch_id}/files 以及 GET 状态。必需行为：
 
-- source+source_batch_key is idempotent;
-- dataset_code=company_master creates or deactivates Company rows before financial datasets are accepted;
-- SHA-256, row count, accepted count, rejected count, control total, and schema_version are stored;
-- partial success returns row-numbered errors;
-- unknown company and invalid Decimal are rejected, never coerced to zero;
-- identical file retry returns the original batch rather than duplicating records.
+- source+source_batch_key 具有幂等性；
+- 在接受财务数据集之前，dataset_code=company_master 会创建或停用 Company 记录；
+- 存储 SHA-256、总行数、接受行数、拒绝行数、控制总额及 schema_version；
+- 部分成功时返回带行号的错误；
+- 拒绝未知公司及无效 Decimal，绝不强制转换为零；
+- 重试相同文件时返回原批次，不重复创建记录。
 
-- [ ] **Step 2: Verify tests fail**
+- [ ] **步骤 2：确认测试失败**
 
-Run: cd backend && pytest tests/unit/adapters/test_csv_adapter.py tests/integration/api/test_ingest_batches.py -q
+运行：cd backend && pytest tests/unit/adapters/test_csv_adapter.py tests/integration/api/test_ingest_batches.py -q
 
-Expected: FAIL because the ingest protocol, adapter, and routes are missing.
+预期：失败，因为数据采集协议、适配器及路由缺失。
 
-- [ ] **Step 3: Implement the canonical adapter and use case**
+- [ ] **步骤 3：实现规范适配器及用例**
 
-Define a BulkFileAdapter Protocol with validate_header and iter_rows. CSV adapter must use csv.DictReader and Decimal from strings, calculate SHA-256 while reading, and return structured row errors. The application service owns the transaction and state transitions RECEIVED→VALIDATING→SUCCEEDED/PARTIAL/FAILED and stores accepted canonical SourceRecord rows. CompanyService handles only dataset_code=company_master; financial records for unknown/inactive companies fail. The API accepts metadata before the file and never lets the adapter write the database directly.
+定义包含 validate_header 及 iter_rows 的 BulkFileAdapter Protocol。CSV 适配器必须使用 csv.DictReader，并从字符串构造 Decimal，在读取过程中计算 SHA-256，并返回结构化行错误。应用服务负责事务以及 RECEIVED→VALIDATING→SUCCEEDED/PARTIAL/FAILED 状态流转，并存储已接受的规范 SourceRecord 记录。CompanyService 仅处理 dataset_code=company_master；未知/停用公司的财务记录必须失败。API 先接收元数据，再接收文件，并且绝不允许适配器直接写入数据库。
 
-- [ ] **Step 4: Verify idempotency and error reporting**
+- [ ] **步骤 4：验证幂等性及错误报告**
 
-Run: cd backend && pytest tests/unit/adapters/test_csv_adapter.py tests/integration/api/test_ingest_batches.py -q
+运行：cd backend && pytest tests/unit/adapters/test_csv_adapter.py tests/integration/api/test_ingest_batches.py -q
 
-Expected: valid batch succeeds; invalid file is PARTIAL with exact rejected rows; replay leaves one batch.
+预期：有效批次成功；无效文件状态为 PARTIAL，并准确列出被拒记录；重放后仅保留一个批次。
 
-- [ ] **Step 5: Commit ingestion**
+- [ ] **步骤 5：提交数据采集功能**
 
 ~~~bash
 git add backend/src/tax_risk/adapters backend/src/tax_risk/application/ingest.py backend/src/tax_risk/api backend/tests/fixtures backend/tests/unit/adapters backend/tests/integration/api/test_ingest_batches.py
 git commit -m "feat: ingest controlled quarterly batches"
 ~~~
 
-### Task 5: Import and resolve versioned tax master data
+### 任务 5：导入并解析版本化税务主数据
 
-**Files:**
-- Create: **backend/src/tax_risk/adapters/ingest/tax_master_xlsx.py**
-- Create: **backend/src/tax_risk/application/master_data.py**
-- Create: **backend/src/tax_risk/api/routes/master_data.py**
-- Modify: **backend/src/tax_risk/api/schemas.py**
-- Modify: **backend/src/tax_risk/main.py**
-- Create: **backend/tests/fixtures/tax_master_valid.xlsx**
-- Create: **backend/tests/fixtures/tax_master_duplicate.xlsx**
-- Create: **backend/tests/unit/adapters/test_tax_master_xlsx.py**
-- Create: **backend/tests/integration/application/test_master_data.py**
-- Create: **backend/tests/integration/api/test_tax_master_api.py**
+**文件：**
+- 新建：**backend/src/tax_risk/adapters/ingest/tax_master_xlsx.py**
+- 新建：**backend/src/tax_risk/application/master_data.py**
+- 新建：**backend/src/tax_risk/api/routes/master_data.py**
+- 修改：**backend/src/tax_risk/api/schemas.py**
+- 修改：**backend/src/tax_risk/main.py**
+- 新建：**backend/tests/fixtures/tax_master_valid.xlsx**
+- 新建：**backend/tests/fixtures/tax_master_duplicate.xlsx**
+- 新建：**backend/tests/unit/adapters/test_tax_master_xlsx.py**
+- 新建：**backend/tests/integration/application/test_master_data.py**
+- 新建：**backend/tests/integration/api/test_tax_master_api.py**
 
-- [ ] **Step 1: Write failing import and point-in-time lookup tests**
+- [ ] **步骤 1：编写预期失败的导入及时点查询测试**
 
-Required columns are company_code, company_name, valid_from, valid_to, tax_rate, loss_carryforward, three_year_average_tax_burden. Test 25% and 0.25 normalization to 0.25, rejection outside 0..1, non-negative loss, duplicate company/effective period rejection, overlapping approved versions rejection, file hash/audit metadata, maker-reviewer separation, and lookup by company+period.
+必需列为 company_code、company_name、valid_from、valid_to、tax_rate、loss_carryforward 及 three_year_average_tax_burden。测试将 25% 和 0.25 规范化为 0.25、拒绝 0..1 以外的值、亏损额非负、拒绝公司/生效期间重复、拒绝已批准版本期间重叠、文件哈希/审计元数据、制单复核分离，以及按 company+period 查询。
 
-- [ ] **Step 2: Verify the red state**
+- [ ] **步骤 2：确认红灯状态**
 
-Run: cd backend && pytest tests/unit/adapters/test_tax_master_xlsx.py tests/integration/application/test_master_data.py tests/integration/api/test_tax_master_api.py -q
+运行：cd backend && pytest tests/unit/adapters/test_tax_master_xlsx.py tests/integration/application/test_master_data.py tests/integration/api/test_tax_master_api.py -q
 
-Expected: FAIL because tax master import and lookup do not exist.
+预期：失败，因为税务主数据导入及查询功能尚不存在。
 
-- [ ] **Step 3: Implement staged import and approval**
+- [ ] **步骤 3：实现分阶段导入及审批**
 
-Parse XLSX with openpyxl in read-only/data-only mode. Normalize percent-formatted cells and decimal strings through Rate; preserve source filename and SHA-256. Import as DRAFT, expose POST /api/v1/tax-master/import, POST /api/v1/tax-master/{version_id}/approve, and GET /api/v1/tax-master/{company_code}?period=YYYY-QN. Approval must reject the uploader as reviewer and reject overlaps in one transaction.
+使用 openpyxl 的只读/仅数据模式解析 XLSX。通过 Rate 规范化百分比格式单元格及小数字符串；保留源文件名及 SHA-256。以 DRAFT 状态导入，并提供 POST /api/v1/tax-master/import、POST /api/v1/tax-master/{version_id}/approve 及 GET /api/v1/tax-master/{company_code}?period=YYYY-QN。审批必须拒绝由上传人担任复核人，并在同一事务内拒绝期间重叠。
 
-- [ ] **Step 4: Verify master-data safety**
+- [ ] **步骤 4：验证主数据安全性**
 
-Run: cd backend && pytest tests/unit/adapters/test_tax_master_xlsx.py tests/integration/application/test_master_data.py tests/integration/api/test_tax_master_api.py -q
+运行：cd backend && pytest tests/unit/adapters/test_tax_master_xlsx.py tests/integration/application/test_master_data.py tests/integration/api/test_tax_master_api.py -q
 
-Expected: valid import and separate approval pass; duplicates, overlap, missing company, and same-person approval fail with stable error codes.
+预期：有效导入及独立审批通过；重复、期间重叠、公司缺失及同一人审批均以稳定错误码失败。
 
-- [ ] **Step 5: Commit tax master data**
+- [ ] **步骤 5：提交税务主数据功能**
 
 ~~~bash
 git add backend/src/tax_risk/adapters/ingest/tax_master_xlsx.py backend/src/tax_risk/application/master_data.py backend/src/tax_risk/api backend/tests/fixtures/tax_master_*.xlsx backend/tests/unit/adapters/test_tax_master_xlsx.py backend/tests/integration
 git commit -m "feat: govern versioned tax master data"
 ~~~
 
-### Task 6: Publish immutable snapshots through a quality gate
+### 任务 6：通过质量门禁发布不可变快照
 
-**Files:**
-- Create: **backend/src/tax_risk/application/snapshots.py**
-- Create: **backend/src/tax_risk/api/routes/snapshots.py**
-- Modify: **backend/src/tax_risk/api/schemas.py**
-- Modify: **backend/src/tax_risk/main.py**
-- Create: **backend/tests/unit/application/test_snapshot_quality.py**
-- Create: **backend/tests/integration/application/test_snapshot_publication.py**
-- Create: **backend/tests/integration/api/test_snapshots_api.py**
+**文件：**
+- 新建：**backend/src/tax_risk/application/snapshots.py**
+- 新建：**backend/src/tax_risk/api/routes/snapshots.py**
+- 修改：**backend/src/tax_risk/api/schemas.py**
+- 修改：**backend/src/tax_risk/main.py**
+- 新建：**backend/tests/unit/application/test_snapshot_quality.py**
+- 新建：**backend/tests/integration/application/test_snapshot_publication.py**
+- 新建：**backend/tests/integration/api/test_snapshots_api.py**
 
-- [ ] **Step 1: Write failing quality-gate tests**
+- [ ] **步骤 1：编写预期失败的质量门禁测试**
 
-Define required quarterly metric codes: cumulative_profit, received_dividends, fair_value_change, cumulative_revenue, prior_quarter_current_tax, current_quarter_current_tax, other_payables_accrual, hesi_no_invoice. Test:
+定义必需的季度指标代码：cumulative_profit、received_dividends、fair_value_change、cumulative_revenue、prior_quarter_current_tax、current_quarter_current_tax、other_payables_accrual、hesi_no_invoice。测试：
 
-- all required source batches succeeded or explicitly accepted partials;
-- company/period/currency/amount_scale agree;
-- one approved tax master resolves;
-- duplicate metric and control-total mismatch block publication;
-- missing master or source creates a DATA_QUALITY detection, not a zero value;
-- snapshot hash is stable for identical ordered source hashes;
-- one SnapshotSet can contain exactly one published company snapshot per requested company and period;
-- SnapshotSet publication fails without writing a set, member, or published_at when any expected member is missing, invalid, unlocked, mixed-period, duplicated, or fails its quality gate;
-- all expected members are locked, inserted, and atomically transitioned with the SnapshotSet to PUBLISHED in one transaction;
-- published_at is generated by the database in UTC exactly once, is returned by the API as a timezone-aware RFC 3339 UTC value, and is the sole Phase 4 data_ready_at;
-- published AccountingSnapshot/SnapshotSource and PUBLISHED SnapshotSet/SnapshotSetMember rows reject UPDATE/DELETE.
+- 所有必需的来源批次均已成功，或部分成功已被明确接受；
+- company/period/currency/amount_scale 一致；
+- 能解析到一个已批准的税务主数据版本；
+- 指标重复及控制总额不匹配会阻止发布；
+- 主数据或来源缺失时创建 DATA_QUALITY 监测结果，而不是填零；
+- 对于相同且有序的来源哈希，快照哈希保持稳定；
+- 一个 SnapshotSet 可为每个请求的公司及期间恰好包含一个已发布公司快照；
+- 任一预期成员缺失、无效、未锁定、期间混杂、重复或未通过质量门禁时，SnapshotSet 发布失败，且不写入集合、成员或 published_at；
+- 所有预期成员均在同一事务中锁定、插入，并与 SnapshotSet 一起原子流转至 PUBLISHED；
+- published_at 由数据库以 UTC 生成且仅生成一次，API 将其作为带时区的 RFC 3339 UTC 值返回，并作为阶段 4 唯一的 data_ready_at；
+- 已发布的 AccountingSnapshot/SnapshotSource 及 PUBLISHED 状态的 SnapshotSet/SnapshotSetMember 记录拒绝 UPDATE/DELETE。
 
-- [ ] **Step 2: Prove quality checks are absent**
+- [ ] **步骤 2：证明质量检查尚不存在**
 
-Run: cd backend && pytest tests/unit/application/test_snapshot_quality.py tests/integration/application/test_snapshot_publication.py tests/integration/api/test_snapshots_api.py -q
+运行：cd backend && pytest tests/unit/application/test_snapshot_quality.py tests/integration/application/test_snapshot_publication.py tests/integration/api/test_snapshots_api.py -q
 
-Expected: FAIL because snapshot quality and publication services are missing.
+预期：失败，因为快照质量及发布服务缺失。
 
-- [ ] **Step 3: Implement validate-then-publish**
+- [ ] **步骤 3：实现先校验后发布**
 
-Create POST /api/v1/snapshots/validate, POST /api/v1/snapshots/{id}/publish, and POST /api/v1/snapshot-sets. Validation returns error_code, source, field, company, period, and remediation. AccountingSnapshot publication locks source batch IDs and approved tax master ID, computes a deterministic SHA-256 over canonical metadata, and transitions DRAFT→VALIDATED→PUBLISHED in one transaction.
+创建 POST /api/v1/snapshots/validate、POST /api/v1/snapshots/{id}/publish 及 POST /api/v1/snapshot-sets。校验返回 error_code、source、field、company、period 及 remediation。发布 AccountingSnapshot 时锁定来源批次 ID 及已批准税务主数据 ID，基于规范元数据计算确定性 SHA-256，并在同一事务中完成 DRAFT→VALIDATED→PUBLISHED 流转。
 
-SnapshotSet publication receives the complete expected member list, locks every referenced published AccountingSnapshot and source/master membership, reruns the set-level quality gate, inserts all SnapshotSetMember rows, transitions the set to PUBLISHED, and writes database UTC `published_at` exactly once in the same transaction. Any failed member or concurrent change rolls the whole transaction back, leaving no SnapshotSet, member, or timestamp. The response schema returns `published_at` as a timezone-aware RFC 3339 UTC value. A PUBLISHED set and its members are immutable; corrected membership creates a new set with `supersedes_snapshot_set_id`. Downstream phases must use SnapshotSet.published_at—and no upload, model-call, or batch-start timestamp—as `data_ready_at`.
+发布 SnapshotSet 时接收完整的预期成员清单，锁定所有引用的已发布 AccountingSnapshot 及来源/主数据成员关系，重新运行集合级质量门禁，插入全部 SnapshotSetMember 记录，将集合流转至 PUBLISHED，并在同一事务中仅写入一次数据库 UTC `published_at`。任一成员失败或并发变更都会回退整个事务，不留下 SnapshotSet、成员或时间戳。响应模式以带时区的 RFC 3339 UTC 值返回 `published_at`。PUBLISHED 集合及其成员不可变；如需修正成员关系，应创建带 `supersedes_snapshot_set_id` 的新集合。后续阶段必须以 SnapshotSet.published_at 作为 `data_ready_at`，不得使用上传、模型调用或批次开始时间戳。
 
-- [ ] **Step 4: Run snapshot tests and Chunk 1 regression**
+- [ ] **步骤 4：运行快照测试及工作块 1 回归测试**
 
-Run: cd backend && pytest tests/unit tests/integration -q && ruff check src tests && mypy src
+运行：cd backend && pytest tests/unit tests/integration -q && ruff check src tests && mypy src
 
-Expected: all Chunk 1 tests pass; failed set publication leaves no rows/timestamp; successful publication writes one UTC published_at and immutable complete membership; no rule or Agent tests exist yet.
+预期：工作块 1 的全部测试通过；集合发布失败时不留下记录/时间戳；发布成功时写入一个 UTC published_at 及不可变的完整成员关系；此时尚不存在规则或 Agent 测试。
 
-- [ ] **Step 5: Commit and mark the Chunk 1 checkpoint**
+- [ ] **步骤 5：提交并标记工作块 1 检查点**
 
 ~~~bash
 git add backend/src/tax_risk/application/snapshots.py backend/src/tax_risk/api backend/tests
 git commit -m "feat: publish quality-gated immutable snapshots"
 ~~~
 
-Before starting Chunk 2, run a plan/document checkpoint against the source specification and confirm that Chunk 1 contains no semantic Agent, vector, prompt, or model dependency.
+开始工作块 2 前，对照源规格说明书执行计划/文档检查点，确认工作块 1 不包含语义 Agent、向量、提示词或模型依赖。
 
-## Chunk 2: Quarterly Rules, Cases, Parallel Execution, and Product Slice
+## 工作块 2：季度规则、风险事项、并行执行及产品切片
 
-### Task 7: Implement the three deterministic quarterly calculations
+### 任务 7：实现三项确定性季度计算
 
-**Files:**
-- Create: **backend/src/tax_risk/domain/quarterly.py**
-- Create: **backend/tests/unit/domain/test_quarterly_examples.py**
-- Create: **backend/tests/unit/domain/test_quarterly_properties.py**
-- Create: **backend/tests/unit/domain/test_quarterly_errors.py**
+**文件：**
+- 新建：**backend/src/tax_risk/domain/quarterly.py**
+- 新建：**backend/tests/unit/domain/test_quarterly_examples.py**
+- 新建：**backend/tests/unit/domain/test_quarterly_properties.py**
+- 新建：**backend/tests/unit/domain/test_quarterly_errors.py**
 
-- [ ] **Step 1: Write the approved examples and edge cases first**
+- [ ] **步骤 1：先编写已批准示例及边界场景**
 
-Tests must assert the standard example:
+测试必须断言以下标准示例：
 
 ~~~python
 from decimal import Decimal
@@ -455,30 +455,30 @@ def test_standard_quarterly_example() -> None:
     assert result.potential_tax_cost_alert_code == "POTENTIAL_TAX_COST"
 ~~~
 
-Also test zero/negative profit, negative fair-value change, full/partial loss offset, red entries, negative current-quarter required accrual, revenue≤0 NOT_CALCULABLE, and final-only rounding. `received_dividends` is the SAP ledger's current-year cumulative **received** dividend amount, excludes dividends paid/distributed by the company, and retains SAP reversal signs. `historical_average_tax_burden` is matched from the approved company master version and is never recalculated by the platform.
+还需测试利润为零/负数、公允价值变动为负、亏损全额/部分抵减、红字记录、本季度应计提金额为负、营业收入≤0 时为 NOT_CALCULABLE，以及仅在最终结果舍入。`received_dividends` 是 SAP 账簿中本年累计**收到**的分红金额，不包括公司支付/分配的股利，并保留 SAP 冲销符号。`historical_average_tax_burden` 从已批准的公司主数据版本匹配，平台绝不重新计算。
 
-Lock these pre-floor boundaries:
+锁定以下取零下限前边界：
 
-- `base_before_floor=-100` and `potential_adjustment=60` produce `cumulative_base=0`, `potential_base=0`, zero potential tax cost, and no potential-cost alert.
-- `base_before_floor=-100` and `potential_adjustment=150` produce `cumulative_base=0` and `potential_base=50`; at rate 25% the potential tax/cost is 12.50 and triggers `POTENTIAL_TAX_COST`.
+- `base_before_floor=-100` 且 `potential_adjustment=60` 时，结果为 `cumulative_base=0`、`potential_base=0`、潜在税务成本为零，且不触发潜在税务成本预警。
+- `base_before_floor=-100` 且 `potential_adjustment=150` 时，结果为 `cumulative_base=0` 及 `potential_base=50`；税率为 25% 时，潜在应纳税额/成本为 12.50，并触发 `POTENTIAL_TAX_COST`。
 
-Lock all alert boundaries:
+锁定全部预警边界：
 
-- current-quarter difference >0 → `UNDER_ACCRUED`; <0 → `OVER_ACCRUED`; =0 → no accrual alert;
-- tax-burden deviation >=+0.05 → `TAX_BURDEN_HIGH`; <=-0.05 → `TAX_BURDEN_LOW`; -0.05<deviation<+0.05 → no burden alert;
-- potential tax cost !=0 → `POTENTIAL_TAX_COST`; =0 → no potential-cost alert.
+- 本季度差异 >0 → `UNDER_ACCRUED`；<0 → `OVER_ACCRUED`；=0 → 不触发计提预警；
+- 税负率偏离度 >=+0.05 → `TAX_BURDEN_HIGH`；<=-0.05 → `TAX_BURDEN_LOW`；-0.05<偏离度<+0.05 → 不触发税负率预警；
+- 潜在税务成本 !=0 → `POTENTIAL_TAX_COST`；=0 → 不触发潜在税务成本预警。
 
-Add a rounding-sensitive case proving tax burden divides the already ROUND_HALF_UP cumulative tax payable by cumulative revenue, not the unrounded tax product. Hypothesis properties: cumulative tax is non-negative; increasing a non-negative potential adjustment cannot decrease potential tax; identical inputs are deterministic.
+添加舍入敏感场景，以证明税负率的分子是已按 ROUND_HALF_UP 舍入的本年累计应纳税额，而非未舍入的税额乘积。Hypothesis 属性：本年累计应纳税额非负；增加非负的潜在调增金额不会使潜在应纳税额减少；相同输入的结果具有确定性。
 
-- [ ] **Step 2: Run and observe failure**
+- [ ] **步骤 2：运行并观察失败**
 
-Run: cd backend && pytest tests/unit/domain/test_quarterly_examples.py tests/unit/domain/test_quarterly_properties.py tests/unit/domain/test_quarterly_errors.py -q
+运行：cd backend && pytest tests/unit/domain/test_quarterly_examples.py tests/unit/domain/test_quarterly_properties.py tests/unit/domain/test_quarterly_errors.py -q
 
-Expected: FAIL because quarterly domain types and calculate_quarterly are missing.
+预期：失败，因为季度领域类型及 calculate_quarterly 缺失。
 
-- [ ] **Step 3: Implement pure formulas exactly once**
+- [ ] **步骤 3：唯一实现一套纯公式**
 
-Implement immutable QuarterlyInputs and QuarterlyResult. Use these formulas with unrounded Decimal intermediates:
+实现不可变的 QuarterlyInputs 及 QuarterlyResult。使用以下公式，Decimal 中间结果不舍入：
 
 ~~~text
 base_before_floor = profit - received_dividends - fair_value_change - loss_carryforward
@@ -494,247 +494,247 @@ potential_tax = round_half_up(potential_base × tax_rate)
 potential_tax_cost = round_half_up(potential_tax - cumulative_tax)
 ~~~
 
-Do not derive `potential_base` from the already floored `cumulative_base`. `cumulative_tax` and `potential_tax` are each rounded once with ROUND_HALF_UP at the company ledger scale; tax burden uses the rounded `cumulative_tax` numerator and an unrounded Decimal division result. Compare that display-independent deviation with Decimal("0.05"). Do not apply max to `current_should_accrue`.
+不得从已取零下限的 `cumulative_base` 推导 `potential_base`。`cumulative_tax` 和 `potential_tax` 分别按公司账簿精度使用 ROUND_HALF_UP 舍入一次；税负率以舍入后的 `cumulative_tax` 为分子，Decimal 除法结果不舍入。将该不依赖展示格式的偏离度与 Decimal("0.05") 比较。不得对 `current_should_accrue` 应用 max。
 
-Output currency, amount_scale, CALCULATED/NOT_CALCULABLE/FAILED, alert flags/codes, nullable values, not_calculated_reason, and a formula_substitution mapping containing both `base_before_floor` and `cumulative_base`. The calculator receives the approved master-provided three-year average burden; it has no code path for calculating historical averages.
+输出 currency、amount_scale、CALCULATED/NOT_CALCULABLE/FAILED、预警标志/代码、可空值、not_calculated_reason，以及同时包含 `base_before_floor` 和 `cumulative_base` 的 formula_substitution 映射。计算器接收已批准主数据提供的前三个完整年度平均税负率；不存在计算历史平均值的代码路径。
 
-- [ ] **Step 4: Verify all numerical contracts**
+- [ ] **步骤 4：验证全部数值契约**
 
-Run: cd backend && pytest tests/unit/domain/test_quarterly_*.py -q
+运行：cd backend && pytest tests/unit/domain/test_quarterly_*.py -q
 
-Expected: standard values and `POTENTIAL_TAX_COST` match exactly; the -100+60 and -100+150 pre-floor cases pass; accrual positive/negative/zero, burden exact ±5 percentage points/interior, and potential-cost nonzero/zero alert boundaries pass; revenue≤0 has null burden values and a reason code; all properties pass.
+预期：标准值及 `POTENTIAL_TAX_COST` 完全匹配；-100+60 和 -100+150 的取零下限前场景通过；计提差异为正/负/零、税负率偏离度精确等于 ±5 个百分点/位于区间内部，以及潜在税务成本非零/为零的预警边界均通过；营业收入≤0 时税负率相关值为空并具备原因代码；全部属性测试通过。
 
-- [ ] **Step 5: Commit formulas**
+- [ ] **步骤 5：提交公式实现**
 
 ~~~bash
 git add backend/src/tax_risk/domain/quarterly.py backend/tests/unit/domain/test_quarterly_*.py
 git commit -m "feat: calculate quarterly tax risks deterministically"
 ~~~
 
-### Task 8: Persist detections and enforce risk fingerprints/state machine
+### 任务 8：持久化监测结果并强制执行风险指纹/状态机
 
-**Files:**
-- Create: **backend/src/tax_risk/domain/cases.py**
-- Create: **backend/src/tax_risk/application/quarterly_runs.py**
-- Create: **backend/tests/unit/domain/test_case_fingerprint.py**
-- Create: **backend/tests/unit/domain/test_case_state_machine.py**
-- Create: **backend/tests/integration/application/test_quarterly_run.py**
+**文件：**
+- 新建：**backend/src/tax_risk/domain/cases.py**
+- 新建：**backend/src/tax_risk/application/quarterly_runs.py**
+- 新建：**backend/tests/unit/domain/test_case_fingerprint.py**
+- 新建：**backend/tests/unit/domain/test_case_state_machine.py**
+- 新建：**backend/tests/integration/application/test_quarterly_run.py**
 
-- [ ] **Step 1: Write failing case tests**
+- [ ] **步骤 1：编写预期失败的风险事项测试**
 
-Test numeric fingerprint as SHA-256 of company_code|fiscal_year|quarter|monitoring_type, excluding rule/model version. Different quarters/types must not collide. Define allowed states:
+测试数值指纹是 company_code|fiscal_year|quarter|monitoring_type 的 SHA-256，不包含规则/模型版本。不同季度/监测类型不得发生碰撞。定义允许的状态流转：
 
 NEW→ASSIGNED→PENDING_COMPANY_CONFIRMATION;
-confirmed branch to PENDING_ADJUSTMENT→ADJUSTED_PENDING_REVIEW→CLOSED;
-reasonable branch to GROUP_REVIEW→CLOSED;
-information branch to EVIDENCE_REQUIRED→PENDING_COMPANY_CONFIRMATION.
+确认需调整的分支：PENDING_ADJUSTMENT→ADJUSTED_PENDING_REVIEW→CLOSED；
+判定合理的分支：GROUP_REVIEW→CLOSED；
+需补充资料的分支：EVIDENCE_REQUIRED→PENDING_COMPANY_CONFIRMATION。
 
-Test illegal transitions fail and every detection is retained. Case creation is isolated by monitoring type:
+测试非法流转失败，并保留每条监测结果。风险事项按监测类型隔离创建：
 
-- ACCRUAL_ACCURACY creates a case only for `UNDER_ACCRUED` or `OVER_ACCRUED`, never for zero difference;
-- TAX_BURDEN creates a case only for `TAX_BURDEN_HIGH` or `TAX_BURDEN_LOW`, including exact ±0.05, never for an interior or uncalculable deviation;
-- POTENTIAL_TAX_COST creates a case only when cost is nonzero and the code is `POTENTIAL_TAX_COST`.
+- ACCRUAL_ACCURACY 仅在 `UNDER_ACCRUED` 或 `OVER_ACCRUED` 时创建风险事项，差异为零时绝不创建；
+- TAX_BURDEN 仅在 `TAX_BURDEN_HIGH` 或 `TAX_BURDEN_LOW` 时创建风险事项，包括精确等于 ±0.05 的情况；偏离度位于区间内部或不可计算时绝不创建；
+- POTENTIAL_TAX_COST 仅在成本非零且代码为 `POTENTIAL_TAX_COST` 时创建风险事项。
 
-For one company/quarter, an alert or zero in one monitor must not create, suppress, close, or overwrite another monitor's case. A fixture with all three alerts creates three distinct fingerprints/cases; mixed fixtures create exactly the alerting subset. Rerun adds detections without duplicate cases, and DATA_QUALITY/NOT_CALCULABLE never appears as “no risk”.
+对于同一公司/季度，某项监测的预警或零值不得创建、抑制、关闭或覆盖另一项监测的风险事项。三项预警同时存在的夹具创建三个不同的指纹/风险事项；混合夹具只创建实际触发预警的子集。重跑时增加监测结果但不重复创建风险事项，并且 DATA_QUALITY/NOT_CALCULABLE 绝不能显示为“无风险”。
 
-- [ ] **Step 2: Verify the red state**
+- [ ] **步骤 2：确认红灯状态**
 
-Run: cd backend && pytest tests/unit/domain/test_case_*.py tests/integration/application/test_quarterly_run.py -q
+运行：cd backend && pytest tests/unit/domain/test_case_*.py tests/integration/application/test_quarterly_run.py -q
 
-Expected: FAIL because fingerprints, transitions, and quarterly run service are absent.
+预期：失败，因为指纹、状态流转及季度运行服务缺失。
 
-- [ ] **Step 3: Implement cases and run transaction**
+- [ ] **步骤 3：实现风险事项及运行事务**
 
-QuarterlyRunService loads one PUBLISHED snapshot and one approved RuleVersion with code QUARTERLY_V1, materializes QuarterlyInputs, executes the pure calculator, writes one DetectionRecord per monitoring type, and upserts RiskCase by fingerprint. Persist formula substitution, snapshot/rule/master version, source lineage, currency, scale, calculation_status, alert code, and direction. Store the reviewed QUARTERLY_V1 formula manifest and SHA-256 through migration/seed code rather than accepting free-form formulas over the API. Use a transaction and PostgreSQL unique constraint to make retries safe.
+QuarterlyRunService 加载一个 PUBLISHED 快照及一个代码为 QUARTERLY_V1 的已批准 RuleVersion，构造 QuarterlyInputs，执行纯计算器，为每种监测类型写入一条 DetectionRecord，并按指纹新增或更新 RiskCase。持久化公式代入过程、快照/规则/主数据版本、来源血缘、币种、精度、calculation_status、预警代码及方向。通过迁移/数据准备代码存储已复核的 QUARTERLY_V1 公式清单及 SHA-256，而不是通过 API 接受自由格式公式。使用事务及 PostgreSQL 唯一约束确保重试安全。
 
-- [ ] **Step 4: Verify persistence and retry behavior**
+- [ ] **步骤 4：验证持久化及重试行为**
 
-Run: cd backend && pytest tests/unit/domain/test_case_*.py tests/integration/application/test_quarterly_run.py -q
+运行：cd backend && pytest tests/unit/domain/test_case_*.py tests/integration/application/test_quarterly_run.py -q
 
-Expected: legal transitions pass; illegal transition fails; alert direction/zero/±0.05 boundaries create exactly the expected isolated case subset; running twice yields two detections and one case per alerting monitoring type.
+预期：合法流转通过；非法流转失败；预警方向/零值/±0.05 边界恰好创建预期的隔离风险事项子集；运行两次时产生两组监测结果，但每个触发预警的监测类型仅有一个风险事项。
 
-- [ ] **Step 5: Commit case lifecycle**
+- [ ] **步骤 5：提交风险事项生命周期**
 
 ~~~bash
 git add backend/src/tax_risk/domain/cases.py backend/src/tax_risk/application/quarterly_runs.py backend/tests/unit/domain/test_case_*.py backend/tests/integration/application/test_quarterly_run.py
 git commit -m "feat: create idempotent quarterly risk cases"
 ~~~
 
-### Task 9: Orchestrate a 100+ company quarterly batch with Celery
+### 任务 9：使用 Celery 编排 100 多家公司的季度批次
 
-**Files:**
-- Create: **backend/src/tax_risk/workers/celery_app.py**
-- Create: **backend/src/tax_risk/workers/quarterly_batch.py**
-- Create: **backend/tests/unit/workers/test_quarterly_batch_canvas.py**
-- Create: **backend/tests/integration/workers/test_quarterly_batch_eager.py**
-- Create: **backend/tests/integration/workers/test_quarterly_batch_105_companies.py**
-- Modify: **infra/docker-compose.yml**
+**文件：**
+- 新建：**backend/src/tax_risk/workers/celery_app.py**
+- 新建：**backend/src/tax_risk/workers/quarterly_batch.py**
+- 新建：**backend/tests/unit/workers/test_quarterly_batch_canvas.py**
+- 新建：**backend/tests/integration/workers/test_quarterly_batch_eager.py**
+- 新建：**backend/tests/integration/workers/test_quarterly_batch_105_companies.py**
+- 修改：**infra/docker-compose.yml**
 
-- [ ] **Step 1: Write fan-out, idempotency, and isolation tests**
+- [ ] **步骤 1：编写扇出、幂等性及隔离测试**
 
-Create 105 companies: 103 valid, one missing master, one malformed source batch. Assert the orchestrator builds one company task per SnapshotSet member, routes by run_type=quarterly, caps configurable concurrency, uses run key fiscal_year+quarter+snapshot_set_id+rule_version, records per-company success/blocked/failed, allows failed-company-only retry, and final summary is 103 succeeded and 2 blocked/failed without rolling back successes.
+创建 105 家公司：103 家有效、1 家缺失主数据、1 家来源批次格式错误。断言编排器为每个 SnapshotSet 成员构建一个公司任务，按 run_type=quarterly 路由，限制可配置并发数，使用 fiscal_year+quarter+snapshot_set_id+rule_version 作为运行键，按公司记录成功/已阻断/失败状态，允许仅重试失败公司，并且最终汇总为 103 家成功、2 家已阻断/失败，不回退成功结果。
 
-- [ ] **Step 2: Verify Celery tests fail**
+- [ ] **步骤 2：确认 Celery 测试失败**
 
-Run: cd backend && pytest tests/unit/workers/test_quarterly_batch_canvas.py tests/integration/workers/test_quarterly_batch_eager.py tests/integration/workers/test_quarterly_batch_105_companies.py -q
+运行：cd backend && pytest tests/unit/workers/test_quarterly_batch_canvas.py tests/integration/workers/test_quarterly_batch_eager.py tests/integration/workers/test_quarterly_batch_105_companies.py -q
 
-Expected: FAIL because Celery application and tasks are missing.
+预期：失败，因为 Celery 应用及任务缺失。
 
-- [ ] **Step 3: Implement group/chord orchestration**
+- [ ] **步骤 3：实现 group/chord 编排**
 
-Configure JSON-only serialization, UTC timestamps, acknowledgements after work, reject-on-worker-lost, task time limits, retry_backoff, retry_jitter, and separate quarterly queue. Use a Celery group of run_company_quarterly tasks followed by summarize_quarterly_batch. Company tasks call QuarterlyRunService and return only IDs/status, never full financial rows. Enforce database idempotency in addition to Celery task IDs.
+配置仅使用 JSON 序列化、UTC 时间戳、任务完成后确认、reject-on-worker-lost、任务时限、retry_backoff、retry_jitter 及独立季度队列。使用由 run_company_quarterly 任务组成的 Celery group，随后执行 summarize_quarterly_batch。公司任务调用 QuarterlyRunService，仅返回 ID/状态，绝不返回完整财务记录。除 Celery 任务 ID 外，还需强制执行数据库幂等性。
 
-- [ ] **Step 4: Verify 105-company behavior**
+- [ ] **步骤 4：验证 105 家公司场景行为**
 
-Run: cd backend && CELERY_TASK_ALWAYS_EAGER=true pytest tests/unit/workers tests/integration/workers -q
+运行：cd backend && CELERY_TASK_ALWAYS_EAGER=true pytest tests/unit/workers tests/integration/workers -q
 
-Expected: all tests pass; 103 successful company results remain committed; retrying two failures creates no duplicate cases.
+预期：全部测试通过；103 家成功公司的结果保持提交；重试两家失败公司不会创建重复风险事项。
 
-- [ ] **Step 5: Commit orchestration**
+- [ ] **步骤 5：提交编排功能**
 
 ~~~bash
 git add backend/src/tax_risk/workers backend/tests/unit/workers backend/tests/integration/workers infra/docker-compose.yml
 git commit -m "feat: run quarterly monitoring across companies"
 ~~~
 
-### Task 10: Expose minimum secured quarterly APIs
+### 任务 10：提供最小化安全季度 API
 
-**Files:**
-- Create: **backend/src/tax_risk/security/principal.py**
-- Create: **backend/src/tax_risk/api/dependencies.py**
-- Create: **backend/src/tax_risk/api/routes/runs.py**
-- Create: **backend/src/tax_risk/api/routes/cases.py**
-- Create: **backend/src/tax_risk/api/routes/dashboard.py**
-- Modify: **backend/src/tax_risk/api/schemas.py**
-- Modify: **backend/src/tax_risk/main.py**
-- Create: **backend/tests/integration/api/test_quarterly_runs_api.py**
-- Create: **backend/tests/integration/api/test_cases_scope.py**
-- Create: **backend/tests/integration/api/test_dashboard_api.py**
+**文件：**
+- 新建：**backend/src/tax_risk/security/principal.py**
+- 新建：**backend/src/tax_risk/api/dependencies.py**
+- 新建：**backend/src/tax_risk/api/routes/runs.py**
+- 新建：**backend/src/tax_risk/api/routes/cases.py**
+- 新建：**backend/src/tax_risk/api/routes/dashboard.py**
+- 修改：**backend/src/tax_risk/api/schemas.py**
+- 修改：**backend/src/tax_risk/main.py**
+- 新建：**backend/tests/integration/api/test_quarterly_runs_api.py**
+- 新建：**backend/tests/integration/api/test_cases_scope.py**
+- 新建：**backend/tests/integration/api/test_dashboard_api.py**
 
-- [ ] **Step 1: Write failing API and company-scope tests**
+- [ ] **步骤 1：编写预期失败的 API 及公司范围测试**
 
-Required endpoints:
+必需端点：
 
-- POST /api/v1/quarterly-runs with fiscal_year, quarter, snapshot_set_id, rule_version;
+- POST /api/v1/quarterly-runs，参数包括 fiscal_year、quarter、snapshot_set_id、rule_version；
 - GET /api/v1/quarterly-runs/{run_id};
-- GET /api/v1/risk-cases with year, quarter, monitoring_type, direction, status, company;
+- GET /api/v1/risk-cases，参数包括 year、quarter、monitoring_type、direction、status、company；
 - POST /api/v1/risk-cases/{case_id}/actions;
 - GET /api/v1/dashboard/quarterly?fiscal_year=&quarter=;
-- GET /api/v1/detections/{detection_id} for formula substitution and lineage.
+- GET /api/v1/detections/{detection_id}，用于查询公式代入过程及数据血缘。
 
-Test group-tax principal sees all; company-finance principal sees only its company; audit is read-only; unauthorized company ID is 404 rather than leaked 403; response Decimal values are strings and contain currency/scale/status/reason fields.
+测试集团税务主体可查看全部数据；公司财务主体只能查看本公司数据；审计主体为只读；无权访问的公司 ID 返回 404 而不是泄露信息的 403；响应中的 Decimal 值为字符串，并包含 currency/scale/status/reason 字段。
 
-- [ ] **Step 2: Verify endpoint tests fail**
+- [ ] **步骤 2：确认端点测试失败**
 
-Run: cd backend && pytest tests/integration/api/test_quarterly_runs_api.py tests/integration/api/test_cases_scope.py tests/integration/api/test_dashboard_api.py -q
+运行：cd backend && pytest tests/integration/api/test_quarterly_runs_api.py tests/integration/api/test_cases_scope.py tests/integration/api/test_dashboard_api.py -q
 
-Expected: FAIL with 404 routes or missing principal dependency.
+预期：因路由返回 404 或主体依赖缺失而失败。
 
-- [ ] **Step 3: Implement APIs and server-side scope**
+- [ ] **步骤 3：实现 API 及服务端范围控制**
 
-Create Principal with subject, roles, allowed_company_ids, and organization_path. In development only, permit signed test headers behind development_principal_enabled; production must use an injected IdP verifier. Apply scope in repository SQL and keep PostgreSQL RLS migration-ready. Dashboard returns coverage_company_count, data_ready_count, blocked_count, risk_company_count, potential_tax_cost_total, monitoring-type counts, and paginated company rows.
+创建包含 subject、roles、allowed_company_ids 及 organization_path 的 Principal。仅在开发环境中，允许在 development_principal_enabled 控制下使用签名测试请求头；生产环境必须使用注入的 IdP 验证器。在仓储 SQL 中应用范围控制，并保持 PostgreSQL RLS 可迁移。驾驶舱返回 coverage_company_count、data_ready_count、blocked_count、risk_company_count、potential_tax_cost_total、各监测类型数量及分页公司记录。
 
-- [ ] **Step 4: Verify API behavior and OpenAPI**
+- [ ] **步骤 4：验证 API 行为及 OpenAPI**
 
-Run: cd backend && pytest tests/integration/api/test_* -q && python -c "from tax_risk.main import create_app; assert create_app().openapi()['paths']['/api/v1/dashboard/quarterly']"
+运行：cd backend && pytest tests/integration/api/test_* -q && python -c "from tax_risk.main import create_app; assert create_app().openapi()['paths']['/api/v1/dashboard/quarterly']"
 
-Expected: all API tests pass; unauthorized data is absent; OpenAPI contains the quarterly dashboard path.
+预期：全部 API 测试通过；响应中不存在未授权数据；OpenAPI 包含季度驾驶舱路径。
 
-- [ ] **Step 5: Commit the API slice**
+- [ ] **步骤 5：提交 API 切片**
 
 ~~~bash
 git add backend/src/tax_risk/security backend/src/tax_risk/api backend/tests/integration/api
 git commit -m "feat: expose scoped quarterly risk APIs"
 ~~~
 
-### Task 11: Build the minimum quarterly dashboard
+### 任务 11：构建最小可用季度驾驶舱
 
-**Files:**
-- Create: **web/src/api/client.ts**
-- Create: **web/src/api/quarterly.ts**
-- Create: **web/src/features/quarterly/types.ts**
-- Create: **web/src/features/quarterly/QuarterlyDashboardPage.tsx**
-- Create: **web/src/features/quarterly/QuarterlyRunTable.tsx**
-- Create: **web/src/features/quarterly/FormulaDrawer.tsx**
-- Create: **web/src/features/quarterly/QuarterlyDashboardPage.test.tsx**
-- Create: **web/src/features/quarterly/FormulaDrawer.test.tsx**
-- Modify: **web/src/App.tsx**
+**文件：**
+- 新建：**web/src/api/client.ts**
+- 新建：**web/src/api/quarterly.ts**
+- 新建：**web/src/features/quarterly/types.ts**
+- 新建：**web/src/features/quarterly/QuarterlyDashboardPage.tsx**
+- 新建：**web/src/features/quarterly/QuarterlyRunTable.tsx**
+- 新建：**web/src/features/quarterly/FormulaDrawer.tsx**
+- 新建：**web/src/features/quarterly/QuarterlyDashboardPage.test.tsx**
+- 新建：**web/src/features/quarterly/FormulaDrawer.test.tsx**
+- 修改：**web/src/App.tsx**
 
-- [ ] **Step 1: Write failing user-facing component tests**
+- [ ] **步骤 1：编写预期失败的用户界面组件测试**
 
-Mock TanStack Query responses and assert:
+模拟 TanStack Query 响应并断言：
 
-- cards display coverage, ready, blocked, abnormal companies, and potential tax cost;
-- selectors change year/quarter query keys;
-- table separates data-quality blocked rows from risk rows;
-- risk type, direction, actual/expected/difference values and status render;
-- drawer shows formula, each substituted value, source, snapshot, master and rule versions;
-- revenue≤0 displays “不可计算” and reason, never ¥0;
-- no Agent or semantic-risk navigation appears.
+- 卡片展示覆盖公司数、数据就绪公司数、阻断公司数、异常公司数及潜在税务成本；
+- 选择器会更改年度/季度查询键；
+- 表格将数据质量阻断记录与风险记录分开；
+- 渲染风险类型、方向、实际值/应计值/差异值及状态；
+- 抽屉展示公式、每个代入值、来源、快照、主数据版本及规则版本；
+- 营业收入≤0 时展示“不可计算”及原因，绝不展示 ¥0；
+- 不出现 Agent 或语义风险导航。
 
-- [ ] **Step 2: Verify the UI is red**
+- [ ] **步骤 2：确认界面处于红灯状态**
 
-Run: cd web && npm test -- --run src/features/quarterly
+运行：cd web && npm test -- --run src/features/quarterly
 
-Expected: FAIL because quarterly components and API functions are missing.
+预期：失败，因为季度组件及 API 函数缺失。
 
-- [ ] **Step 3: Implement the typed dashboard**
+- [ ] **步骤 3：实现类型化驾驶舱**
 
-Use Ant Design Statistic, Alert, Select, Table, Tag, Drawer, and Descriptions. TanStack Query owns server state; keep filters in URL search params; render money from string+currency+scale without JavaScript floating-point arithmetic. The details drawer consumes a detection endpoint rather than recomputing formulas in the browser.
+使用 Ant Design 的 Statistic、Alert、Select、Table、Tag、Drawer 及 Descriptions。TanStack Query 管理服务端状态；筛选条件保存在 URL 查询参数中；根据字符串+币种+精度渲染金额，不使用 JavaScript 浮点运算。详情抽屉调用监测结果端点，不在浏览器中重新计算公式。
 
-- [ ] **Step 4: Verify components and production build**
+- [ ] **步骤 4：验证组件及生产构建**
 
-Run: cd web && npm test -- --run && npm run lint && npm run build
+运行：cd web && npm test -- --run && npm run lint && npm run build
 
-Expected: all component tests pass; lint exits 0; Vite emits a production bundle.
+预期：全部组件测试通过；lint 以 0 退出；Vite 生成生产构建包。
 
-- [ ] **Step 5: Commit the dashboard**
+- [ ] **步骤 5：提交驾驶舱**
 
 ~~~bash
 git add web/src
 git commit -m "feat: add quarterly tax risk dashboard"
 ~~~
 
-### Task 12: Complete full-stack E2E acceptance and operating instructions
+### 任务 12：完成全栈端到端验收及操作说明
 
-**Files:**
-- Create: **backend/tests/e2e/test_quarterly_standard_scenario.py**
-- Create: **backend/tests/e2e/test_quarterly_api_worker_flow.py**
-- Create: **backend/tests/e2e/seed_quarterly_scenario.py**
-- Create: **web/e2e/quarterly-dashboard.spec.ts**
-- Create: **web/playwright.config.ts**
-- Modify: **infra/docker-compose.yml**
-- Create: **infra/README.md**
-- Create: **backend/README.md**
-- Create: **web/README.md**
+**文件：**
+- 新建：**backend/tests/e2e/test_quarterly_standard_scenario.py**
+- 新建：**backend/tests/e2e/test_quarterly_api_worker_flow.py**
+- 新建：**backend/tests/e2e/seed_quarterly_scenario.py**
+- 新建：**web/e2e/quarterly-dashboard.spec.ts**
+- 新建：**web/playwright.config.ts**
+- 修改：**infra/docker-compose.yml**
+- 新建：**infra/README.md**
+- 新建：**backend/README.md**
+- 新建：**web/README.md**
 
-- [ ] **Step 1: Write failing end-to-end acceptance**
+- [ ] **步骤 1：编写预期失败的端到端验收测试**
 
-Seed 105 companies and include the approved standard company:
+准备 105 家公司的数据，其中包括已批准的标准公司：
 
-- profit 10,000,000; received dividends 1,000,000; fair-value gain 500,000; loss 2,000,000; rate 0.25;
-- prior-quarter tax 900,000; current-quarter tax 700,000; revenue 50,000,000; historical burden 0.09;
-- other-payables accrual 1,400,000; Hesi no-invoice 300,000.
+- 利润总额 10,000,000；收到分红 1,000,000；公允价值变动收益 500,000；可弥补以前年度亏损 2,000,000；税率 0.25；
+- 以前季度所得税计提额 900,000；本季度所得税计提额 700,000；营业收入 50,000,000；历史平均税负率 0.09；
+- 其他应付款暂估余额 1,400,000；合思无票报销金额 300,000。
 
-API E2E must assert cumulative tax 1,625,000.00, should accrue 725,000.00, difference +25,000.00, current burden 0.0325, deviation -0.0575, potential adjustment 1,700,000.00, potential tax 2,050,000.00, potential cost 425,000.00, and potential alert code `POTENTIAL_TAX_COST`. Browser E2E must locate the company, open formula details, and show the same source values and versions.
+API 端到端测试必须断言：本年累计应纳税额为 1,625,000.00，应计提额为 725,000.00，差异为 +25,000.00，本年累计税负率为 0.0325，偏离度为 -0.0575，潜在调增金额为 1,700,000.00，潜在应纳税额为 2,050,000.00，潜在税务成本为 425,000.00，潜在预警代码为 `POTENTIAL_TAX_COST`。浏览器端到端测试必须定位该公司、打开公式详情，并展示相同的来源值及版本。
 
-- [ ] **Step 2: Run E2E and verify it fails before wiring**
+- [ ] **步骤 2：运行端到端测试并确认接线前失败**
 
-Run: docker compose -f infra/docker-compose.yml up -d --build && cd backend && pytest tests/e2e/test_quarterly_standard_scenario.py -q
+运行：docker compose -f infra/docker-compose.yml up -d --build && cd backend && pytest tests/e2e/test_quarterly_standard_scenario.py -q
 
-Expected: FAIL until seed, full API route wiring, and worker flow are complete.
+预期：在数据准备、完整 API 路由接线及工作任务流程完成前失败。
 
-Run: cd web && npx playwright test e2e/quarterly-dashboard.spec.ts
+运行：cd web && npx playwright test e2e/quarterly-dashboard.spec.ts
 
-Expected: FAIL until the running dashboard can load seeded results.
+预期：在运行中的驾驶舱能够加载已准备结果前失败。
 
-- [ ] **Step 3: Configure the production-shaped Compose topology**
+- [ ] **步骤 3：配置具备生产形态的 Compose 拓扑**
 
-Configure `infra/docker-compose.yml` with postgres, redis, one-shot migrate, api, worker-quarterly, and web services. Give every long-running service a health check; use dependency health conditions rather than sleeps; mount no source directory into production-shaped containers; expose no semantic Agent/model service.
+在 `infra/docker-compose.yml` 中配置 postgres、redis、一次性 migrate、api、worker-quarterly 及 web 服务。为每个长时间运行的服务配置健康检查；使用依赖健康条件而不是休眠等待；生产形态容器不挂载源代码目录；不暴露语义 Agent/模型服务。
 
-- [ ] **Step 4: Verify the Compose topology**
+- [ ] **步骤 4：验证 Compose 拓扑**
 
-Run:
+运行：
 
 ~~~bash
 docker compose -f infra/docker-compose.yml config --quiet
@@ -742,15 +742,15 @@ docker compose -f infra/docker-compose.yml up -d --build
 docker compose -f infra/docker-compose.yml ps
 ~~~
 
-Expected: config exits 0; postgres, redis, api, worker-quarterly, and web are running/healthy; migrate exited successfully; no model service exists.
+预期：config 以 0 退出；postgres、redis、api、worker-quarterly 及 web 正在运行且健康；migrate 成功退出；不存在模型服务。
 
-- [ ] **Step 5: Wire the API-worker-web acceptance path**
+- [ ] **步骤 5：接通 API-工作任务-Web 验收路径**
 
-Use `seed_quarterly_scenario.py` to load the 105-company fixture through public phase1 ingestion/master/snapshot interfaces, atomically publish its SnapshotSet, submit a quarterly run through the API, let `worker-quarterly` process company tasks, poll the run endpoint to a terminal summary, and let the web dashboard read the persisted result. `test_quarterly_api_worker_flow.py` must use service URLs and API contracts rather than importing the application service directly.
+使用 `seed_quarterly_scenario.py`，通过阶段 1 公共数据采集/主数据/快照接口加载 105 家公司夹具，原子发布其 SnapshotSet，通过 API 提交季度运行，让 `worker-quarterly` 处理公司任务，轮询运行端点直至获得终态汇总，并由 Web 驾驶舱读取持久化结果。`test_quarterly_api_worker_flow.py` 必须使用服务 URL 及 API 契约，不得直接导入应用服务。
 
-- [ ] **Step 6: Verify the focused API-worker-web path**
+- [ ] **步骤 6：验证聚焦的 API-工作任务-Web 路径**
 
-Run:
+运行：
 
 ~~~bash
 cd backend
@@ -759,57 +759,57 @@ cd ../web
 npx playwright test e2e/quarterly-dashboard.spec.ts
 ~~~
 
-Expected: both backend E2E tests and Playwright pass; the 103 valid companies remain committed, two blocked companies remain isolated, and the browser formula drawer shows the persisted API values.
+预期：两个后端端到端测试及 Playwright 均通过；103 家有效公司的结果保持提交，两家被阻断公司保持隔离，浏览器公式抽屉展示已持久化的 API 值。
 
-- [ ] **Step 7: Write the infrastructure operations guide**
+- [ ] **步骤 7：编写基础设施操作手册**
 
-Write `infra/README.md` with exact, copyable commands for prerequisites, environment setup, start, health, migration, seed, quarterly submission, status polling, failed-company retry, log export, test backup/restore, and shutdown. State that SnapshotSet.published_at is the sole data-ready timestamp and that no model credential is required in Phase 1.
+编写 `infra/README.md`，提供可准确复制执行的命令，涵盖前置条件、环境配置、启动、健康检查、数据库迁移、数据准备、季度提交、状态轮询、失败公司重试、日志导出、测试备份/恢复及停止。明确 SnapshotSet.published_at 是唯一的数据就绪时间戳，且阶段 1 不需要模型凭据。
 
-- [ ] **Step 8: Verify the infrastructure guide contract**
+- [ ] **步骤 8：验证基础设施手册契约**
 
-Run: `rg -n '^## (Prerequisites|Configure|Start|Health|Migrate|Seed|Submit|Inspect|Retry|Logs|Backup and Restore|Stop)$' infra/README.md`
+运行：`rg -n '^## (前置条件|配置|启动|健康检查|数据库迁移|数据准备|提交|检查|重试|日志|备份与恢复|停止)$' infra/README.md`
 
-Expected: all twelve required sections are present once and their commands reference `infra/docker-compose.yml`.
+预期：十二个必需章节各出现一次，且其中的命令引用 `infra/docker-compose.yml`。
 
-- [ ] **Step 9: Write the backend guide**
+- [ ] **步骤 9：编写后端手册**
 
-Write `backend/README.md` with Python 3.12 setup, database configuration, Alembic upgrade/downgrade-on-disposable-copy commands, API endpoints, Celery quarterly queue, company-only retry, unit/integration/E2E commands, Decimal/ROUND_HALF_UP rules, and the prohibition on semantic Agent dependencies.
+编写 `backend/README.md`，涵盖 Python 3.12 环境准备、数据库配置、Alembic 升级/在一次性副本上降级的命令、API 端点、Celery 季度队列、仅重试指定公司、单元/集成/端到端测试命令、Decimal/ROUND_HALF_UP 规则，以及禁止语义 Agent 依赖的要求。
 
-- [ ] **Step 10: Verify the backend guide contract**
+- [ ] **步骤 10：验证后端手册契约**
 
-Run: `rg -n '^## (Setup|Database|Migrations|API|Quarterly Worker|Retry|Tests|Numeric Contract|Phase 1 Boundary)$' backend/README.md`
+运行：`rg -n '^## (环境准备|数据库|数据库迁移|API|季度任务|重试|测试|数值契约|第一阶段边界)$' backend/README.md`
 
-Expected: all required backend sections are present once.
+预期：全部必需的后端章节各出现一次。
 
-- [ ] **Step 11: Write the web guide**
+- [ ] **步骤 11：编写 Web 手册**
 
-Write `web/README.md` with Node installation, `VITE_API_BASE_URL`, development start, Vitest, lint/typecheck, production build, Playwright E2E, and the quarterly dashboard route.
+编写 `web/README.md`，涵盖 Node 安装、`VITE_API_BASE_URL`、本地开发启动、Vitest、代码检查/类型检查、生产构建、Playwright 端到端测试及季度驾驶舱路由。
 
-- [ ] **Step 12: Verify the web guide contract**
+- [ ] **步骤 12：验证 Web 手册契约**
 
-Run: `rg -n '^## (Setup|Environment|Development|Unit Tests|Lint and Typecheck|Build|Browser E2E|Quarterly Dashboard)$' web/README.md`
+运行：`rg -n '^## (环境准备|环境变量|本地开发|单元测试|代码检查与类型检查|构建|浏览器端到端测试|季度监测看板)$' web/README.md`
 
-Expected: all required web sections are present once and no model/Agent configuration is documented.
+预期：全部必需的 Web 章节各出现一次，且文档中没有模型/Agent 配置。
 
-- [ ] **Step 13: Run full verification and record expected evidence**
+- [ ] **步骤 13：运行完整验证并记录预期证据**
 
-Run: cd backend && pytest --cov=tax_risk --cov-report=term-missing -q && ruff check src tests && mypy src
+运行：cd backend && pytest --cov=tax_risk --cov-report=term-missing -q && ruff check src tests && mypy src
 
-Expected: all backend tests pass; domain/quarterly.py and domain/money.py have 100% branch coverage; overall backend coverage is at least 90%; Ruff and mypy exit 0.
+预期：全部后端测试通过；domain/quarterly.py 及 domain/money.py 的分支覆盖率为 100%；后端总体覆盖率至少为 90%；Ruff 和 mypy 均以 0 退出。
 
-Run: cd web && npm test -- --run && npm run lint && npm run build && npx playwright test
+运行：cd web && npm test -- --run && npm run lint && npm run build && npx playwright test
 
-Expected: all unit/component/browser tests pass; lint and build exit 0.
+预期：全部单元/组件/浏览器测试通过；lint 及构建均以 0 退出。
 
-Run: docker compose -f infra/docker-compose.yml ps
+运行：docker compose -f infra/docker-compose.yml ps
 
-Expected: postgres, redis, api, worker-quarterly, and web are healthy; migrate completed; no semantic Agent/model service is present.
+预期：postgres、redis、api、worker-quarterly 及 web 均健康；migrate 已完成；不存在语义 Agent/模型服务。
 
-- [ ] **Step 14: Commit the Phase 1 acceptance slice**
+- [ ] **步骤 14：提交阶段 1 验收切片**
 
 ~~~bash
 git add backend/tests/e2e backend/README.md web/e2e web/playwright.config.ts web/README.md infra
 git commit -m "test: verify phase one quarterly monitoring"
 ~~~
 
-At the end of Chunk 2, compare the implementation against Sections 2, 5, 6.1–6.3, 7, 9, 11, 12.1, 12.3, and 13.1 of the source specification. Record any accepted deviation in the relevant README and obtain business sign-off on field mapping, amount scale, and the 105-company acceptance report before production deployment.
+工作块 2 结束时，将实现与源规格说明书第 2、5、6.1–6.3、7、9、11、12.1、12.3 及 13.1 节进行对比。将任何已接受的偏差记录在相关 README 中，并在生产部署前，就字段映射、金额精度及 105 家公司验收报告取得业务签字确认。
