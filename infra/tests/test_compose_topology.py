@@ -76,11 +76,38 @@ def _local_acceptance_config() -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
+def _render_services_for_forbidden_content_scan(services: dict[str, Any]) -> str:
+    portable_services = json.loads(json.dumps(services))
+    for service in portable_services.values():
+        build = service.get("build")
+        if isinstance(build, dict) and "context" in build:
+            build["context"] = "<build-context>"
+    return json.dumps(portable_services).lower()
+
+
+def test_forbidden_content_scan_normalizes_only_the_resolved_build_context() -> None:
+    services = {
+        "api": {
+            "build": {
+                "context": "/Users/example/Agents-Repo/tax-monitor/backend",
+                "dockerfile": "Dockerfile",
+            },
+            "command": ["agent-runtime"],
+        }
+    }
+
+    rendered = _render_services_for_forbidden_content_scan(services)
+
+    assert "agents-repo" not in rendered
+    assert "agent-runtime" in rendered
+    assert "dockerfile" in rendered
+
+
 def test_compose_has_only_the_required_service_topology() -> None:
     services = _compose_config()["services"]
 
     assert set(services) == EXPECTED_SERVICES
-    rendered = json.dumps(services).lower()
+    rendered = _render_services_for_forbidden_content_scan(services)
     for forbidden in ("agent", "llm", "model-server", "ollama", "openai"):
         assert forbidden not in rendered
 
