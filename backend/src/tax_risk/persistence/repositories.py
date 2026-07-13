@@ -11,6 +11,7 @@ from tax_risk.persistence.business_entertainment_repositories import (
     BusinessEntertainmentScopeRepository,
 )
 from tax_risk.persistence.ingest_repositories import IngestRepository
+from tax_risk.persistence.export_repositories import ExportRepository
 from tax_risk.persistence.master_repositories import MasterRepository
 from tax_risk.persistence.risk_repositories import RiskRepository
 from tax_risk.persistence.semantic_repositories import (
@@ -43,6 +44,7 @@ class UnitOfWork:
         self._session_factory = factory
         self.session: Session
         self.ingest: IngestRepository
+        self.exports: ExportRepository
         self.business_entertainment_scope: BusinessEntertainmentScopeRepository
         self.master: MasterRepository
         self.snapshots: SnapshotRepository
@@ -53,6 +55,7 @@ class UnitOfWork:
     def __enter__(self) -> Self:
         self.session = self._session_factory()
         self.ingest = IngestRepository(self.session)
+        self.exports = ExportRepository(self.session)
         self.business_entertainment_scope = BusinessEntertainmentScopeRepository(self.session)
         self.master = MasterRepository(self.session)
         self.snapshots = SnapshotRepository(self.session)

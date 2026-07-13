@@ -26,6 +26,14 @@ from tax_risk.application.ingest import (
 )
 from tax_risk.application.quarterly_batches import QuarterlyBatchService
 from tax_risk.application.audit import AuditEventDraft, AuditService, normalized_filter_hash
+from tax_risk.application.exports import (
+    ExportObjectStore,
+    ExportService,
+    FileExportObjectStore,
+)
+from tax_risk.application.business_entertainment.reporting import (
+    BusinessEntertainmentReportingService,
+)
 from tax_risk.config import Settings
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.security.principal import PrincipalProvider
@@ -46,6 +54,8 @@ def create_app(
     quarterly_dispatcher: Callable[..., None] | None = None,
     monthly_semantic_dispatcher: Callable[..., None] | None = None,
     semantic_credential_resolver: Callable[[str], str] | None = None,
+    export_dispatcher: Callable[[UUID], None] | None = None,
+    export_object_store: ExportObjectStore | None = None,
 ) -> FastAPI:
     """Create the tax risk monitoring API."""
 
@@ -53,6 +63,14 @@ def create_app(
     app = FastAPI(title="Group Income Tax Risk Monitoring Platform")
     app.state.uow_factory = uow_factory or UnitOfWork
     app.state.audit_service = AuditService(app.state.uow_factory)
+    app.state.export_service = ExportService(
+        app.state.uow_factory,
+        BusinessEntertainmentReportingService(app.state.uow_factory),
+        export_object_store or FileExportObjectStore(resolved_settings.export_storage_path),
+        app.state.audit_service,
+        resolved_settings,
+    )
+    app.state.export_dispatcher = export_dispatcher or _dispatch_export_job
     app.state.settings = resolved_settings
     app.state.principal_provider = principal_provider
     app.state.adapter_factory = adapter_factory or create_csv_adapter
@@ -226,3 +244,10 @@ def _dispatch_monthly_semantic_batch(
         run_id=run_id,
         run_company_ids=run_company_ids,
     ).apply_async()
+
+
+def _dispatch_export_job(job_id: UUID) -> None:
+    from tax_risk.workers.celery_app import celery_app
+    from tax_risk.workers.exports import RENDER_EXPORT_TASK
+
+    celery_app.send_task(RENDER_EXPORT_TASK, args=(str(job_id),))

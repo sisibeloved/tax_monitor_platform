@@ -11,6 +11,7 @@ from tests.integration.application.test_semantic_case_routing import (
     _seed_graph,
 )
 from tax_risk.application.business_entertainment.export import escape_excel_text
+from tax_risk.application.exports import InMemoryExportObjectStore
 from tax_risk.application.case_merge import CaseMergeService
 from tax_risk.application.semantic.detection_router import SemanticCaseRouter
 from tax_risk.config import Settings
@@ -50,10 +51,22 @@ def test_export_contains_one_safe_root_case_row(
         )
         app = create_app(
             uow_factory=partial(UnitOfWork, factory),
-            settings=Settings(environment="test"),
+            settings=Settings(environment="test", export_download_secret="test-secret"),
             principal_provider=lambda _request: principal,
+            export_dispatcher=lambda _job_id: None,
+            export_object_store=InMemoryExportObjectStore(),
         )
-        response = TestClient(app).get("/api/v1/exports/business-entertainment.xlsx")
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/v1/exports",
+                json={"export_type": "BUSINESS_ENTERTAINMENT", "filters": {}},
+            )
+            assert created.status_code == 202, created.text
+            job_id = created.json()["id"]
+            app.state.export_service.render_export(job_id)
+            issued = client.post(f"/api/v1/exports/{job_id}/download-url")
+            assert issued.status_code == 200, issued.text
+            response = client.get(issued.json()["url"])
 
         assert response.status_code == 200
         workbook = load_workbook(BytesIO(response.content), read_only=True, data_only=False)

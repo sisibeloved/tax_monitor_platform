@@ -1,6 +1,7 @@
 import { Layout, Tabs, Typography } from "antd";
 
 import { SapLinkCoveragePage } from "./features/business-entertainment/SapLinkCoveragePage";
+import { ExportJobsPage } from "./features/exports/ExportJobsPage";
 import { QuarterlyDashboardPage } from "./features/quarterly/QuarterlyDashboardPage";
 import { RiskListPage } from "./features/risks/RiskListPage";
 
@@ -32,6 +33,11 @@ export default function App() {
               key: "sap-coverage",
               label: "SAP关联覆盖",
               children: <SapLinkCoveragePage />,
+            },
+            {
+              key: "exports",
+              label: "安全导出",
+              children: <ExportJobsPage />,
             },
           ]}
         />

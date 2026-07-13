@@ -54,7 +54,7 @@ _ROLE_ACTIONS: dict[str, frozenset[Action]] = {
     ),
     DIVISION_TAX_ROLE: frozenset({Action.READ_RISK}),
     COMPANY_FINANCE_ROLE: frozenset(
-        {Action.READ_RISK, Action.PROCESS_COMPANY_RISK}
+        {Action.READ_RISK, Action.PROCESS_COMPANY_RISK, Action.EXPORT_RISK}
     ),
     DATA_ADMIN_ROLE: frozenset({Action.MAINTAIN_SOURCE, Action.IMPORT_MASTER}),
     AUDIT_ROLE: frozenset({Action.READ_RISK, Action.READ_AUDIT}),

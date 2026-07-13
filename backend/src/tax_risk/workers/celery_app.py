@@ -23,6 +23,12 @@ from tax_risk.workers.monthly_semantic import (
     default_monthly_service_factory,
     register_monthly_tasks,
 )
+from tax_risk.workers.exports import (
+    EXPORT_QUEUE,
+    RENDER_EXPORT_TASK,
+    default_export_service_factory,
+    register_export_tasks,
+)
 
 
 def create_celery_app(settings: Settings | None = None) -> Celery:
@@ -69,6 +75,7 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
             },
             RUN_MONTHLY_SEMANTIC_COMPANY_TASK: {"queue": MONTHLY_SEMANTIC_QUEUE},
             SUMMARIZE_MONTHLY_SEMANTIC_TASK: {"queue": MONTHLY_SEMANTIC_QUEUE},
+            RENDER_EXPORT_TASK: {"queue": EXPORT_QUEUE},
         },
         quarterly_task_max_retries=resolved.quarterly_task_max_retries,
         quarterly_task_retry_backoff_seconds=(
@@ -91,6 +98,7 @@ register_monthly_tasks(
     app=celery_app,
     service_factory=default_monthly_service_factory,
 )
+register_export_tasks(app=celery_app, service_factory=default_export_service_factory)
 app = celery_app
 
 __all__ = ["app", "celery_app", "create_celery_app"]
