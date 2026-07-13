@@ -68,6 +68,7 @@ def test_trigger_and_get_welfare_run_freezes_all_versions(
         assert status.status_code == 200
         assert status.json()["companies"][0]["company_code"] == company_code
     finally:
+        _cleanup_monthly_semantic_state(engine)
         engine.dispose()
 
 
@@ -112,13 +113,18 @@ def test_company_finance_cannot_start_or_read_out_of_scope_run(
             principal_provider=lambda _request: finance,
             monthly_semantic_dispatcher=lambda **_kwargs: None,
         )
-        assert TestClient(finance_app).post(
-            "/api/v1/monthly-semantic/runs", json=payload
-        ).status_code == 404
-        assert TestClient(finance_app).get(
-            f"/api/v1/monthly-semantic/runs/{created.json()['run_id']}"
-        ).status_code == 404
+        assert (
+            TestClient(finance_app).post("/api/v1/monthly-semantic/runs", json=payload).status_code
+            == 404
+        )
+        assert (
+            TestClient(finance_app)
+            .get(f"/api/v1/monthly-semantic/runs/{created.json()['run_id']}")
+            .status_code
+            == 404
+        )
     finally:
+        _cleanup_monthly_semantic_state(engine)
         engine.dispose()
 
 
@@ -176,9 +182,7 @@ def test_broker_failure_is_persisted_on_the_same_run(
             uow_factory=partial(UnitOfWork, factory),
             settings=Settings(environment="test"),
             principal_provider=lambda _request: principal,
-            monthly_semantic_dispatcher=lambda **kwargs: redispatched.append(
-                kwargs["run_id"]
-            ),
+            monthly_semantic_dispatcher=lambda **kwargs: redispatched.append(kwargs["run_id"]),
         )
         retry = TestClient(retry_app).post(
             "/api/v1/monthly-semantic/runs",
@@ -202,6 +206,7 @@ def test_broker_failure_is_persisted_on_the_same_run(
                 },
             ).one() == ("RUNNING", None, 1)
     finally:
+        _cleanup_monthly_semantic_state(engine)
         engine.dispose()
 
 
@@ -284,3 +289,82 @@ def _seed_semantic_versions(engine: Engine) -> UUID:
                 "dictionary_id": dictionary_id,
             },
         ).scalar_one()
+
+
+def _cleanup_monthly_semantic_state(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM monitoring_run_company WHERE run_id IN "
+                "(SELECT id FROM monitoring_run WHERE run_type = 'MONTHLY_SEMANTIC')"
+            )
+        )
+        connection.execute(text("DELETE FROM monitoring_run WHERE run_type = 'MONTHLY_SEMANTIC'"))
+        connection.execute(
+            text(
+                "ALTER TABLE semantic_version_set "
+                "DISABLE TRIGGER trg_semantic_version_set_immutable"
+            )
+        )
+        connection.execute(
+            text(
+                "DELETE FROM semantic_version_set WHERE rule_version_id IN "
+                "(SELECT id FROM rule_version WHERE rule_code = 'MONTHLY_SEMANTIC')"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE semantic_version_set ENABLE TRIGGER trg_semantic_version_set_immutable"
+            )
+        )
+        connection.execute(
+            text("ALTER TABLE suggested_account_entry DISABLE TRIGGER trg_account_entry_immutable")
+        )
+        connection.execute(
+            text(
+                "DELETE FROM suggested_account_entry WHERE dictionary_version_id IN "
+                "(SELECT id FROM suggested_account_dictionary_version "
+                "WHERE dictionary_version = 'candidate-accounts-v2')"
+            )
+        )
+        connection.execute(
+            text("ALTER TABLE suggested_account_entry ENABLE TRIGGER trg_account_entry_immutable")
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE suggested_account_dictionary_version "
+                "DISABLE TRIGGER trg_account_dictionary_version_immutable"
+            )
+        )
+        connection.execute(
+            text(
+                "DELETE FROM suggested_account_dictionary_version "
+                "WHERE dictionary_version = 'candidate-accounts-v2'"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE suggested_account_dictionary_version "
+                "ENABLE TRIGGER trg_account_dictionary_version_immutable"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE semantic_artifact_version "
+                "DISABLE TRIGGER trg_semantic_artifact_immutable"
+            )
+        )
+        connection.execute(
+            text(
+                "DELETE FROM semantic_artifact_version "
+                "WHERE version IN ('monthly-model-v1', 'monthly-prompt-v1', "
+                "'monthly-cases-v1')"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE semantic_artifact_version "
+                "ENABLE TRIGGER trg_semantic_artifact_immutable"
+            )
+        )
+        connection.execute(text("DELETE FROM rule_version WHERE rule_code = 'MONTHLY_SEMANTIC'"))

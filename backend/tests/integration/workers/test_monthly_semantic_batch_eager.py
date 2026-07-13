@@ -6,7 +6,10 @@ from tax_risk.application.monthly_semantic_runs import MonthlySemanticRunService
 from tax_risk.application.semantic.sap_voucher_monitor import MonitorRunResult
 from tax_risk.domain.cases import MonitorType
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
-from tests.integration.api.test_monthly_semantic_routes import _seed_semantic_versions
+from tests.integration.api.test_monthly_semantic_routes import (
+    _cleanup_monthly_semantic_state,
+    _seed_semantic_versions,
+)
 from tests.integration.persistence.test_monthly_semantic_repository import _seed_monthly_set
 
 
@@ -79,4 +82,5 @@ def test_company_failure_is_isolated_and_only_failed_company_is_retried(
         assert final["status"] == "SUCCEEDED"
         assert final["succeeded"] == 2 and final["failed"] == 0
     finally:
+        _cleanup_monthly_semantic_state(engine)
         engine.dispose()

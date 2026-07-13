@@ -1,14 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-
 const caseId = "10000000-0000-4000-8000-000000000001";
 const rootCaseId = "10000000-0000-4000-8000-000000000002";
 const companyId = "20000000-0000-4000-8000-000000000001";
 const evidenceLinkId = "30000000-0000-4000-8000-000000000001";
 
-test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖", async ({
-  page,
-}) => {
+test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖", async ({ page }) => {
   let resolved = false;
   let selectedSourceMode = "";
 
@@ -33,7 +30,8 @@ test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖",
   await page.route("**/api/v1/risk-cases?**", async (route) => {
     const url = new URL(route.request().url());
     if (url.searchParams.get("monitoring_type") === "BUSINESS_ENTERTAINMENT") {
-      selectedSourceMode = url.searchParams.get("source_mode") ?? selectedSourceMode;
+      selectedSourceMode =
+        url.searchParams.get("source_mode") ?? selectedSourceMode;
       await route.fulfill({
         json: {
           total: 1,
@@ -52,7 +50,9 @@ test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖",
               row_version: 1,
               fiscal_year: 2026,
               period: 7,
-              source_mode: resolved ? "SAP_LINKED" : "BUSINESS_DOCUMENT_UNLINKED",
+              source_mode: resolved
+                ? "SAP_LINKED"
+                : "BUSINESS_DOCUMENT_UNLINKED",
               sap_link_status: resolved ? "LINKED" : "PENDING_LOCATION",
               sap_document_number: resolved ? "510001" : null,
               sap_line_item: resolved ? "001" : null,
@@ -65,7 +65,9 @@ test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖",
       });
       return;
     }
-    await route.fulfill({ json: { total: 0, page: 1, page_size: 200, items: [] } });
+    await route.fulfill({
+      json: { total: 0, page: 1, page_size: 200, items: [] },
+    });
   });
   await page.route(`**/api/v1/risk-cases/${caseId}`, async (route) => {
     await route.fulfill({
@@ -160,7 +162,7 @@ test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖",
   await page.goto("/");
   await page.getByRole("tab", { name: "业务招待费风险" }).click();
   await expect(
-    page.getByRole("heading", { name: "业务招待费风险清单" }),
+    page.getByRole("heading", { name: "所得税风险清单" }),
   ).toBeVisible();
   await expect(page.getByText("待定位SAP凭证")).toBeVisible();
   await expect(page.getByRole("link", { name: "导出Excel" })).toHaveAttribute(
@@ -170,7 +172,9 @@ test("筛选、证据复核、精确关联解决、根案件刷新和SAP覆盖",
 
   await page.getByRole("combobox", { name: "来源模式" }).click();
   await page.getByText("业务单据未关联", { exact: true }).click();
-  await expect.poll(() => selectedSourceMode).toBe("BUSINESS_DOCUMENT_UNLINKED");
+  await expect
+    .poll(() => selectedSourceMode)
+    .toBe("BUSINESS_DOCUMENT_UNLINKED");
 
   await page.getByRole("button", { name: "查看详情" }).click();
   await expect(page.getByText("内部培训班会议餐")).toBeVisible();

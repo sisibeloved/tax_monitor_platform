@@ -91,6 +91,7 @@ def resources(
             connection.execute(
                 text("ALTER TABLE detection_record ENABLE TRIGGER trg_detection_record_immutable")
             )
+            connection.execute(text("DELETE FROM monitoring_run_company"))
             connection.execute(text("DELETE FROM monitoring_run"))
             connection.execute(
                 text(
