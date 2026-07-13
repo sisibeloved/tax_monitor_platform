@@ -12,12 +12,18 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from tax_risk.config import Settings
 from tax_risk.security.principal import (
+    API_ROLES,
     AUDIT_ROLE,
     COMPANY_FINANCE_ROLE,
     GROUP_TAX_ROLE,
-    KNOWN_ROLES,
     Principal,
     PrincipalProvider,
+)
+from tax_risk.security.policies import (
+    Action,
+    AuthorizationDenied,
+    DEFAULT_POLICY,
+    ResourceNotFound,
 )
 
 
@@ -59,7 +65,9 @@ def get_principal(
 
 
 def require_reader(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
-    if principal.roles.isdisjoint(KNOWN_ROLES):
+    try:
+        DEFAULT_POLICY.require(principal, Action.READ_RISK)
+    except AuthorizationDenied:
         _forbidden()
     return principal
 
@@ -71,9 +79,9 @@ def require_group_tax(principal: Annotated[Principal, Depends(get_principal)]) -
 
 
 def require_case_writer(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
-    if principal.has_role(AUDIT_ROLE) or principal.roles.isdisjoint(
-        {GROUP_TAX_ROLE, COMPANY_FINANCE_ROLE}
-    ):
+    try:
+        DEFAULT_POLICY.require(principal, Action.PROCESS_COMPANY_RISK)
+    except AuthorizationDenied:
         _forbidden()
     return principal
 
@@ -85,16 +93,16 @@ def company_scope(
 ) -> frozenset[UUID] | None:
     """Return the SQL company filter; ``None`` means unrestricted group scope."""
 
-    if principal.has_role(GROUP_TAX_ROLE) or principal.has_role(AUDIT_ROLE):
-        return None
-    if not principal.has_role(COMPANY_FINANCE_ROLE):
-        _forbidden()
-    if (
-        requested_company_id is not None
-        and requested_company_id not in principal.allowed_company_ids
-    ):
+    try:
+        return DEFAULT_POLICY.company_scope(
+            principal,
+            Action.READ_RISK,
+            requested_company_id=requested_company_id,
+        )
+    except ResourceNotFound:
         _not_found()
-    return principal.allowed_company_ids
+    except AuthorizationDenied:
+        _forbidden()
 
 
 def actor_role(principal: Principal) -> str:
@@ -124,7 +132,7 @@ def _parse_principal_payload(payload: Any) -> Principal:
     ):
         raise TypeError("principal payload has invalid fields")
     roles = frozenset(cast(list[str], raw_roles))
-    if not roles or not roles <= KNOWN_ROLES:
+    if not roles or not roles <= API_ROLES:
         raise ValueError("principal payload has unsupported roles")
     return Principal(
         subject=subject.strip(),

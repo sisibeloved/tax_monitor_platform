@@ -545,7 +545,10 @@ def test_detection_detail_preserves_exact_values_lineage_and_not_calculable_reas
     )
     burden = client.get(
         f"/api/v1/detections/{seed.burden_detection_id}",
-        headers=_principal_headers(roles=("audit",)),
+        headers=_principal_headers(
+            roles=("audit",),
+            allowed_company_ids=(seed.company_ids[0],),
+        ),
     )
     hidden = client.get(
         f"/api/v1/detections/{seed.potential_detection_id}",

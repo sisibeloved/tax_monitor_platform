@@ -358,7 +358,11 @@ def test_case_list_applies_group_company_and_audit_scope_in_sql(
     )
     audit = client.get(
         "/api/v1/risk-cases?fiscal_year=2032&quarter=2",
-        headers=_principal_headers(subject="audit", roles=("audit",)),
+        headers=_principal_headers(
+            subject="audit",
+            roles=("audit",),
+            allowed_company_ids=seed.company_ids,
+        ),
     )
     unauthorized_filter = client.get(
         f"/api/v1/risk-cases?fiscal_year=2032&quarter=2&company={seed.company_ids[1]}",
