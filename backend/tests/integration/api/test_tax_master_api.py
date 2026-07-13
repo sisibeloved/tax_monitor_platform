@@ -3,17 +3,22 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import date
 from functools import partial
+from hashlib import sha256
+import hmac
 from io import BytesIO
+import json
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from sqlalchemy import Engine, text
+from starlette.requests import Request
 
 from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+from tax_risk.security.principal import Principal
 
 
 HEADERS = (
@@ -25,6 +30,36 @@ HEADERS = (
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
+DEV_SECRET = "tax-master-api-development-secret"
+MAKER_SUBJECT = "group-tax-maker@example.com"
+REVIEWER_SUBJECT = "group-tax-reviewer@example.com"
+
+
+def _principal_headers(subject: str) -> dict[str, str]:
+    payload = json.dumps(
+        {
+            "subject": subject,
+            "roles": ["group-tax"],
+            "allowed_company_ids": [],
+            "organization_path": "/GROUP/TAX",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    signature = hmac.new(DEV_SECRET.encode(), payload.encode(), sha256).hexdigest()
+    return {
+        "X-Development-Principal": payload,
+        "X-Development-Principal-Signature": signature,
+    }
+
+
+def _group_tax_maker(_request: Request) -> Principal:
+    return Principal(
+        subject=MAKER_SUBJECT,
+        roles=frozenset({"group-tax"}),
+        allowed_company_ids=frozenset(),
+        organization_path="/GROUP/TAX",
+    )
 
 
 def _xlsx(
@@ -60,8 +95,16 @@ def api_resources(
     isolated_database_url: str,
 ) -> Iterator[tuple[TestClient, Engine]]:
     engine, factory = create_session_factory(isolated_database_url)
-    app = create_app(uow_factory=partial(UnitOfWork, factory))
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        settings=Settings(
+            environment="development",
+            development_principal_enabled=True,
+            development_principal_secret=DEV_SECRET,
+        ),
+    )
     with TestClient(app) as client:
+        client.headers.update(_principal_headers(MAKER_SUBJECT))
         yield client, engine
     engine.dispose()
 
@@ -126,7 +169,7 @@ def test_import_approve_and_quarter_lookup_contract(
     assert renamed.json()["batch_id"] != import_body["batch_id"]
     assert renamed.json()["version_ids"] != import_body["version_ids"]
     assert import_body["source_filename"] == "tax-master.xlsx"
-    assert import_body["uploaded_by"] == "maker@example.com"
+    assert import_body["uploaded_by"] == MAKER_SUBJECT
     assert import_body["currency"] == "CNY"
     assert import_body["amount_scale"] == 2
     assert import_body["replayed"] is False
@@ -134,11 +177,12 @@ def test_import_approve_and_quarter_lookup_contract(
     version_id = import_body["version_ids"][0]
     same_person = client.post(
         f"/api/v1/tax-master/{version_id}/approve",
-        json={"reviewed_by": "maker@example.com"},
+        json={"reviewed_by": "untrusted-same-person@example.com"},
     )
     approved = client.post(
         f"/api/v1/tax-master/{version_id}/approve",
-        json={"reviewed_by": "reviewer@example.com"},
+        headers=_principal_headers(REVIEWER_SUBJECT),
+        json={"reviewed_by": "untrusted-reviewer@example.com"},
     )
     resolved = client.get(f"/api/v1/tax-master/{company_code}?period=2026-Q2")
 
@@ -146,7 +190,7 @@ def test_import_approve_and_quarter_lookup_contract(
     assert same_person.json()["detail"]["code"] == "MAKER_REVIEWER_CONFLICT"
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "PUBLISHED"
-    assert approved.json()["approved_by"] == "reviewer@example.com"
+    assert approved.json()["approved_by"] == REVIEWER_SUBJECT
     assert approved.json()["published_at"].endswith("Z")
     assert resolved.status_code == 200, resolved.text
     assert resolved.json()["id"] == version_id
@@ -268,6 +312,7 @@ def test_tax_master_upload_reuses_global_bounded_read_limit(
     app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         settings=Settings(ingest_max_upload_bytes=16),
+        principal_provider=_group_tax_maker,
     )
     with TestClient(app) as client:
         response = _import(client, b"x" * 17)
@@ -284,6 +329,7 @@ def test_xlsx_resource_limit_is_stable_and_failed_audited_through_api(
     app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         settings=Settings(tax_master_xlsx_max_zip_members=1),
+        principal_provider=_group_tax_maker,
     )
     with TestClient(app) as client:
         response = _import(client, _xlsx("LIMITED", "Limited Company"))

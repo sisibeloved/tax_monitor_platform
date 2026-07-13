@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 
 from tax_risk.api.schemas import IngestBatchCreate, IngestBatchResponse
+from tax_risk.api.dependencies import require_group_tax
 from tax_risk.application.ingest import (
     BatchMetadata,
     BatchNotFoundError,
@@ -22,7 +23,11 @@ from tax_risk.application.ingest import (
 )
 
 
-router = APIRouter(prefix="/api/v1/ingest-batches", tags=["ingest"])
+router = APIRouter(
+    prefix="/api/v1/ingest-batches",
+    tags=["ingest"],
+    dependencies=[Depends(require_group_tax)],
+)
 
 
 def get_ingest_service(request: Request) -> IngestService:

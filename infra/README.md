@@ -61,6 +61,25 @@ The HTTP health endpoints are process health checks. Operational readiness also 
 migration to have succeeded and PostgreSQL, Redis, and the quarterly worker checks above to
 pass.
 
+## Production Go/No-Go
+
+This Phase 1 stack **MUST NOT be deployed to production** until every row below is completed
+in the controlled release record and the final decision is `GO`. A local static test, a
+successful image build, or an in-process eager-worker test does not satisfy these gates.
+
+| Gate | Evidence that must be recorded | Status before evidence |
+|---|---|---|
+| Field mapping sign-off | Approved SAP/合思 field mapping, sign convention, source owner, reviewer, and approval date | `PENDING` |
+| Amount scale sign-off | Currency and amount-scale mapping per company, `ROUND_HALF_UP` confirmation, reviewer, and approval date | `PENDING` |
+| 105-company deployed-service E2E | `E2E_SEED_TOKEN`, monitoring `run_id`, execution timestamp, environment/image identifiers, and the exact result `105 requested / 103 succeeded / 2 blocked / 0 failed` | `PENDING` |
+| Browser acceptance | `E2E_STANDARD_COMPANY_CODE`, Playwright result, trace or report location, execution timestamp, and confirmation that the formula drawer matched the persisted API values | `PENDING` |
+| Business approval | Business approver, approval date, linked acceptance report, and explicit `GO` or `NO-GO` decision | `PENDING` |
+
+The acceptance report must identify that the external E2E uses direct database access only
+to resolve the fixed published rule and to inject the two documented post-publication drift
+conditions. Those test-only operations are not production operating procedures. Any failed,
+missing, stale, or unsigned row keeps the release at `NO-GO`.
+
 ## Migrate
 
 Compose runs `alembic upgrade head` before starting the API and worker. To run the one-shot
@@ -95,9 +114,10 @@ backend/.venv/bin/pytest -q -s backend/tests/e2e/test_quarterly_api_worker_flow.
 ```
 
 The token must be unique, 6-32 characters, and contain only letters, digits, `_`, or `-`.
-The database URL must point to the same database used by the API and worker. The test uses the
-real broker and worker, expects exactly 105 requested, 103 succeeded, two blocked, and zero
-failed companies, and prints the standard company code needed by Playwright.
+The database URL must point to the same database used by the API and worker. The test signs
+all control-plane calls with distinct maker and reviewer subjects, uses the real broker and
+worker, expects exactly 105 requested, 103 succeeded, two blocked, and zero failed companies,
+and prints the standard company code needed by Playwright.
 
 `SnapshotSet.published_at` is the sole authoritative data-ready timestamp. Upload time,
 validation time, worker time, and dashboard-read time must never replace it.

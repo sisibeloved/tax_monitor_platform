@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO, StringIO
@@ -65,6 +65,8 @@ def seed_quarterly_scenario(
     engine: Engine,
     *,
     company_count: int,
+    maker_headers: Mapping[str, str],
+    reviewer_headers: Mapping[str, str],
     inject_blockers: bool = False,
     token: str | None = None,
 ) -> QuarterlyScenarioSeed:
@@ -87,6 +89,7 @@ def seed_quarterly_scenario(
         suffix="company-master",
         source="COMPANY_REGISTRY",
         dataset_code="company_master",
+        headers=maker_headers,
     )
     company_rows = (
         (
@@ -113,10 +116,12 @@ def seed_quarterly_scenario(
             ),
             company_rows,
         ),
+        headers=maker_headers,
     )
 
     master_import = client.post(
         "/api/v1/tax-master/import",
+        headers=maker_headers,
         data={
             "uploaded_by": "e2e-maker@example.com",
             "currency": "CNY",
@@ -135,6 +140,7 @@ def seed_quarterly_scenario(
     for raw_version_id in master_import.json()["version_ids"]:
         approved = client.post(
             f"/api/v1/tax-master/{raw_version_id}/approve",
+            headers=reviewer_headers,
             json={"reviewed_by": "e2e-reviewer@example.com"},
         )
         _assert_status(approved, 200, "approve tax master")
@@ -147,6 +153,7 @@ def seed_quarterly_scenario(
         suffix="sap-quarterly",
         source="SAP",
         dataset_code="quarterly_metric",
+        headers=maker_headers,
     )
     financial_rows = (
         (
@@ -180,6 +187,7 @@ def seed_quarterly_scenario(
             ),
             financial_rows,
         ),
+        headers=maker_headers,
     )
     assert uploaded_financials["accepted_count"] == company_count * len(METRICS)
     assert uploaded_financials["rejected_count"] == 0
@@ -189,6 +197,7 @@ def seed_quarterly_scenario(
     for company_code in company_codes:
         validated = client.post(
             "/api/v1/snapshots/validate",
+            headers=reviewer_headers,
             json={
                 "company_code": company_code,
                 "period": PERIOD.isoformat(),
@@ -200,7 +209,10 @@ def seed_quarterly_scenario(
         validated_body = validated.json()
         assert validated_body["valid"] is True, validated.text
         snapshot = validated_body["snapshot"]
-        published = client.post(f"/api/v1/snapshots/{snapshot['id']}/publish")
+        published = client.post(
+            f"/api/v1/snapshots/{snapshot['id']}/publish",
+            headers=reviewer_headers,
+        )
         _assert_status(published, 200, "publish accounting snapshot")
         published_body = published.json()
         company_ids.append(UUID(published_body["company_id"]))
@@ -208,6 +220,7 @@ def seed_quarterly_scenario(
 
     snapshot_set = client.post(
         "/api/v1/snapshot-sets",
+        headers=reviewer_headers,
         json={
             "set_key": f"e2e-quarterly-set-{token}",
             "period": PERIOD.isoformat(),
@@ -262,6 +275,7 @@ def seed_quarterly_scenario(
             suffix="company-inactive",
             source="COMPANY_REGISTRY",
             dataset_code="company_master",
+            headers=maker_headers,
         )
         _upload_csv(
             client,
@@ -284,6 +298,7 @@ def seed_quarterly_scenario(
                     ),
                 ),
             ),
+            headers=maker_headers,
         )
 
     return QuarterlyScenarioSeed(
@@ -309,9 +324,11 @@ def _create_batch(
     suffix: str,
     source: str,
     dataset_code: str,
+    headers: Mapping[str, str],
 ) -> UUID:
     response = client.post(
         "/api/v1/ingest-batches",
+        headers=headers,
         json={
             "source": source,
             "source_batch_key": f"e2e-{token}-{suffix}",
@@ -333,9 +350,12 @@ def _upload_csv(
     client: ScenarioClient,
     batch_id: UUID,
     payload: bytes,
+    *,
+    headers: Mapping[str, str],
 ) -> dict[str, object]:
     response = client.post(
         f"/api/v1/ingest-batches/{batch_id}/files",
+        headers=headers,
         files={"file": ("source.csv", payload, "text/csv")},
     )
     _assert_status(response, 200, "upload controlled CSV")

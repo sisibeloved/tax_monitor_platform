@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from tax_risk.api.dependencies import require_group_tax
 from tax_risk.api.schemas import (
     SnapshotResponse,
     SnapshotSetCreateRequest,
@@ -25,7 +26,10 @@ from tax_risk.application.snapshots import (
 )
 
 
-router = APIRouter(tags=["snapshots"])
+router = APIRouter(
+    tags=["snapshots"],
+    dependencies=[Depends(require_group_tax)],
+)
 logger = logging.getLogger(__name__)
 
 

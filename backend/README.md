@@ -78,10 +78,14 @@ Implemented endpoints are:
 - `GET /api/v1/dashboard/quarterly`, `GET /api/v1/risk-cases`,
   `POST /api/v1/risk-cases/{id}/actions`, and `GET /api/v1/detections/{id}`
 
-The secured quarterly, risk, dashboard, and detection endpoints enforce the Principal's role
-and company scope in server-side SQL. Signed development headers are accepted only when both
-`ENVIRONMENT=development` and `DEVELOPMENT_PRINCIPAL_ENABLED=true`. Production requires an
-injected IdP verifier and otherwise returns HTTP 401.
+Every ingest-batch, tax-master, and snapshot control-plane route requires the `group-tax`
+administrative role. Quarterly, risk, dashboard, and detection endpoints also enforce the
+Principal's role and company scope in server-side SQL. The legacy `uploaded_by` and
+`reviewed_by` transport fields are accepted for wire compatibility only; persisted maker and
+reviewer identities come from `Principal.subject` and cannot be supplied by the request body.
+Signed development headers are accepted only when both `ENVIRONMENT=development` and
+`DEVELOPMENT_PRINCIPAL_ENABLED=true`. Production requires an injected IdP verifier and
+otherwise returns HTTP 401; health remains public for orchestration.
 
 ## Quarterly Worker
 
@@ -143,8 +147,9 @@ export E2E_WORKER_TIMEOUT_SECONDS=300
 backend/.venv/bin/pytest -q -s backend/tests/e2e/test_quarterly_api_worker_flow.py
 ```
 
-This external test seeds through HTTP and exercises the real broker and worker. It is not the
-in-process eager-worker contract.
+This external test signs every control-plane request with separate group-tax maker and
+reviewer subjects, seeds through HTTP, and exercises the real broker and worker. It is not
+the in-process eager-worker contract.
 
 ## Numeric Contract
 

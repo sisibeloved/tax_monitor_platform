@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from httpx import Response
 from sqlalchemy import Engine, event, text
+from starlette.requests import Request
 
 from tax_risk.api.routes.snapshots import router
 from tax_risk.application.snapshots import (
@@ -21,9 +22,20 @@ from tax_risk.application.snapshots import (
 )
 from tax_risk.main import create_app
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+from tax_risk.security.principal import Principal
 
 
 PERIOD = date(2026, 6, 30)
+GROUP_TAX_ADMIN = Principal(
+    subject="group-tax-admin@example.com",
+    roles=frozenset({"group-tax"}),
+    allowed_company_ids=frozenset(),
+    organization_path="/GROUP/TAX",
+)
+
+
+def _group_tax_admin(_request: Request) -> Principal:
+    return GROUP_TAX_ADMIN
 
 
 @pytest.fixture
@@ -31,7 +43,10 @@ def api_resources(
     isolated_database_url: str,
 ) -> Iterator[tuple[TestClient, Engine]]:
     engine, factory = create_session_factory(isolated_database_url)
-    app = create_app(uow_factory=partial(UnitOfWork, factory))
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+    )
     with TestClient(app) as client:
         yield client, engine
     engine.dispose()
@@ -744,7 +759,10 @@ def set_api_resources(
     isolated_database_url: str,
 ) -> Iterator[tuple[TestClient, Engine, tuple[dict[str, str], ...]]]:
     engine, factory = create_session_factory(isolated_database_url)
-    app = create_app(uow_factory=partial(UnitOfWork, factory))
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+    )
     with TestClient(app) as client:
         members: list[dict[str, str]] = []
         for _ in range(101):

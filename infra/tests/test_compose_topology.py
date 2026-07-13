@@ -14,6 +14,7 @@ from typing import Any
 INFRA_DIR = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = INFRA_DIR / "docker-compose.yml"
 ENV_EXAMPLE = INFRA_DIR / "env.example"
+OPERATIONS_GUIDE = INFRA_DIR / "README.md"
 EXPECTED_SERVICES = {
     "postgres",
     "redis",
@@ -214,3 +215,20 @@ def test_container_files_enforce_locked_dependencies_and_server_side_auth_header
     assert "client_max_body_size 50m" in nginx_template
     assert "X-Development-Principal" in nginx_template
     assert "X-Development-Principal-Signature" in nginx_template
+
+
+def test_operations_guide_has_an_explicit_production_go_no_go_gate() -> None:
+    guide = OPERATIONS_GUIDE.read_text()
+
+    assert "## Production Go/No-Go" in guide
+    for required_evidence in (
+        "Field mapping sign-off",
+        "Amount scale sign-off",
+        "E2E_SEED_TOKEN",
+        "E2E_STANDARD_COMPANY_CODE",
+        "105 requested / 103 succeeded / 2 blocked / 0 failed",
+        "Playwright result",
+        "Business approver",
+        "MUST NOT be deployed to production",
+    ):
+        assert required_evidence in guide

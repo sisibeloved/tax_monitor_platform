@@ -34,10 +34,10 @@ DEV_SECRET = "e2e-quarterly-development-principal"
 TERMINAL_STATUSES = {"SUCCEEDED", "PARTIAL_SUCCESS", "FAILED"}
 
 
-def _principal_headers(secret: str) -> dict[str, str]:
+def _principal_headers(secret: str, *, subject: str) -> dict[str, str]:
     payload = json.dumps(
         {
-            "subject": "e2e-group-tax@example.com",
+            "subject": subject,
             "roles": ["group-tax"],
             "allowed_company_ids": [],
             "organization_path": "/GROUP/TAX",
@@ -58,7 +58,7 @@ def _start_and_poll(
     seed: QuarterlyScenarioSeed,
     secret: str,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    headers = _principal_headers(secret)
+    headers = _principal_headers(secret, subject="e2e-group-tax-operator@example.com")
     response = client.post(
         "/api/v1/quarterly-runs",
         headers=headers,
@@ -93,7 +93,7 @@ def _assert_standard_company_results(
     run_id: object,
     secret: str,
 ) -> None:
-    headers = _principal_headers(secret)
+    headers = _principal_headers(secret, subject="e2e-group-tax-reader@example.com")
     response = client.get(
         "/api/v1/risk-cases",
         headers=headers,
@@ -200,6 +200,14 @@ def test_in_process_eager_worker_contract_isolates_two_bad_companies(
                 cast(ScenarioClient, client),
                 engine,
                 company_count=105,
+                maker_headers=_principal_headers(
+                    DEV_SECRET,
+                    subject="e2e-group-tax-maker@example.com",
+                ),
+                reviewer_headers=_principal_headers(
+                    DEV_SECRET,
+                    subject="e2e-group-tax-reviewer@example.com",
+                ),
                 inject_blockers=True,
             )
             started, terminal = _start_and_poll(

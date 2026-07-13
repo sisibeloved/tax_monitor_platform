@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 from functools import partial
+from hashlib import sha256
+import hmac
+import json
 from typing import cast
 
 import pytest
@@ -10,8 +13,30 @@ from sqlalchemy import text
 
 from seed_quarterly_scenario import ScenarioClient, seed_quarterly_scenario
 from tax_risk.application.quarterly_batches import QuarterlyBatchService
+from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+
+
+DEV_SECRET = "e2e-standard-development-principal"
+
+
+def _principal_headers(subject: str) -> dict[str, str]:
+    payload = json.dumps(
+        {
+            "subject": subject,
+            "roles": ["group-tax"],
+            "allowed_company_ids": [],
+            "organization_path": "/GROUP/TAX",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    signature = hmac.new(DEV_SECRET.encode(), payload.encode(), sha256).hexdigest()
+    return {
+        "X-Development-Principal": payload,
+        "X-Development-Principal-Signature": signature,
+    }
 
 
 def test_standard_company_calculates_exact_values_from_published_source_lineage(
@@ -22,13 +47,24 @@ def test_standard_company_calculates_exact_values_from_published_source_lineage(
 
     engine, factory = create_session_factory(e2e_database_url)
     uow_factory = partial(UnitOfWork, factory)
-    app = create_app(uow_factory=uow_factory)
+    app = create_app(
+        uow_factory=uow_factory,
+        settings=Settings(
+            environment="development",
+            development_principal_enabled=True,
+            development_principal_secret=DEV_SECRET,
+        ),
+    )
     try:
         with TestClient(app) as client:
             seed = seed_quarterly_scenario(
                 cast(ScenarioClient, client),
                 engine,
                 company_count=100,
+                maker_headers=_principal_headers("e2e-standard-maker@example.com"),
+                reviewer_headers=_principal_headers(
+                    "e2e-standard-reviewer@example.com"
+                ),
             )
 
         service = QuarterlyBatchService(uow_factory)

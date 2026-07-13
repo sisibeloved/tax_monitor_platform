@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
+from starlette.requests import Request
 
 from tax_risk.adapters.ingest.base import AdapterRow, CompanyMasterRow
 from tax_risk.api.routes.ingest import upload_ingest_file
@@ -21,10 +22,21 @@ from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.ingest_models import SourceRecord
 from tax_risk.persistence.repositories import UnitOfWork, create_session_factory
+from tax_risk.security.principal import Principal
 
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 _master_event_sequence = 0
+GROUP_TAX_ADMIN = Principal(
+    subject="group-tax-admin@example.com",
+    roles=frozenset({"group-tax"}),
+    allowed_company_ids=frozenset(),
+    organization_path="/GROUP/TAX",
+)
+
+
+def _group_tax_admin(_request: Request) -> Principal:
+    return GROUP_TAX_ADMIN
 
 
 def _next_master_event_time() -> str:
@@ -40,7 +52,10 @@ def api_resources(
     isolated_database_url: str,
 ) -> Iterator[tuple[TestClient, Engine]]:
     database_engine, factory = create_session_factory(isolated_database_url)
-    app = create_app(uow_factory=partial(UnitOfWork, factory))
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+    )
     with TestClient(app) as client:
         yield client, database_engine
     database_engine.dispose()
@@ -853,6 +868,7 @@ def test_concurrent_first_company_imports_serialize_without_duplicate_or_500(
     app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         adapter_factory=adapter_factory,
+        principal_provider=_group_tax_admin,
     )
     try:
         with TestClient(app) as first_client, TestClient(app) as second_client:
@@ -919,6 +935,7 @@ def test_reverse_multi_company_imports_use_one_lock_order_without_deadlock(
     app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         adapter_factory=adapter_factory,
+        principal_provider=_group_tax_admin,
     )
     try:
         with TestClient(app) as first_client, TestClient(app) as second_client:
@@ -968,6 +985,7 @@ def test_upload_endpoint_is_sync_and_oversize_file_leaves_batch_retryable_receiv
     app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         settings=settings,
+        principal_provider=_group_tax_admin,
     )
     try:
         with TestClient(app) as client:
@@ -999,6 +1017,7 @@ def test_unexpected_adapter_failure_is_audited_without_leaking_internal_details(
     app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         adapter_factory=adapter_factory,
+        principal_provider=_group_tax_admin,
     )
     payload = b"exploding-adapter-payload"
     try:
@@ -1057,6 +1076,7 @@ def test_audit_write_failure_is_logged_but_client_error_remains_generic(
     app = create_app(
         uow_factory=_AuditFailureUowFactory(factory),  # type: ignore[arg-type]
         adapter_factory=adapter_factory,
+        principal_provider=_group_tax_admin,
     )
     try:
         with TestClient(app) as client:
@@ -1093,6 +1113,7 @@ def test_upload_capacity_rejection_is_503_and_does_not_touch_batch(
         uow_factory=partial(UnitOfWork, factory),
         adapter_factory=adapter_factory,
         settings=Settings(ingest_max_concurrent_uploads=1),
+        principal_provider=_group_tax_admin,
     )
     try:
         with TestClient(app) as first_client, TestClient(app) as second_client:
@@ -1150,11 +1171,18 @@ def test_financial_shared_lock_serializes_with_deactivation_and_reverse_reads_in
             extracted_at=datetime(2026, 7, 2, 8, tzinfo=timezone.utc),
         )
 
-    setup_app = create_app(uow_factory=partial(UnitOfWork, factory))
-    financial_app = create_app(uow_factory=pausing_uow_factory)
+    setup_app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+    )
+    financial_app = create_app(
+        uow_factory=pausing_uow_factory,
+        principal_provider=_group_tax_admin,
+    )
     master_app = create_app(
         uow_factory=partial(UnitOfWork, factory),
         adapter_factory=master_adapter_factory,
+        principal_provider=_group_tax_admin,
     )
     try:
         with (

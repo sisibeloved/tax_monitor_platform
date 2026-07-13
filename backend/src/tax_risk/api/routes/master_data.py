@@ -5,7 +5,7 @@ from datetime import date
 import logging
 import re
 from threading import BoundedSemaphore
-from typing import Never, cast
+from typing import Annotated, Never, cast
 from uuid import UUID
 
 from fastapi import (
@@ -22,6 +22,7 @@ from fastapi import (
 )
 
 from tax_risk.adapters.ingest.tax_master_xlsx import XlsxResourceLimits
+from tax_risk.api.dependencies import require_group_tax
 from tax_risk.api.routes.ingest import FileTooLargeError, _read_upload_limited
 from tax_risk.api.schemas import (
     TaxMasterApproveRequest,
@@ -36,9 +37,14 @@ from tax_risk.application.master_data import (
     TaxMasterService,
     UowFactory,
 )
+from tax_risk.security.principal import Principal
 
 
-router = APIRouter(prefix="/api/v1/tax-master", tags=["tax-master"])
+router = APIRouter(
+    prefix="/api/v1/tax-master",
+    tags=["tax-master"],
+    dependencies=[Depends(require_group_tax)],
+)
 logger = logging.getLogger(__name__)
 _QUARTER = re.compile(r"(?P<year>[0-9]{4})-Q(?P<quarter>[1-4])")
 
@@ -58,6 +64,7 @@ def get_tax_master_service(request: Request) -> TaxMasterService:
 def import_tax_master(
     request: Request,
     response: Response,
+    principal: Annotated[Principal, Depends(require_group_tax)],
     file: UploadFile = File(...),
     uploaded_by: str = Form(...),
     currency: str = Form("CNY"),
@@ -89,7 +96,7 @@ def import_tax_master(
             result = service.import_xlsx(
                 filename=file.filename or "upload.xlsx",
                 payload=payload,
-                uploaded_by=uploaded_by,
+                uploaded_by=principal.subject,
                 currency=currency,
                 amount_scale=parsed_scale,
             )
@@ -116,11 +123,12 @@ def import_tax_master(
 @router.post("/{version_id}/approve", response_model=TaxMasterResponse)
 def approve_tax_master(
     version_id: UUID,
-    request: TaxMasterApproveRequest,
+    _request: TaxMasterApproveRequest,
+    principal: Annotated[Principal, Depends(require_group_tax)],
     service: TaxMasterService = Depends(get_tax_master_service),
 ) -> object:
     try:
-        return service.approve(version_id, reviewed_by=request.reviewed_by)
+        return service.approve(version_id, reviewed_by=principal.subject)
     except MasterDataError as error:
         _raise_http(error)
     except Exception as error:
