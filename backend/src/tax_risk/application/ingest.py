@@ -12,8 +12,25 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 
 from tax_risk.adapters.ingest.base import BulkFileAdapter, RowError
+from tax_risk.adapters.ingest.business_entertainment_csv import (
+    BusinessEntertainmentCsvAdapter,
+)
 from tax_risk.adapters.ingest.csv_adapter import CSVAdapter, HeaderValidationError
+from tax_risk.adapters.ingest.hesi_business_entertainment_csv import (
+    HesiBusinessEntertainmentCsvAdapter,
+)
+from tax_risk.adapters.ingest.oa_business_entertainment_csv import (
+    OaBusinessEntertainmentCsvAdapter,
+)
+from tax_risk.adapters.ingest.oa_material_requisition_csv import (
+    OaMaterialRequisitionCsvAdapter,
+)
+from tax_risk.adapters.ingest.oa_self_procurement_csv import OaSelfProcurementCsvAdapter
+from tax_risk.adapters.ingest.sap_business_entertainment_csv import (
+    SapBusinessEntertainmentCsvAdapter,
+)
 from tax_risk.application.ingest_processors import (
+    BusinessEntertainmentSourceProcessor,
     CompanyMasterProcessor,
     FinancialProcessor,
 )
@@ -34,6 +51,14 @@ _TERMINAL_STATUSES = {
     IngestBatchStatus.FAILED,
 }
 logger = logging.getLogger(__name__)
+_BUSINESS_ENTERTAINMENT_ADAPTERS: dict[str, Callable[[bytes], BulkFileAdapter]] = {
+    SapBusinessEntertainmentCsvAdapter.DATASET_CODE: SapBusinessEntertainmentCsvAdapter,
+    HesiBusinessEntertainmentCsvAdapter.DATASET_CODE: HesiBusinessEntertainmentCsvAdapter,
+    OaBusinessEntertainmentCsvAdapter.DATASET_CODE: OaBusinessEntertainmentCsvAdapter,
+    OaSelfProcurementCsvAdapter.DATASET_CODE: OaSelfProcurementCsvAdapter,
+    OaMaterialRequisitionCsvAdapter.DATASET_CODE: OaMaterialRequisitionCsvAdapter,
+}
+_BUSINESS_ENTERTAINMENT_DATASETS = frozenset(_BUSINESS_ENTERTAINMENT_ADAPTERS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +148,9 @@ class IngestProcessingError(IngestApplicationError):
 
 
 def create_csv_adapter(payload: bytes, dataset_code: str) -> BulkFileAdapter:
+    adapter = _BUSINESS_ENTERTAINMENT_ADAPTERS.get(dataset_code)
+    if adapter is not None:
+        return adapter(payload)
     return CSVAdapter(payload, dataset_code=dataset_code)
 
 
@@ -187,6 +215,21 @@ class IngestService:
                 raise BatchNotFoundError(f"ingest batch {batch_id} was not found")
             return self._view(uow, batch)
 
+    def require_ready_business_entertainment_batch(self, batch_id: UUID) -> BatchView:
+        with self._uow_factory() as uow:
+            batch = uow.ingest.get_batch(batch_id)
+            if batch is None:
+                raise BatchNotFoundError(f"ingest batch {batch_id} was not found")
+            if batch.dataset_code not in _BUSINESS_ENTERTAINMENT_DATASETS:
+                raise BatchStateConflictError(
+                    f"batch {batch_id} is not a business-entertainment source"
+                )
+            if batch.status != IngestBatchStatus.SUCCEEDED:
+                raise BatchStateConflictError(
+                    f"business-entertainment batch must be SUCCEEDED, got {batch.status.value}"
+                )
+            return self._view(uow, batch)
+
     def ingest_csv(self, batch_id: UUID, filename: str, payload: bytes) -> BatchView:
         checksum = sha256(payload).hexdigest()
         try:
@@ -226,6 +269,14 @@ class IngestService:
             adapter = self._adapter_factory(payload, batch.dataset_code)
             if adapter.checksum != checksum:
                 raise RuntimeError("adapter checksum does not match the uploaded file")
+            if isinstance(adapter, BusinessEntertainmentCsvAdapter) and (
+                batch.schema_version != adapter.schema_version
+                or batch.source_primary_key_definition
+                != adapter.source_primary_key_definition
+            ):
+                raise BatchStateConflictError(
+                    "business-entertainment batch metadata does not match adapter contract"
+                )
             batch.status = IngestBatchStatus.VALIDATING
             batch.payload_ref = filename
             batch.checksum = checksum
@@ -249,17 +300,18 @@ class IngestService:
                 uow.commit()
                 raise FileSchemaError(error) from error
 
-            processor = (
-                CompanyMasterProcessor()
-                if batch.dataset_code == "company_master"
-                else FinancialProcessor()
-            )
-            result = processor.process(
-                adapter.iter_rows(),
-                uow=uow,
-                batch=batch,
-                checksum=checksum,
-            )
+            if batch.dataset_code == "company_master":
+                result = CompanyMasterProcessor().process(
+                    adapter.iter_rows(), uow=uow, batch=batch, checksum=checksum
+                )
+            elif batch.dataset_code in _BUSINESS_ENTERTAINMENT_DATASETS:
+                result = BusinessEntertainmentSourceProcessor().process(
+                    adapter.iter_rows(), uow=uow, batch=batch, checksum=checksum
+                )
+            else:
+                result = FinancialProcessor().process(
+                    adapter.iter_rows(), uow=uow, batch=batch, checksum=checksum
+                )
             errors = list(result.errors)
             if result.record_count == 0:
                 errors.append(RowError(1, "EMPTY_FILE", "file contains no data rows"))

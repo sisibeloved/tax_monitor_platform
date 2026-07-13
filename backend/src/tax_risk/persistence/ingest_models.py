@@ -140,6 +140,10 @@ class SourceRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         UniqueConstraint("batch_id", "source_record_key", name="uq_source_record_batch_key"),
         CheckConstraint("amount_scale BETWEEN 0 AND 12", name="amount_scale"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
+        CheckConstraint(
+            "amount IS NOT NULL OR dataset_code = 'oa_material_requisition'",
+            name="amount_required_by_dataset",
+        ),
     )
 
     batch_id: Mapped[UUID] = mapped_column(
@@ -153,7 +157,7 @@ class SourceRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     period: Mapped[date] = mapped_column(Date, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     amount_scale: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     lineage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

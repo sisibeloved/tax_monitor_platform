@@ -10,6 +10,7 @@ from tax_risk.domain.business_entertainment.company_scope import ScopeVersionSta
 from tax_risk.persistence.business_entertainment_models import (
     BusinessEntertainmentScopeCompany,
     BusinessEntertainmentScopeVersion,
+    BusinessEntertainmentSourceObservation,
 )
 from tax_risk.persistence.ingest_models import Company
 
@@ -23,6 +24,24 @@ class BusinessEntertainmentScopeRepository:
 
     def add_company(self, company: BusinessEntertainmentScopeCompany) -> None:
         self._session.add(company)
+
+    def add_source_observation(
+        self,
+        observation: BusinessEntertainmentSourceObservation,
+    ) -> None:
+        self._session.add(observation)
+
+    def source_observations_for_batch(
+        self,
+        batch_id: UUID,
+    ) -> list[BusinessEntertainmentSourceObservation]:
+        return list(
+            self._session.scalars(
+                select(BusinessEntertainmentSourceObservation)
+                .where(BusinessEntertainmentSourceObservation.ingest_batch_id == batch_id)
+                .order_by(BusinessEntertainmentSourceObservation.source_record_key)
+            )
+        )
 
     def get_version(
         self,

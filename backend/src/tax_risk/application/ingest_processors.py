@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from tax_risk.adapters.ingest.base import (
     AdapterRow,
@@ -13,12 +14,24 @@ from tax_risk.adapters.ingest.base import (
     fits_database_amount,
 )
 from tax_risk.domain.money import Money
+from tax_risk.domain.business_entertainment.source_models import (
+    BusinessEntertainmentSourceRecord,
+    HesiBusinessEntertainmentRecord,
+    OaBusinessEntertainmentRecord,
+    OaMaterialRequisitionRecord,
+    OaSelfProcurementRecord,
+)
+from tax_risk.domain.semantic.sap_voucher import SapExpenseVoucherRecord
+from tax_risk.persistence.business_entertainment_models import (
+    BusinessEntertainmentSourceObservation,
+)
 from tax_risk.persistence.ingest_models import (
     Company,
     CompanyLifecycle,
     IngestBatch,
     SourceRecord,
 )
+from tax_risk.persistence.semantic_models import SapExpenseVoucherObservation
 from tax_risk.persistence.repositories import UnitOfWork
 
 
@@ -338,6 +351,140 @@ class FinancialProcessor:
         return None
 
 
+class BusinessEntertainmentSourceProcessor:
+    """Persist governed evidence rows and their immutable normalized indexes."""
+
+    def process(
+        self,
+        rows: Iterable[AdapterRow],
+        *,
+        uow: UnitOfWork,
+        batch: IngestBatch,
+        checksum: str,
+    ) -> ProcessingResult:
+        materialized = list(rows)
+        errors: list[RowError] = []
+        seen: set[str] = set()
+        candidates: list[
+            tuple[int, SapExpenseVoucherRecord | BusinessEntertainmentSourceRecord]
+        ] = []
+        for adapted in materialized:
+            if adapted.error is not None:
+                errors.append(adapted.error)
+                continue
+            value = adapted.value
+            if not isinstance(
+                value,
+                (
+                    SapExpenseVoucherRecord,
+                    HesiBusinessEntertainmentRecord,
+                    OaBusinessEntertainmentRecord,
+                    OaSelfProcurementRecord,
+                    OaMaterialRequisitionRecord,
+                ),
+            ):
+                errors.append(_unexpected_row_type(adapted.row_number, "entertainment source"))
+                continue
+            record = cast(
+                SapExpenseVoucherRecord | BusinessEntertainmentSourceRecord,
+                value,
+            )
+            if record.source_record_key in seen:
+                errors.append(
+                    RowError(
+                        adapted.row_number,
+                        "DUPLICATE_SOURCE_RECORD_KEY",
+                        "source_record_key is duplicated within the file",
+                        "source_record_key",
+                        record.source_record_key,
+                    )
+                )
+                continue
+            seen.add(record.source_record_key)
+            metadata_error = _business_source_metadata_error(batch, record, adapted.row_number)
+            if metadata_error is not None:
+                errors.append(metadata_error)
+                continue
+            candidates.append((adapted.row_number, record))
+
+        companies = uow.ingest.lock_companies_shared(
+            record.company_code for _, record in candidates
+        )
+        accepted: list[
+            tuple[int, SapExpenseVoucherRecord | BusinessEntertainmentSourceRecord, Company]
+        ] = []
+        total = Money.unrounded("0", currency=batch.currency, scale=batch.amount_scale)
+        for row_number, candidate in candidates:
+            company = companies[candidate.company_code]
+            company_error = _business_source_company_error(candidate, row_number, company)
+            if company_error is not None:
+                errors.append(company_error)
+                continue
+            assert company is not None
+            amount = getattr(candidate, "amount", None)
+            if amount is not None:
+                total += Money.unrounded(
+                    amount,
+                    currency=cast(str, getattr(candidate, "currency")),
+                    scale=batch.amount_scale,
+                )
+            accepted.append((row_number, candidate, company))
+
+        if accepted and not fits_database_amount(total.amount):
+            errors.append(
+                RowError(
+                    1,
+                    "CONTROL_TOTAL_OUT_OF_RANGE",
+                    "final accepted control total exceeds NUMERIC(38, 12)",
+                )
+            )
+            return ProcessingResult(
+                record_count=len(materialized),
+                accepted_count=0,
+                rejected_count=len(materialized),
+                control_total=Decimal("0"),
+                errors=tuple(errors),
+            )
+
+        for row_number, accepted_record, company in accepted:
+            amount = getattr(accepted_record, "amount", None)
+            source_record = SourceRecord(
+                batch_id=batch.id,
+                source_record_key=accepted_record.source_record_key,
+                company_id=company.id,
+                dataset_code=batch.dataset_code,
+                period=batch.period,
+                currency=batch.currency,
+                amount_scale=batch.amount_scale,
+                amount=amount,
+                payload=accepted_record.model_dump(mode="json"),
+                lineage={
+                    "source": batch.source,
+                    "source_batch_key": batch.source_batch_key,
+                    "checksum": checksum,
+                    "row_number": row_number,
+                },
+                extracted_at=batch.extraction_time,
+            )
+            uow.ingest.add_source_record(source_record)
+            uow.session.flush()
+            if isinstance(accepted_record, SapExpenseVoucherRecord):
+                uow.semantic.add_sap_observation(
+                    _sap_observation(batch, source_record, accepted_record)
+                )
+            else:
+                uow.business_entertainment_scope.add_source_observation(
+                    _business_observation(batch, source_record, accepted_record)
+                )
+
+        return ProcessingResult(
+            record_count=len(materialized),
+            accepted_count=len(accepted),
+            rejected_count=len(errors),
+            control_total=total.amount,
+            errors=tuple(errors),
+        )
+
 def _duplicate_error(
     source_record_key: str,
     company_code: str,
@@ -364,6 +511,176 @@ def _duplicate_error(
         )
     seen_company_codes.add(company_code)
     return None
+
+
+def _business_source_metadata_error(
+    batch: IngestBatch,
+    record: SapExpenseVoucherRecord | BusinessEntertainmentSourceRecord,
+    row_number: int,
+) -> RowError | None:
+    document_date = _business_document_date(record)
+    fiscal_year = getattr(record, "fiscal_year", document_date.year)
+    period = getattr(record, "period", document_date.month)
+    if fiscal_year != batch.period.year or period != batch.period.month:
+        return RowError(
+            row_number,
+            "BATCH_METADATA_MISMATCH",
+            "row fiscal period does not match batch period",
+            "period",
+            f"{fiscal_year}-{period:02d}",
+            (("company_code", record.company_code),),
+        )
+    amount = getattr(record, "amount", None)
+    currency = getattr(record, "currency", None)
+    if amount is None:
+        return None
+    if currency != batch.currency:
+        return RowError(
+            row_number,
+            "BATCH_METADATA_MISMATCH",
+            "row currency does not match batch currency",
+            "currency",
+            str(currency),
+            (("company_code", record.company_code),),
+        )
+    exponent = cast(int, amount.as_tuple().exponent)
+    if max(-exponent, 0) > batch.amount_scale:
+        return RowError(
+            row_number,
+            "AMOUNT_SCALE_MISMATCH",
+            "amount has more fractional digits than batch amount_scale",
+            "amount",
+            str(amount),
+            (("company_code", record.company_code),),
+        )
+    if not fits_database_amount(amount):
+        return RowError(
+            row_number,
+            "DECIMAL_OUT_OF_RANGE",
+            "amount exceeds NUMERIC(38, 12)",
+            "amount",
+            str(amount),
+            (("company_code", record.company_code),),
+        )
+    return None
+
+
+def _business_source_company_error(
+    record: SapExpenseVoucherRecord | BusinessEntertainmentSourceRecord,
+    row_number: int,
+    company: Company | None,
+) -> RowError | None:
+    if company is None:
+        return RowError(
+            row_number,
+            "UNKNOWN_COMPANY",
+            "company_code does not exist in the controlled company master",
+            "company_code",
+            record.company_code,
+            (("company_code", record.company_code),),
+        )
+    if company.lifecycle != CompanyLifecycle.ACTIVE:
+        return RowError(
+            row_number,
+            "INACTIVE_COMPANY",
+            "company_code is inactive in the controlled company master",
+            "company_code",
+            record.company_code,
+            (("company_code", record.company_code),),
+        )
+    return None
+
+
+def _business_document_date(
+    record: SapExpenseVoucherRecord | BusinessEntertainmentSourceRecord,
+) -> date:
+    if isinstance(record, SapExpenseVoucherRecord):
+        return record.posting_date
+    if isinstance(record, HesiBusinessEntertainmentRecord):
+        return record.expense_date
+    if isinstance(record, OaBusinessEntertainmentRecord):
+        return record.application_date
+    if isinstance(record, OaSelfProcurementRecord):
+        return record.purchase_date
+    return record.requisition_date
+
+
+def _sap_observation(
+    batch: IngestBatch,
+    source_record: SourceRecord,
+    record: SapExpenseVoucherRecord,
+) -> SapExpenseVoucherObservation:
+    return SapExpenseVoucherObservation(
+        source_record_id=source_record.id,
+        ingest_batch_id=batch.id,
+        source_record_key=record.source_record_key,
+        company_code=record.company_code,
+        fiscal_year=record.fiscal_year,
+        period=record.period,
+        posting_date=record.posting_date,
+        document_number=record.document_number,
+        line_item=record.line_item,
+        current_account_code=record.current_account_code,
+        current_account_name=record.current_account_name,
+        amount=record.amount,
+        currency=record.currency,
+        summary=record.summary,
+        assignment=record.assignment,
+        reference=record.reference,
+        reversal_reference=record.reversal_reference,
+        account_family=record.account_family.value,
+    )
+
+
+def _business_observation(
+    batch: IngestBatch,
+    source_record: SourceRecord,
+    record: BusinessEntertainmentSourceRecord,
+) -> BusinessEntertainmentSourceObservation:
+    if isinstance(record, HesiBusinessEntertainmentRecord):
+        document_id = record.expense_claim_id
+        line_id = record.line_id
+        parent_oa_id = record.related_oa_id
+        parent_hesi_id = None
+        fiscal_year = record.fiscal_year
+        period = record.period
+    elif isinstance(record, OaBusinessEntertainmentRecord):
+        document_id = record.application_id
+        line_id = record.line_id
+        parent_oa_id = None
+        parent_hesi_id = None
+        fiscal_year = record.application_date.year
+        period = record.application_date.month
+    elif isinstance(record, OaSelfProcurementRecord):
+        document_id = record.application_id
+        line_id = record.line_id
+        parent_oa_id = record.parent_oa_id
+        parent_hesi_id = record.parent_hesi_id
+        fiscal_year = record.purchase_date.year
+        period = record.purchase_date.month
+    else:
+        document_id = record.requisition_id
+        line_id = record.line_id
+        parent_oa_id = record.parent_oa_id
+        parent_hesi_id = record.parent_hesi_id
+        fiscal_year = record.requisition_date.year
+        period = record.requisition_date.month
+    return BusinessEntertainmentSourceObservation(
+        source_record_id=source_record.id,
+        ingest_batch_id=batch.id,
+        dataset_code=batch.dataset_code,
+        source_record_key=record.source_record_key,
+        company_code=record.company_code,
+        fiscal_year=fiscal_year,
+        period=period,
+        document_date=_business_document_date(record),
+        document_id=document_id,
+        line_id=line_id,
+        amount=getattr(record, "amount", None),
+        currency=getattr(record, "currency", None),
+        parent_oa_id=parent_oa_id,
+        parent_hesi_id=parent_hesi_id,
+    )
 
 
 def _unexpected_row_type(row_number: int, expected: str) -> RowError:
@@ -395,4 +712,9 @@ def _financial_context(row: CanonicalFinancialRow) -> tuple[tuple[str, str], ...
     )
 
 
-__all__ = ["CompanyMasterProcessor", "FinancialProcessor", "ProcessingResult"]
+__all__ = [
+    "BusinessEntertainmentSourceProcessor",
+    "CompanyMasterProcessor",
+    "FinancialProcessor",
+    "ProcessingResult",
+]

@@ -23,8 +23,10 @@ from tax_risk.config import Settings
 
 
 EXPECTED_TABLES = {
+    "business_entertainment_evaluation",
     "business_entertainment_scope_company",
     "business_entertainment_scope_version",
+    "business_entertainment_source_observation",
     "company",
     "ingest_batch",
     "ingest_error",
@@ -38,8 +40,12 @@ EXPECTED_TABLES = {
     "monitoring_run",
     "monitoring_run_company",
     "detection_record",
+    "evidence_link",
     "risk_case",
     "review_action",
+    "sap_expense_voucher_observation",
+    "sap_expense_voucher_snapshot_projection",
+    "sap_link_coverage",
     "audit_event",
 }
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -63,7 +69,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0007_entertainment_scope"
+    assert revision == "0008_entertainment_observations"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -223,6 +229,18 @@ def test_numeric_and_json_lineage_contracts_are_exact(engine: Engine) -> None:
         ("detection_record", "formula_substitution"),
     }:
         assert isinstance(_column(engine, table_name, column_name)["type"], JSONB)
+
+
+def test_only_material_requisition_source_rows_may_omit_amount(engine: Engine) -> None:
+    constraints = {
+        constraint["name"]: constraint["sqltext"]
+        for constraint in inspect(engine).get_check_constraints("source_record")
+    }
+
+    assert "ck_source_record_amount_required_by_dataset" in constraints
+    assert "oa_material_requisition" in constraints[
+        "ck_source_record_amount_required_by_dataset"
+    ]
 
 
 def test_tax_master_governance_has_strict_state_loss_and_no_legacy_defaults(
@@ -799,7 +817,7 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0007_entertainment_scope (head)" in completed.stdout
+    assert "0008_entertainment_observations (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
@@ -822,7 +840,7 @@ def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0007_entertainment_scope"
+    assert revision == "0008_entertainment_observations"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

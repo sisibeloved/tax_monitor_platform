@@ -17,6 +17,7 @@ def register_models() -> None:
         ingest_models,
         master_models,
         risk_models,
+        semantic_models,
         snapshot_models,
     )
 
@@ -25,6 +26,7 @@ def register_models() -> None:
         ingest_models,
         master_models,
         risk_models,
+        semantic_models,
         snapshot_models,
     )
 

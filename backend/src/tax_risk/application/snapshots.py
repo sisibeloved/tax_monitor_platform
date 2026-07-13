@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from hashlib import sha256
 import json
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -1043,7 +1043,7 @@ def _evaluate_quality(
                 )
             )
         batch_total = _money_sum(
-            (record.amount for record in batch_records),
+            (cast(Decimal, record.amount) for record in batch_records),
             batch.currency,
             batch.amount_scale,
         )
@@ -1218,7 +1218,7 @@ def _evaluate_quality(
     assert common_currency is not None and common_scale is not None
     ordered_metrics = tuple(metric_records[metric][0] for metric in REQUIRED_QUARTERLY_METRICS)
     control_total = _money_sum(
-        (record.amount for record in ordered_metrics),
+        (cast(Decimal, record.amount) for record in ordered_metrics),
         common_currency,
         common_scale,
     )
@@ -1434,7 +1434,7 @@ def _freeze_snapshot(
             ),
         )
         subset_total = _money_sum(
-            (record.amount for record in subset),
+            (cast(Decimal, record.amount) for record in subset),
             batch.currency,
             batch.amount_scale,
         )
@@ -1505,7 +1505,7 @@ def _freeze_snapshot(
         metric_lineage.append(
             {
                 "metric_code": metric_code,
-                "amount": _decimal_string(record.amount),
+                "amount": _decimal_string(cast(Decimal, record.amount)),
                 "source_record": {
                     "id": str(record.id),
                     "batch_id": str(record.batch_id),
