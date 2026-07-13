@@ -19,6 +19,8 @@ from tax_risk.application.semantic.sap_voucher_monitor import (
 )
 from tax_risk.domain.cases import MonitorType
 from tax_risk.domain.semantic.contracts import SemanticVersionSet
+from tax_risk.observability.delivery import derive_batch_delivery
+from tax_risk.observability.metrics import record_company_task
 from tax_risk.persistence.ingest_models import Company, CompanyLifecycle
 from tax_risk.persistence.master_models import RuleVersion, VersionStatus
 from tax_risk.persistence.repositories import UnitOfWork
@@ -171,6 +173,8 @@ class MonthlySemanticRunService:
                     existing.status = MonitoringRunStatus.RUNNING
                     existing.failed_company_count = 0
                     existing.finished_at = None
+                    existing.batch_finished_at = None
+                    existing.output_ready_at = None
                     existing.failure_reason = None
                     uow.session.flush()
                     view = _run_view(uow, existing, allowed_company_ids)
@@ -307,6 +311,8 @@ class MonthlySemanticRunService:
             run.status = MonitoringRunStatus.FAILED
             run.failed_company_count = run.requested_company_count
             run.finished_at = _utcnow()
+            run.batch_finished_at = run.finished_at
+            run.output_ready_at = None
             run.failure_reason = "BROKER_DISPATCH_FAILED"
             uow.commit()
 
@@ -346,6 +352,7 @@ class MonthlySemanticRunService:
             row.celery_task_id = task_id.strip()
             row.started_at = _utcnow()
             row.finished_at = None
+            row.company_output_ready_at = None
             row.error_code = None
             row.error_message = None
             row.issue_code = None
@@ -371,6 +378,7 @@ class MonthlySemanticRunService:
                 row.status = MonitoringRunCompanyStatus.FAILED
                 row.retryable = True
                 row.finished_at = _utcnow()
+                row.company_output_ready_at = None
                 row.error_code = "MONTHLY_COMPANY_EXECUTION_FAILED"
                 row.error_message = str(error)[:2000]
                 row.detection_ids = []
@@ -381,6 +389,12 @@ class MonthlySemanticRunService:
                 row.risk_case_count = 0
                 row.issue_code = None
             outcome = _company_outcome(row)
+            record_company_task(
+                run_type="MONTHLY_SEMANTIC",
+                monitor_type=run.monitoring_type.value,
+                status=row.status.value,
+                error_code=row.error_code or row.issue_code,
+            )
             uow.commit()
             return outcome
 
@@ -414,6 +428,16 @@ class MonthlySemanticRunService:
             run.failed_company_count = failed
             run.blocked_company_count = not_run
             run.finished_at = None if active else _utcnow()
+            company_rows = uow.risks.list_run_companies(run.id)
+            delivery = derive_batch_delivery(
+                (
+                    (row.status.value, row.company_output_ready_at)
+                    for row in company_rows
+                ),
+                now=run.batch_finished_at or _utcnow(),
+            )
+            run.batch_finished_at = delivery.batch_finished_at
+            run.output_ready_at = delivery.output_ready_at
             run.failure_reason = "NO_COMPANY_SUCCEEDED" if status is MonitoringRunStatus.FAILED else None
             result: dict[str, object] = {
                 "run_id": str(run.id),
@@ -441,12 +465,15 @@ class MonthlySemanticRunService:
                 row.celery_task_id = None
                 row.started_at = None
                 row.finished_at = None
+                row.company_output_ready_at = None
                 row.error_code = None
                 row.error_message = None
                 row.detection_ids = []
                 row.case_ids = []
             run.status = MonitoringRunStatus.RUNNING
             run.finished_at = None
+            run.batch_finished_at = None
+            run.output_ready_at = None
             run.failure_reason = None
             ids = tuple(row.id for row in rows)
             uow.commit()
@@ -596,6 +623,9 @@ def _finish_company(row: MonitoringRunCompany, result: MonitorRunResult) -> None
     )
     row.retryable = False
     row.finished_at = _utcnow()
+    row.company_output_ready_at = (
+        row.finished_at if row.status == MonitoringRunCompanyStatus.SUCCEEDED else None
+    )
     row.selected = result.selected
     row.adjustment_amount = (
         Decimal(result.adjustment) if result.adjustment is not None else None

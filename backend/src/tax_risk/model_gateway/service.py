@@ -22,6 +22,7 @@ from tax_risk.application.semantic.model_client import (
     StructuredModelClient,
 )
 from tax_risk.model_gateway.policy import ModelGatewayPolicy, ProviderPolicy
+from tax_risk.observability.metrics import DEFAULT_METRICS
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.security.principal import Principal
 
@@ -71,6 +72,9 @@ class ProtectedModelGateway:
         output_model: type[T],
     ) -> T:
         prepared = self._policy.prepare_payload(input_json)
+        DEFAULT_METRICS.metric("tax_risk_semantic_candidate_total").inc(
+            {"monitor_type": "MODEL_GATEWAY"}
+        )
         last_error: Exception | None = None
         for _attempt in range(2):
             try:
@@ -80,9 +84,24 @@ class ProtectedModelGateway:
                     output_model=output_model,
                 )
                 candidate: object = raw.model_dump() if isinstance(raw, BaseModel) else raw
-                return output_model.model_validate(candidate)
+                validated = output_model.model_validate(candidate)
+                DEFAULT_METRICS.metric("tax_risk_semantic_detection_total").inc(
+                    {"monitor_type": "MODEL_GATEWAY", "decision": "VALID"}
+                )
+                return validated
             except (ValidationError, TypeError, ValueError, AttributeError) as exc:
                 last_error = exc
+            except Exception:
+                DEFAULT_METRICS.metric("tax_risk_semantic_error_total").inc(
+                    {
+                        "monitor_type": "MODEL_GATEWAY",
+                        "error_code": "PROVIDER_FAILURE",
+                    }
+                )
+                raise
+        DEFAULT_METRICS.metric("tax_risk_semantic_error_total").inc(
+            {"monitor_type": "MODEL_GATEWAY", "error_code": "MODEL_SCHEMA_INVALID"}
+        )
         raise TechnicalReviewRequired(
             "MODEL_SCHEMA_INVALID",
             "model output failed strict schema validation twice",

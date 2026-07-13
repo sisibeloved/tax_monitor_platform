@@ -110,6 +110,16 @@ def require_exporter(
     return principal
 
 
+def require_monitor_runner(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> Principal:
+    try:
+        DEFAULT_POLICY.require(principal, Action.RUN_MONITOR)
+    except AuthorizationDenied:
+        _forbidden()
+    return principal
+
+
 def company_scope(
     principal: Principal,
     *,
@@ -186,5 +196,6 @@ __all__ = [
     "require_audit_reader",
     "require_exporter",
     "require_group_tax",
+    "require_monitor_runner",
     "require_reader",
 ]

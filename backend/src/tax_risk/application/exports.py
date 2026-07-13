@@ -24,6 +24,7 @@ from tax_risk.application.business_entertainment.reporting import (
     BusinessEntertainmentReportingService,
 )
 from tax_risk.config import Settings
+from tax_risk.observability.metrics import DEFAULT_METRICS
 from tax_risk.db import apply_principal_context
 from tax_risk.domain.exports import ExportJobStatus, ExportType
 from tax_risk.persistence.export_models import ExportJob
@@ -197,6 +198,7 @@ class ExportService:
                 export_job_id=view.id,
             )
         )
+        _record_export_metric(ExportJobStatus.QUEUED)
         return view
 
     def render_export(self, job_id: UUID | str) -> ExportJobView:
@@ -217,6 +219,7 @@ class ExportService:
             frozen_scope = frozenset(UUID(value) for value in job.company_ids)
             filters = dict(job.normalized_filters)
             uow.commit()
+        _record_export_metric(ExportJobStatus.RUNNING)
 
         try:
             root_cases = self._reporting.list_root_cases(
@@ -238,6 +241,7 @@ class ExportService:
                     failed.failure_code = "EXPORT_RENDER_FAILED"
                     failed.completed_at = datetime.now(timezone.utc)
                     uow.commit()
+            _record_export_metric(ExportJobStatus.FAILED)
             raise
 
     def complete_for_test(
@@ -319,7 +323,9 @@ class ExportService:
             job.failure_code = None
             job.completed_at = datetime.now(timezone.utc)
             uow.commit()
-            return _view(job)
+            view = _view(job)
+        _record_export_metric(ExportJobStatus.COMPLETED)
+        return view
 
     def _authorized_job(self, principal: Principal, job_id: UUID) -> ExportJob:
         DEFAULT_POLICY.require(principal, Action.EXPORT_RISK)
@@ -356,6 +362,13 @@ class ExportService:
             if job is not None:
                 job.status = ExportJobStatus.EXPIRED
                 uow.commit()
+        _record_export_metric(ExportJobStatus.EXPIRED)
+
+
+def _record_export_metric(status: ExportJobStatus) -> None:
+    DEFAULT_METRICS.metric("tax_risk_export_total").inc(
+        {"status": status.value, "format": "XLSX"}
+    )
 
 
 def build_default_export_service(settings: Settings | None = None) -> ExportService:

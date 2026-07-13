@@ -96,6 +96,15 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
             "failed_company_count >= 0 AND blocked_company_count >= 0",
             name="nonnegative_counts",
         ),
+        CheckConstraint(
+            "batch_finished_at IS NULL OR status IN "
+            "('PARTIAL_SUCCESS', 'SUCCEEDED', 'FAILED')",
+            name="batch_finished_terminal",
+        ),
+        CheckConstraint(
+            "output_ready_at IS NULL OR status = 'SUCCEEDED'",
+            name="output_ready_success",
+        ),
     )
 
     run_key: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -132,6 +141,8 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    batch_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    output_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_reason: Mapped[str | None] = mapped_column(Text)
 
 
@@ -167,6 +178,10 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         CheckConstraint(
             "finished_at IS NULL OR (started_at IS NOT NULL AND finished_at >= started_at)",
             name="attempt_time_order",
+        ),
+        CheckConstraint(
+            "company_output_ready_at IS NULL OR status = 'SUCCEEDED'",
+            name="output_ready_success",
         ),
         CheckConstraint(
             "(status = 'PENDING' AND retryable = false "
@@ -235,6 +250,7 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     celery_task_id: Mapped[str | None] = mapped_column(String(255))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    company_output_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
     detection_ids: Mapped[list[str]] = mapped_column(

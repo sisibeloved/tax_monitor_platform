@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from functools import partial
 
+from sqlalchemy import text
+
 from tax_risk.application.monthly_semantic_runs import MonthlySemanticRunService
 from tax_risk.application.semantic.sap_voucher_monitor import MonitorRunResult
 from tax_risk.domain.cases import MonitorType
@@ -71,6 +73,27 @@ def test_company_failure_is_isolated_and_only_failed_company_is_retried(
         assert {outcome["status"] for outcome in outcomes} == {"SUCCEEDED", "FAILED"}
         assert summary["status"] == "PARTIAL_SUCCESS"
         assert summary["succeeded"] == 1 and summary["failed"] == 1
+        with engine.connect() as connection:
+            partial_delivery = connection.execute(
+                text(
+                    "SELECT batch_finished_at, output_ready_at "
+                    "FROM monitoring_run WHERE id = :run_id"
+                ),
+                {"run_id": plan.run.run_id},
+            ).one()
+            company_delivery = connection.execute(
+                text(
+                    "SELECT status, company_output_ready_at "
+                    "FROM monitoring_run_company WHERE run_id = :run_id"
+                ),
+                {"run_id": plan.run.run_id},
+            ).all()
+        assert partial_delivery.batch_finished_at is not None
+        assert partial_delivery.output_ready_at is None
+        assert all(
+            (ready_at is not None) == (status == "SUCCEEDED")
+            for status, ready_at in company_delivery
+        )
 
         retry_ids = service.retry_failed(plan.run.run_id)
         assert len(retry_ids) == 1
@@ -81,6 +104,16 @@ def test_company_failure_is_isolated_and_only_failed_company_is_retried(
         assert retried["status"] == "SUCCEEDED"
         assert final["status"] == "SUCCEEDED"
         assert final["succeeded"] == 2 and final["failed"] == 0
+        with engine.connect() as connection:
+            final_delivery = connection.execute(
+                text(
+                    "SELECT batch_finished_at, output_ready_at "
+                    "FROM monitoring_run WHERE id = :run_id"
+                ),
+                {"run_id": plan.run.run_id},
+            ).one()
+        assert final_delivery.batch_finished_at is not None
+        assert final_delivery.output_ready_at is not None
     finally:
         _cleanup_monthly_semantic_state(engine)
         engine.dispose()

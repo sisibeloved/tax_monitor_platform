@@ -13,6 +13,7 @@ from tax_risk.application.business_entertainment.service import (
     BusinessEntertainmentRunError,
     BusinessEntertainmentRunRequest,
 )
+from tax_risk.observability.metrics import record_company_task
 
 BUSINESS_ENTERTAINMENT_QUEUE = "business-entertainment"
 RUN_COMPANY_TASK = "tax_risk.workers.business_entertainment.run_company_monthly"
@@ -82,9 +83,11 @@ def register_business_entertainment_tasks(
                 case_library_version_id=case_library_version_id,
                 account_dictionary_version_id=account_dictionary_version_id,
             )
-            return service_factory().run_company(request, task_id=task_id)
+            outcome = service_factory().run_company(request, task_id=task_id)
+            _record_outcome(outcome)
+            return outcome
         except BusinessEntertainmentRunError as error:
-            return _failed_outcome(
+            outcome = _failed_outcome(
                 request=request,
                 raw_run_id=run_id,
                 company_code=company_code,
@@ -92,10 +95,12 @@ def register_business_entertainment_tasks(
                 error_code=error.error_code,
                 retryable=error.retryable,
             )
+            _record_outcome(outcome)
+            return outcome
         except Exception as error:
             if task.request.retries < max_retries:
                 raise task.retry(exc=error) from error
-            return _failed_outcome(
+            outcome = _failed_outcome(
                 request=request,
                 raw_run_id=run_id,
                 company_code=company_code,
@@ -103,6 +108,8 @@ def register_business_entertainment_tasks(
                 error_code="CELERY_TASK_EXECUTION_FAILED",
                 retryable=False,
             )
+            _record_outcome(outcome)
+            return outcome
 
 
 def _failed_outcome(
@@ -123,6 +130,19 @@ def _failed_outcome(
         "idempotency_key": request.idempotency_key if request else None,
         "error_code": error_code,
     }
+
+
+def _record_outcome(outcome: dict[str, object]) -> None:
+    record_company_task(
+        run_type="MONTHLY_SEMANTIC",
+        monitor_type="BUSINESS_ENTERTAINMENT",
+        status=str(outcome.get("status", "FAILED")),
+        error_code=(
+            str(outcome["error_code"])
+            if outcome.get("error_code") is not None
+            else None
+        ),
+    )
 
 
 __all__ = [

@@ -10,6 +10,7 @@ from decimal import MAX_EMAX, MIN_EMIN, ROUND_HALF_UP, Context, Decimal, Invalid
 from enum import Enum
 from hashlib import sha256
 import json
+from time import monotonic
 from typing import Any, cast
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from tax_risk.domain.quarterly import (
     QuarterlyResult,
     calculate_quarterly,
 )
+from tax_risk.observability.metrics import DEFAULT_METRICS
 from tax_risk.persistence.ingest_models import Company, CompanyLifecycle
 from tax_risk.persistence.master_models import RuleVersion, TaxMasterVersion, VersionStatus
 from tax_risk.persistence.repositories import UnitOfWork
@@ -191,7 +193,12 @@ class QuarterlyRunService:
             _assert_first_execution_status(context.run)
 
             inputs = _quarterly_inputs(context.snapshot, context.frozen_master)
+            formula_started = monotonic()
             calculation = calculate_quarterly(inputs)
+            DEFAULT_METRICS.metric("tax_risk_formula_duration_seconds").observe(
+                {"formula": "QUARTERLY_ALL"},
+                monotonic() - formula_started,
+            )
             formula_substitution = _canonical_json(calculation.formula_substitution)
             lineage = _detection_lineage(context)
             values = _detection_values(calculation, inputs)

@@ -114,6 +114,8 @@ def _control_plane_requests() -> tuple[tuple[str, str, dict[str, object]], ...]:
         ),
         ("GET", f"/api/v1/ingest-batches/{missing_id}", {}),
         ("GET", "/api/v1/tax-master/AUTH-MISSING?period=2026-Q2", {}),
+        ("GET", "/api/v1/operations/summary", {}),
+        ("POST", f"/api/v1/operations/runs/{missing_id}/retry", {"json": {}}),
     )
 
 
@@ -178,3 +180,27 @@ def test_health_check_remains_public_in_production(
     response = production_client.get("/health")
 
     assert response.status_code == 200
+
+
+def test_group_tax_can_read_privacy_safe_operations_summary(
+    control_plane_clients: tuple[TestClient, TestClient, Engine],
+) -> None:
+    _, development_client, _ = control_plane_clients
+
+    response = development_client.get(
+        "/api/v1/operations/summary",
+        headers=_principal_headers(roles=("group-tax",)),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_retry"] is True
+    assert set(payload["counters"]) == {
+        "data_errors",
+        "technical_failures",
+        "tax_risks",
+        "provider_failures",
+        "evidence_backlog",
+    }
+    assert "company_name" not in response.text
+    assert "error_message" not in response.text

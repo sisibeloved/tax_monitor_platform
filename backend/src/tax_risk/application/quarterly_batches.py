@@ -17,6 +17,8 @@ from tax_risk.application.quarterly_runs import (
     assert_approved_quarterly_rule_manifest,
 )
 from tax_risk.persistence.master_models import RuleVersion, VersionStatus
+from tax_risk.observability.delivery import derive_batch_delivery
+from tax_risk.observability.metrics import record_company_task
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.persistence.risk_models import (
     MonitoringRun,
@@ -273,6 +275,12 @@ class QuarterlyBatchService:
             else:
                 _finish_succeeded(run_company, raw_result)
             outcome = _company_outcome(run_company)
+            record_company_task(
+                run_type="QUARTERLY",
+                monitor_type="ALL",
+                status=run_company.status.value,
+                error_code=run_company.error_code,
+            )
             uow.commit()
             return outcome
 
@@ -386,6 +394,16 @@ class QuarterlyBatchService:
             run.blocked_company_count = blocked
             run.failed_company_count = failed
             run.finished_at = finished_at
+            company_rows = uow.risks.list_run_companies(run.id)
+            delivery = derive_batch_delivery(
+                (
+                    (row.status.value, row.company_output_ready_at)
+                    for row in company_rows
+                ),
+                now=run.batch_finished_at or _utcnow(),
+            )
+            run.batch_finished_at = delivery.batch_finished_at
+            run.output_ready_at = delivery.output_ready_at
             run.failure_reason = (
                 "NO_COMPANY_SUCCEEDED" if status == MonitoringRunStatus.FAILED else None
             )
@@ -430,6 +448,8 @@ class QuarterlyBatchService:
             run.blocked_company_count = counts.get(MonitoringRunCompanyStatus.BLOCKED, 0)
             run.failed_company_count = 0
             run.finished_at = None
+            run.batch_finished_at = None
+            run.output_ready_at = None
             run.failure_reason = None
             plan = QuarterlyBatchPlan(
                 run_id=run.id,
@@ -525,6 +545,7 @@ def _begin_attempt(run_company: MonitoringRunCompany, *, task_id: str) -> None:
     run_company.celery_task_id = task_id.strip()
     run_company.started_at = _utcnow()
     run_company.finished_at = None
+    run_company.company_output_ready_at = None
     run_company.error_code = None
     run_company.error_message = None
     run_company.detection_ids = []
@@ -538,6 +559,7 @@ def _finish_succeeded(
     run_company.status = MonitoringRunCompanyStatus.SUCCEEDED
     run_company.retryable = False
     run_company.finished_at = _utcnow()
+    run_company.company_output_ready_at = run_company.finished_at
     run_company.error_code = None
     run_company.error_message = None
     run_company.detection_ids = [str(value) for value in result.detection_ids]
@@ -551,6 +573,7 @@ def _finish_blocked(
     run_company.status = MonitoringRunCompanyStatus.BLOCKED
     run_company.retryable = False
     run_company.finished_at = _utcnow()
+    run_company.company_output_ready_at = None
     run_company.error_code = error.error_code
     run_company.error_message = _error_message(error)
     run_company.detection_ids = []
@@ -586,6 +609,7 @@ def _finish_failed_values(
     run_company.status = MonitoringRunCompanyStatus.FAILED
     run_company.retryable = True
     run_company.finished_at = _utcnow()
+    run_company.company_output_ready_at = None
     run_company.error_code = error_code
     run_company.error_message = error_message
     run_company.detection_ids = []
@@ -598,6 +622,7 @@ def _reset_for_retry(run_company: MonitoringRunCompany) -> None:
     run_company.celery_task_id = None
     run_company.started_at = None
     run_company.finished_at = None
+    run_company.company_output_ready_at = None
     run_company.error_code = None
     run_company.error_message = None
     run_company.detection_ids = []

@@ -1,0 +1,58 @@
+{
+  "title": "集团所得税风险监测运维驾驶舱",
+  "schemaVersion": 39,
+  "tags": ["所得税", "运维"],
+  "time": {"from": "now-48h", "to": "now"},
+  "templating": {"list": []},
+  "panels": [
+    {
+      "id": 1,
+      "title": "公司任务终态",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (run_type, monitor_type, status, error_code) (rate(tax_risk_company_task_total[5m]))", "legendFormat": "{{run_type}} / {{monitor_type}} / {{status}} / {{error_code}}"}
+      ]
+    },
+    {
+      "id": 2,
+      "title": "数据质量阻断",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (source, reason_code) (increase(tax_risk_quality_block_total[1h]))", "legendFormat": "{{source}} / {{reason_code}}"}
+      ]
+    },
+    {
+      "id": 3,
+      "title": "关联覆盖率",
+      "type": "gauge",
+      "targets": [
+        {"expr": "tax_risk_link_coverage_ratio", "legendFormat": "{{source_pair}}"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit"}}
+    },
+    {
+      "id": 4,
+      "title": "证据积压",
+      "type": "stat",
+      "targets": [
+        {"expr": "sum by (monitor_type) (tax_risk_evidence_backlog)", "legendFormat": "{{monitor_type}}"}
+      ]
+    },
+    {
+      "id": 5,
+      "title": "数据到输出就绪耗时",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "tax_risk_output_ready_timestamp_seconds - on(run_type) tax_risk_data_ready_timestamp_seconds", "legendFormat": "{{run_type}} / {{scope}}"}
+      ]
+    },
+    {
+      "id": 6,
+      "title": "授权失败",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (action, reason_code) (rate(tax_risk_authorization_failure_total[5m]))", "legendFormat": "{{action}} / {{reason_code}}"}
+      ]
+    }
+  ]
+}

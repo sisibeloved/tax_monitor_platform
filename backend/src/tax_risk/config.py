@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     export_retention_hours: int = Field(default=24, gt=0, le=24 * 30)
     export_download_ttl_seconds: int = Field(default=300, gt=0, le=3_600)
     export_download_secret: str = "development-export-download-secret"
+    expected_migration_head: str = "0015_delivery_observability"
 
     @model_validator(mode="after")
     def validate_quarterly_worker_timeouts(self) -> Self:
