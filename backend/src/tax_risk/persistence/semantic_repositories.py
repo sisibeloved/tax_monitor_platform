@@ -13,6 +13,8 @@ from tax_risk.domain.semantic.sap_voucher import (
 from tax_risk.persistence.semantic_models import (
     SapExpenseVoucherObservation,
     SapExpenseVoucherSnapshotProjection,
+    SuggestedAccountDictionaryVersion,
+    SuggestedAccountEntry,
 )
 from tax_risk.persistence.snapshot_models import (
     SnapshotSet,
@@ -40,6 +42,75 @@ class SemanticRepository:
         projection: SapExpenseVoucherSnapshotProjection,
     ) -> None:
         self._session.add(projection)
+
+    def add_account_dictionary_version(
+        self,
+        version: SuggestedAccountDictionaryVersion,
+    ) -> None:
+        self._session.add(version)
+
+    def add_suggested_account(self, entry: SuggestedAccountEntry) -> None:
+        self._session.add(entry)
+
+    def get_account_dictionary_version(
+        self,
+        version_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> SuggestedAccountDictionaryVersion | None:
+        statement = select(SuggestedAccountDictionaryVersion).where(
+            SuggestedAccountDictionaryVersion.id == version_id
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return self._session.scalar(statement)
+
+    def get_account_dictionary_by_name(
+        self,
+        dictionary_version: str,
+    ) -> SuggestedAccountDictionaryVersion | None:
+        return self._session.scalar(
+            select(SuggestedAccountDictionaryVersion).where(
+                SuggestedAccountDictionaryVersion.dictionary_version == dictionary_version
+            )
+        )
+
+    def get_account_dictionary_by_batch(
+        self,
+        batch_id: UUID,
+    ) -> SuggestedAccountDictionaryVersion | None:
+        return self._session.scalar(
+            select(SuggestedAccountDictionaryVersion).where(
+                SuggestedAccountDictionaryVersion.batch_id == batch_id
+            )
+        )
+
+    def overlapping_published_account_dictionaries(
+        self,
+        version: SuggestedAccountDictionaryVersion,
+    ) -> list[SuggestedAccountDictionaryVersion]:
+        return list(
+            self._session.scalars(
+                select(SuggestedAccountDictionaryVersion).where(
+                    SuggestedAccountDictionaryVersion.id != version.id,
+                    SuggestedAccountDictionaryVersion.status == "PUBLISHED",
+                    SuggestedAccountDictionaryVersion.effective_from <= version.effective_to,
+                    SuggestedAccountDictionaryVersion.effective_to >= version.effective_from,
+                )
+            )
+        )
+
+    def get_suggested_account(
+        self,
+        version_id: UUID,
+        account_id: str,
+    ) -> SuggestedAccountEntry | None:
+        return self._session.scalar(
+            select(SuggestedAccountEntry).where(
+                SuggestedAccountEntry.dictionary_version_id == version_id,
+                SuggestedAccountEntry.account_id == account_id,
+            )
+        )
 
     def projected_observation_ids(self, snapshot_id: UUID) -> set[UUID]:
         return set(

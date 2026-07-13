@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     Numeric,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tax_risk.persistence.models import AuditTimestampMixin, Base, UUIDPrimaryKeyMixin
@@ -101,7 +103,78 @@ class SapExpenseVoucherSnapshotProjection(UUIDPrimaryKeyMixin, AuditTimestampMix
     period: Mapped[date] = mapped_column(Date, nullable=False)
 
 
+class SuggestedAccountDictionaryVersion(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "suggested_account_dictionary_version"
+    __table_args__ = (
+        UniqueConstraint("dictionary_version", name="uq_account_dict_version"),
+        CheckConstraint("effective_to >= effective_from", name="effective_period"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'APPROVED', 'PUBLISHED', 'RETIRED')",
+            name="status",
+        ),
+        CheckConstraint("length(checksum) = 64", name="checksum_length"),
+        CheckConstraint(
+            "(status = 'DRAFT' AND reviewer_id IS NULL AND approved_at IS NULL "
+            "AND published_at IS NULL) OR "
+            "(status = 'APPROVED' AND reviewer_id IS NOT NULL AND approved_at IS NOT NULL "
+            "AND published_at IS NULL) OR "
+            "(status = 'PUBLISHED' AND reviewer_id IS NOT NULL AND approved_at IS NOT NULL "
+            "AND published_at IS NOT NULL AND published_by IS NOT NULL) OR "
+            "status = 'RETIRED'",
+            name="lifecycle",
+        ),
+    )
+
+    batch_id: Mapped[UUID] = mapped_column(
+        ForeignKey("ingest_batch.id", name="fk_account_dict_batch", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+    dictionary_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date] = mapped_column(Date, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    reviewer_id: Mapped[str | None] = mapped_column(String(256))
+    published_by: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SuggestedAccountEntry(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "suggested_account_entry"
+    __table_args__ = (
+        UniqueConstraint("dictionary_version_id", "account_id", name="uq_account_entry_id"),
+        CheckConstraint("status IN ('ACTIVE', 'INACTIVE')", name="status"),
+        Index("ix_account_entry_version", "dictionary_version_id"),
+    )
+
+    dictionary_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "suggested_account_dictionary_version.id",
+            name="fk_account_entry_version",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    source_record_id: Mapped[UUID] = mapped_column(
+        ForeignKey("source_record.id", name="fk_account_entry_source", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+    account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    account_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    accounting_classification: Mapped[str] = mapped_column(String(128), nullable=False)
+    allowed_monitor_types: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    allowed_labels: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 __all__ = [
     "SapExpenseVoucherObservation",
     "SapExpenseVoucherSnapshotProjection",
+    "SuggestedAccountDictionaryVersion",
+    "SuggestedAccountEntry",
 ]

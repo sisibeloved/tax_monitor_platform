@@ -1,0 +1,1 @@
+"""Shared semantic application services."""
