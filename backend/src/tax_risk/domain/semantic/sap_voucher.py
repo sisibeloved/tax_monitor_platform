@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class AccountFamily(StrEnum):
     BUSINESS_ENTERTAINMENT = "BUSINESS_ENTERTAINMENT"
+    WELFARE = "WELFARE"
+    DONATION = "DONATION"
 
 
 class SapExpenseVoucherRecord(BaseModel):
