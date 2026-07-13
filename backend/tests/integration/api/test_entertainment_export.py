@@ -6,7 +6,10 @@ from io import BytesIO
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
-from test_semantic_case_routing import _detection, _seed_graph
+from tests.integration.application.test_semantic_case_routing import (
+    _detection,
+    _seed_graph,
+)
 from tax_risk.application.business_entertainment.export import escape_excel_text
 from tax_risk.application.case_merge import CaseMergeService
 from tax_risk.application.semantic.detection_router import SemanticCaseRouter

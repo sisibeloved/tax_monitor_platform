@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from functools import partial
 
-from test_semantic_case_routing import _detection, _seed_graph
+from tests.integration.application.test_semantic_case_routing import (
+    _detection,
+    _seed_graph,
+)
 from tax_risk.application.business_entertainment.reporting import (
     BusinessEntertainmentReportingService,
 )

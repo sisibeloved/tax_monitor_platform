@@ -6,7 +6,10 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-from test_semantic_case_routing import _detection, _seed_graph
+from tests.integration.application.test_semantic_case_routing import (
+    _detection,
+    _seed_graph,
+)
 from tax_risk.application.case_merge import (
     CaseMergeConflictError,
     CaseMergeNotFoundError,

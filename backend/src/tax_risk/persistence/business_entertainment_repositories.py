@@ -4,7 +4,7 @@ from collections.abc import Sequence, Set
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import select, text, tuple_
+from sqlalchemy import extract, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -70,6 +70,13 @@ class BusinessEntertainmentScopeRepository:
         self,
         *,
         company_scope: Set[UUID] | None,
+        fiscal_year: int | None = None,
+        period: int | None = None,
+        source_mode: str | None = None,
+        sap_link_status: str | None = None,
+        confidence_tier: str | None = None,
+        case_status: str | None = None,
+        company_id: UUID | None = None,
     ) -> list[tuple[RiskCase, BusinessEntertainmentCaseDetail, SemanticDetectionRecord, Company]]:
         statement = (
             select(
@@ -98,6 +105,124 @@ class BusinessEntertainmentScopeRepository:
             if not company_scope:
                 return []
             statement = statement.where(RiskCase.company_id.in_(company_scope))
+        if fiscal_year is not None:
+            statement = statement.where(SemanticDetectionRecord.fiscal_year == fiscal_year)
+        if period is not None:
+            statement = statement.where(SemanticDetectionRecord.period == period)
+        if source_mode is not None:
+            statement = statement.where(BusinessEntertainmentCaseDetail.source_mode == source_mode)
+        if sap_link_status is not None:
+            statement = statement.where(
+                BusinessEntertainmentCaseDetail.sap_link_status == sap_link_status
+            )
+        if confidence_tier is not None:
+            statement = statement.where(
+                BusinessEntertainmentCaseDetail.confidence_tier == confidence_tier
+            )
+        if case_status is not None:
+            statement = statement.where(RiskCase.status == case_status)
+        if company_id is not None:
+            statement = statement.where(RiskCase.company_id == company_id)
+        return [tuple(row) for row in self._session.execute(statement).all()]
+
+    def case_row(
+        self,
+        case_id: UUID,
+        *,
+        company_scope: Set[UUID] | None,
+    ) -> tuple[
+        RiskCase,
+        BusinessEntertainmentCaseDetail,
+        SemanticDetectionRecord,
+        Company,
+    ] | None:
+        statement = (
+            select(
+                RiskCase,
+                BusinessEntertainmentCaseDetail,
+                SemanticDetectionRecord,
+                Company,
+            )
+            .join(
+                BusinessEntertainmentCaseDetail,
+                BusinessEntertainmentCaseDetail.risk_case_id == RiskCase.id,
+            )
+            .join(
+                SemanticDetectionRecord,
+                SemanticDetectionRecord.id
+                == BusinessEntertainmentCaseDetail.semantic_detection_id,
+            )
+            .join(Company, Company.id == RiskCase.company_id)
+            .where(
+                RiskCase.id == case_id,
+                RiskCase.monitor_type == MonitorType.BUSINESS_ENTERTAINMENT,
+            )
+        )
+        if company_scope is not None:
+            if not company_scope:
+                return None
+            statement = statement.where(RiskCase.company_id.in_(company_scope))
+        row = self._session.execute(statement).one_or_none()
+        return None if row is None else tuple(row)
+
+    def exact_resolution_link_rows(
+        self,
+        *,
+        canonical_source_record_id: UUID,
+        snapshot_id: UUID,
+        company_code: str,
+    ) -> list[tuple[EvidenceLink, SapExpenseVoucherObservation]]:
+        rows = self._session.execute(
+            select(EvidenceLink, SapExpenseVoucherObservation)
+            .join(
+                SapExpenseVoucherObservation,
+                SapExpenseVoucherObservation.source_record_id
+                == EvidenceLink.target_record_id,
+            )
+            .where(
+                EvidenceLink.source_record_id == canonical_source_record_id,
+                EvidenceLink.snapshot_id == snapshot_id,
+                EvidenceLink.company_code == company_code,
+                EvidenceLink.relation_quality == "EXACT",
+            )
+            .order_by(
+                SapExpenseVoucherObservation.document_number,
+                SapExpenseVoucherObservation.line_item,
+                EvidenceLink.id,
+            )
+        ).all()
+        return [tuple(row) for row in rows]
+
+    def sap_link_coverage_rows(
+        self,
+        *,
+        company_scope: Set[UUID] | None,
+        fiscal_year: int | None = None,
+        period: int | None = None,
+        company_id: UUID | None = None,
+    ) -> list[tuple[SapLinkCoverage, Company]]:
+        statement = (
+            select(SapLinkCoverage, Company)
+            .join(Company, Company.company_code == SapLinkCoverage.company_code)
+            .order_by(
+                Company.company_code,
+                SapLinkCoverage.period,
+                SapLinkCoverage.document_number,
+                SapLinkCoverage.line_item,
+            )
+        )
+        if company_scope is not None:
+            if not company_scope:
+                return []
+            statement = statement.where(Company.id.in_(company_scope))
+        if fiscal_year is not None:
+            statement = statement.where(
+                extract("year", SapLinkCoverage.period) == fiscal_year
+            )
+        if period is not None:
+            statement = statement.where(extract("month", SapLinkCoverage.period) == period)
+        if company_id is not None:
+            statement = statement.where(Company.id == company_id)
         return [tuple(row) for row in self._session.execute(statement).all()]
 
     def evidence_links_for_snapshot(self, snapshot_id: UUID) -> list[EvidenceLink]:

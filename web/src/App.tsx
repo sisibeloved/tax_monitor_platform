@@ -1,6 +1,8 @@
-import { Layout, Typography } from "antd";
+import { Layout, Tabs, Typography } from "antd";
 
+import { SapLinkCoveragePage } from "./features/business-entertainment/SapLinkCoveragePage";
 import { QuarterlyDashboardPage } from "./features/quarterly/QuarterlyDashboardPage";
+import { RiskListPage } from "./features/risks/RiskListPage";
 
 const { Content, Header } = Layout;
 
@@ -13,7 +15,26 @@ export default function App() {
         </Typography.Title>
       </Header>
       <Content style={{ padding: 24 }}>
-        <QuarterlyDashboardPage />
+        <Tabs
+          defaultActiveKey="quarterly"
+          items={[
+            {
+              key: "quarterly",
+              label: "季度所得税监测",
+              children: <QuarterlyDashboardPage />,
+            },
+            {
+              key: "entertainment-risks",
+              label: "业务招待费风险",
+              children: <RiskListPage />,
+            },
+            {
+              key: "sap-coverage",
+              label: "SAP关联覆盖",
+              children: <SapLinkCoveragePage />,
+            },
+          ]}
+        />
       </Content>
     </Layout>
   );

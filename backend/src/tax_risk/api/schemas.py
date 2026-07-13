@@ -300,9 +300,9 @@ class RiskCaseItemResponse(BaseModel):
     company_code: str
     company_name: str
     latest_detection_id: UUID | None
-    run_id: UUID
+    run_id: UUID | None = None
     monitoring_type: MonitorType
-    calculation_status: CalculationStatus
+    calculation_status: CalculationStatus | None = None
     input_amount: Decimal | None
     result_amount: Decimal | None
     difference_amount: Decimal | None
@@ -319,6 +319,15 @@ class RiskCaseItemResponse(BaseModel):
     priority: int
     assignee: str | None
     row_version: int
+    fiscal_year: int | None = None
+    period: int | None = None
+    source_mode: str | None = None
+    sap_link_status: str | None = None
+    sap_document_number: str | None = None
+    sap_line_item: str | None = None
+    semantic_label: str | None = None
+    confidence_tier: str | None = None
+    workflow_note: str | None = None
 
     @field_serializer(
         "input_amount",
@@ -338,6 +347,94 @@ class RiskCaseListResponse(BaseModel):
     page: int
     page_size: int
     items: tuple[RiskCaseItemResponse, ...]
+
+
+class ResolutionEvidenceLinkResponse(BaseModel):
+    evidence_link_id: UUID
+    relation_quality: str
+    matched_field: str
+    sap_document_number: str
+    sap_line_item: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BusinessEntertainmentCaseDetailResponse(BaseModel):
+    case_id: UUID
+    company_id: UUID
+    company_code: str
+    company_name: str
+    status: RiskCaseStatus
+    merged_into_case_id: UUID | None
+    canonical_source_record_id: UUID
+    source_mode: str
+    sap_link_status: str
+    sap_document_number: str | None
+    sap_line_item: str | None
+    risk_amount: Decimal
+    currency: str
+    risk_amount_source: str
+    semantic_label: str
+    confidence_tier: str
+    evidence_refs: tuple[dict[str, str], ...]
+    recommended_account_ids: tuple[str, ...]
+    rationale_summary: str
+    missing_evidence: tuple[str, ...]
+    rule_version_id: str
+    model_version_id: str
+    prompt_version_id: str
+    case_library_version_id: str
+    account_dictionary_version: str
+    workflow_note: str
+    row_version: int
+    resolution_evidence_links: tuple[ResolutionEvidenceLinkResponse, ...]
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("risk_amount")
+    def serialize_risk_amount(self, value: Decimal) -> str:
+        return format(value, "f")
+
+
+class SapLinkCoverageItemResponse(BaseModel):
+    coverage_id: UUID
+    company_id: UUID
+    company_code: str
+    company_name: str
+    period: date
+    document_number: str
+    line_item: str
+    amount: Decimal
+    currency: str
+    link_status: str
+    exact_evidence_link_id: UUID | None
+    evaluated_via_business_document: bool
+    snapshot_id: UUID
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("amount")
+    def serialize_amount(self, value: Decimal) -> str:
+        return format(value, "f")
+
+
+class SapLinkCoverageListResponse(BaseModel):
+    total: int
+    items: tuple[SapLinkCoverageItemResponse, ...]
+
+
+class ResolveBusinessEntertainmentCaseRequest(BaseModel):
+    evidence_link_id: UUID
+    expected_row_version: int = Field(ge=1)
+
+
+class ResolveBusinessEntertainmentCaseResponse(BaseModel):
+    source_case_id: UUID
+    root_case_id: UUID
+    evidence_link_id: UUID
+    merged: bool
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RiskCaseAction(StrEnum):

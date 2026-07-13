@@ -17,6 +17,12 @@ Object.defineProperty(window, "matchMedia", {
   }),
 });
 
+const getComputedStyle = window.getComputedStyle.bind(window);
+Object.defineProperty(window, "getComputedStyle", {
+  configurable: true,
+  value: (element: Element) => getComputedStyle(element),
+});
+
 afterEach(() => {
   cleanup();
 });

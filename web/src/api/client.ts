@@ -43,3 +43,28 @@ export async function apiGet<T>(
   }
   return body as T;
 }
+
+export async function apiPost<TResponse, TBody>(
+  path: string,
+  body: TBody,
+  init?: RequestInit,
+): Promise<TResponse> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(`${configuredBaseUrl}${path}`, {
+    ...init,
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const responseBody: unknown = await response.json();
+  if (!response.ok) {
+    throw new ApiError(response.status, responseBody);
+  }
+  return responseBody as TResponse;
+}
