@@ -52,6 +52,7 @@ EXPECTED_TABLES = {
     "semantic_model_call_audit",
     "semantic_detection_record",
     "semantic_evidence_task",
+    "semantic_version_set",
     "business_entertainment_case_detail",
     "audit_event",
 }
@@ -76,7 +77,7 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0010_semantic_artifacts"
+    assert revision == "0011_welfare_donation"
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -161,6 +162,8 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
                 "TAX_BURDEN",
                 "POTENTIAL_TAX_COST",
                 "BUSINESS_ENTERTAINMENT",
+                "WELFARE",
+                "DONATION",
             ],
         ),
         (
@@ -172,6 +175,7 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
                 "SUCCEEDED",
                 "BLOCKED",
                 "FAILED",
+                "NOT_RUN",
             ],
         ),
         (
@@ -829,30 +833,33 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0010_semantic_artifacts (head)" in completed.stdout
+    assert "0011_welfare_donation (head)" in completed.stdout
 
 
 def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
-    isolated_database_url: str,
 ) -> None:
-    before = _run_alembic(isolated_database_url, "check")
-    assert before.returncode == 0, before.stderr
+    with _owned_migration_schema() as (database_url, _engine):
+        upgrade_first = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade_first.returncode == 0, upgrade_first.stderr
 
-    downgrade = _run_alembic(isolated_database_url, "downgrade", "base")
-    assert downgrade.returncode == 0, downgrade.stderr
+        before = _run_alembic(database_url, "check")
+        assert before.returncode == 0, before.stderr
 
-    upgrade = _run_alembic(isolated_database_url, "upgrade", "head")
-    assert upgrade.returncode == 0, upgrade.stderr
+        downgrade = _run_alembic(database_url, "downgrade", "base")
+        assert downgrade.returncode == 0, downgrade.stderr
 
-    after = _run_alembic(isolated_database_url, "check")
-    assert after.returncode == 0, after.stderr
+        upgrade = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade.returncode == 0, upgrade.stderr
+
+        after = _run_alembic(database_url, "check")
+        assert after.returncode == 0, after.stderr
 
 
 def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0010_semantic_artifacts"
+    assert revision == "0011_welfare_donation"
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:

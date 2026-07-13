@@ -29,6 +29,10 @@ from tax_risk.adapters.ingest.oa_self_procurement_csv import OaSelfProcurementCs
 from tax_risk.adapters.ingest.sap_business_entertainment_csv import (
     SapBusinessEntertainmentCsvAdapter,
 )
+from tax_risk.adapters.ingest.sap_expense import (
+    SapDonationCsvAdapter,
+    SapWelfareCsvAdapter,
+)
 from tax_risk.application.ingest_processors import (
     BusinessEntertainmentSourceProcessor,
     CompanyMasterProcessor,
@@ -53,6 +57,8 @@ _TERMINAL_STATUSES = {
 logger = logging.getLogger(__name__)
 _BUSINESS_ENTERTAINMENT_ADAPTERS: dict[str, Callable[[bytes], BulkFileAdapter]] = {
     SapBusinessEntertainmentCsvAdapter.DATASET_CODE: SapBusinessEntertainmentCsvAdapter,
+    SapWelfareCsvAdapter.DATASET_CODE: SapWelfareCsvAdapter,
+    SapDonationCsvAdapter.DATASET_CODE: SapDonationCsvAdapter,
     HesiBusinessEntertainmentCsvAdapter.DATASET_CODE: HesiBusinessEntertainmentCsvAdapter,
     OaBusinessEntertainmentCsvAdapter.DATASET_CODE: OaBusinessEntertainmentCsvAdapter,
     OaSelfProcurementCsvAdapter.DATASET_CODE: OaSelfProcurementCsvAdapter,

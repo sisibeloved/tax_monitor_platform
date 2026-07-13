@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -32,6 +33,7 @@ from tax_risk.persistence.models import AuditTimestampMixin, Base, UUIDPrimaryKe
 
 class MonitoringRunType(StrEnum):
     QUARTERLY = "QUARTERLY"
+    MONTHLY_SEMANTIC = "MONTHLY_SEMANTIC"
 
 
 class MonitoringRunStatus(StrEnum):
@@ -49,6 +51,7 @@ class MonitoringRunCompanyStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
+    NOT_RUN = "NOT_RUN"
 
 
 class CalculationStatus(StrEnum):
@@ -80,6 +83,15 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         CheckConstraint("fiscal_year BETWEEN 2000 AND 9999", name="fiscal_year"),
         CheckConstraint("quarter BETWEEN 1 AND 4", name="quarter"),
         CheckConstraint(
+            "(run_type = 'QUARTERLY' AND quarter IS NOT NULL "
+            "AND period IS NULL AND monitoring_type IS NULL "
+            "AND semantic_version_set_id IS NULL) OR "
+            "(run_type = 'MONTHLY_SEMANTIC' AND quarter IS NULL "
+            "AND period IS NOT NULL AND monitoring_type IS NOT NULL "
+            "AND semantic_version_set_id IS NOT NULL)",
+            name="run_contract",
+        ),
+        CheckConstraint(
             "requested_company_count >= 0 AND succeeded_company_count >= 0 AND "
             "failed_company_count >= 0 AND blocked_company_count >= 0",
             name="nonnegative_counts",
@@ -100,7 +112,14 @@ class MonitoringRun(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         Enum(MonitoringRunStatus, name="monitoring_run_status"), nullable=False
     )
     fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
-    quarter: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    quarter: Mapped[int | None] = mapped_column(SmallInteger)
+    period: Mapped[date | None] = mapped_column(Date)
+    monitoring_type: Mapped[MonitorType | None] = mapped_column(
+        Enum(MonitorType, name="monitor_type", create_type=False)
+    )
+    semantic_version_set_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("semantic_version_set.id", ondelete="RESTRICT")
+    )
     requested_company_count: Mapped[int] = mapped_column(Integer, nullable=False)
     succeeded_company_count: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
@@ -137,6 +156,10 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
             name="uq_monitoring_run_company_run_member",
         ),
         CheckConstraint("attempt_count >= 0", name="nonnegative_attempt_count"),
+        CheckConstraint(
+            "processed_line_count >= 0 AND risk_case_count >= 0",
+            name="nonnegative_monthly_counts",
+        ),
         CheckConstraint(
             "jsonb_typeof(detection_ids) = 'array' AND jsonb_typeof(case_ids) = 'array'",
             name="result_ids_are_arrays",
@@ -176,6 +199,11 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
             "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
             "AND error_code IS NOT NULL AND btrim(error_code) <> '' "
             "AND error_message IS NOT NULL AND btrim(error_message) <> '' "
+            "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb) OR "
+            "(status = 'NOT_RUN' AND attempt_count > 0 AND retryable = false "
+            "AND celery_task_id IS NOT NULL AND btrim(celery_task_id) <> '' "
+            "AND started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "AND issue_code IS NOT NULL AND btrim(issue_code) <> '' "
             "AND detection_ids = '[]'::jsonb AND case_ids = '[]'::jsonb)",
             name="lifecycle_state",
         ),
@@ -219,6 +247,15 @@ class MonitoringRunCompany(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         nullable=False,
         server_default=text("'[]'::jsonb"),
     )
+    selected: Mapped[bool | None] = mapped_column(Boolean)
+    adjustment_amount: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    processed_line_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    risk_case_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    issue_code: Mapped[str | None] = mapped_column(String(128))
 
 
 class DetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):

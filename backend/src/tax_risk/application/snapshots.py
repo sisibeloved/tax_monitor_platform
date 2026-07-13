@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from tax_risk.adapters.ingest.base import fits_database_amount
 from tax_risk.domain.money import Money
+from tax_risk.domain.semantic.sap_voucher import AccountFamily
 from tax_risk.persistence.ingest_models import (
     Company,
     CompanyLifecycle,
@@ -54,6 +55,17 @@ REQUIRED_QUARTERLY_METRICS: tuple[str, ...] = (
     "other_payables_accrual",
     "hesi_no_invoice",
 )
+REQUIRED_MONTHLY_SEMANTIC_METRICS: tuple[str, ...] = (
+    "WELFARE_YTD",
+    "SALARY_YTD",
+    "DONATION_YTD",
+    "PROFIT_YTD",
+)
+MONTHLY_SEMANTIC_DATASETS = frozenset(
+    (*REQUIRED_MONTHLY_SEMANTIC_METRICS, "SAP_WELFARE_DETAIL", "SAP_DONATION_DETAIL")
+)
+QUARTERLY_PROFILE = "QUARTERLY"
+MONTHLY_SEMANTIC_PROFILE = "MONTHLY_SEMANTIC"
 
 UowFactory = Callable[[], UnitOfWork]
 BatchRow = TypeVar("BatchRow", SourceRecord, IngestError)
@@ -222,6 +234,7 @@ class _FrozenSnapshot:
     checksum: str
     control_total: Decimal
     lineage: dict[str, Any]
+    record_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,9 +275,11 @@ class SnapshotService:
         period: date,
         source_batch_ids: Sequence[UUID],
         accepted_partial_batch_ids: Sequence[UUID] = (),
+        profile: str = QUARTERLY_PROFILE,
     ) -> SnapshotValidationResult:
         company_code = _required_text(company_code, "company_code", 64)
-        _require_quarter_end(period)
+        normalized_profile = _require_snapshot_profile(profile)
+        _require_period_end(period, profile=normalized_profile)
         selected_ids, accepted_partial_ids = _validate_source_selection(
             source_batch_ids,
             accepted_partial_batch_ids,
@@ -312,6 +327,7 @@ class SnapshotService:
                     selected_ids=selected_ids,
                     accepted_partial_ids=accepted_partial_ids,
                     data=data,
+                    profile=normalized_profile,
                 )
                 if frozen is None:
                     return SnapshotValidationResult(False, issues, None)
@@ -357,7 +373,7 @@ class SnapshotService:
                     status=SnapshotStatus.DRAFT,
                     currency=frozen.master.currency,
                     amount_scale=frozen.master.amount_scale,
-                    record_count=len(REQUIRED_QUARTERLY_METRICS),
+                    record_count=frozen.record_count,
                     control_total=frozen.control_total,
                     checksum=frozen.checksum,
                     lineage=deepcopy(frozen.lineage),
@@ -437,6 +453,7 @@ class SnapshotService:
                     selected_ids=selected_ids,
                     accepted_partial_ids=accepted_partial_ids,
                     data=data,
+                    profile=_profile_from_lineage(snapshot.lineage),
                 )
                 if frozen is None:
                     raise SnapshotQualityError(issues)
@@ -469,7 +486,7 @@ class SnapshotService:
         supersedes_snapshot_set_id: UUID | None = None,
     ) -> SnapshotSetView:
         set_key = _required_text(set_key, "set_key", 256)
-        _require_quarter_end(period)
+        _require_period_end(period)
         members = _validate_expected_members(expected_members)
 
         try:
@@ -609,6 +626,7 @@ class SnapshotService:
                         selected_ids=selected_ids,
                         accepted_partial_ids=_accepted_partial_ids(snapshot.lineage),
                         data=quality_data,
+                        profile=_profile_from_lineage(snapshot.lineage),
                     )
                     if frozen is None:
                         raise SnapshotQualityError(issues)
@@ -665,9 +683,28 @@ class SnapshotService:
                     projected_ids = uow.semantic.projected_observation_ids(
                         expected.snapshot_id
                     )
+                    profile = _profile_from_lineage(
+                        next(
+                            snapshot.lineage
+                            for snapshot in snapshots
+                            if snapshot.id == expected.snapshot_id
+                        )
+                    )
+                    observation_batch_ids = (
+                        source_ids_by_snapshot[expected.snapshot_id]
+                        if profile == MONTHLY_SEMANTIC_PROFILE
+                        else None
+                    )
+                    account_families = (
+                        (AccountFamily.WELFARE, AccountFamily.DONATION)
+                        if profile == MONTHLY_SEMANTIC_PROFILE
+                        else (AccountFamily.BUSINESS_ENTERTAINMENT,)
+                    )
                     for observation in uow.semantic.sap_observations_for_company_ytd(
                         company.company_code,
                         period,
+                        batch_ids=observation_batch_ids,
+                        account_families=account_families,
                     ):
                         if observation.id in projected_ids:
                             continue
@@ -718,15 +755,45 @@ def _required_text(value: str, field: str, maximum: int) -> str:
     return normalized
 
 
-def _require_quarter_end(period: date) -> None:
+def _require_period_end(period: date, *, profile: str | None = None) -> None:
     if type(period) is not date:
         raise TypeError("period must be a date")
-    quarter_ends = ((3, 31), (6, 30), (9, 30), (12, 31))
-    if (period.month, period.day) not in quarter_ends:
+    next_day = period.fromordinal(period.toordinal() + 1)
+    is_month_end = next_day.month != period.month
+    is_quarter_end = period.month in (3, 6, 9, 12) and is_month_end
+    valid = (
+        is_month_end
+        if profile in {None, MONTHLY_SEMANTIC_PROFILE}
+        else is_quarter_end
+    )
+    if not valid:
         raise SnapshotRequestError(
             "INVALID_QUARTER_PERIOD",
-            "period must be a calendar quarter-end date",
+            "period must be a calendar period-end date",
         )
+
+
+def _require_snapshot_profile(profile: str) -> str:
+    if profile not in {QUARTERLY_PROFILE, MONTHLY_SEMANTIC_PROFILE}:
+        raise SnapshotRequestError(
+            "INVALID_SNAPSHOT_PROFILE",
+            "profile must be QUARTERLY or MONTHLY_SEMANTIC",
+        )
+    return profile
+
+
+def _profile_contract(profile: str) -> tuple[tuple[str, ...], frozenset[str]]:
+    normalized = _require_snapshot_profile(profile)
+    if normalized == MONTHLY_SEMANTIC_PROFILE:
+        return REQUIRED_MONTHLY_SEMANTIC_METRICS, MONTHLY_SEMANTIC_DATASETS
+    return REQUIRED_QUARTERLY_METRICS, frozenset(("quarterly_metric",))
+
+
+def _profile_from_lineage(lineage: Mapping[str, Any]) -> str:
+    value = lineage.get("profile")
+    if value is None:
+        return QUARTERLY_PROFILE
+    return _require_snapshot_profile(str(value))
 
 
 def _validate_source_selection(
@@ -891,7 +958,9 @@ def _evaluate_quality(
     selected_ids: Sequence[UUID],
     accepted_partial_ids: frozenset[UUID],
     data: _QualityData,
+    profile: str = QUARTERLY_PROFILE,
 ) -> tuple[_FrozenSnapshot | None, tuple[QualityIssue, ...]]:
+    required_metrics, allowed_datasets = _profile_contract(profile)
     issues: list[QualityIssue] = []
     company = data.company
     if company is None or company.lifecycle != CompanyLifecycle.ACTIVE:
@@ -937,7 +1006,7 @@ def _evaluate_quality(
             continue
         ordered_batches.append(batch)
         batch_records = records_by_batch.get(batch.id, [])
-        if batch.dataset_code != "quarterly_metric":
+        if batch.dataset_code not in allowed_datasets:
             issues.append(
                 _issue(
                     "SOURCE_NOT_READY",
@@ -945,7 +1014,7 @@ def _evaluate_quality(
                     "dataset_code",
                     company_code,
                     period,
-                    "Select only controlled quarterly_metric batches.",
+                    f"Select only controlled {profile.lower()} batches.",
                 )
             )
         decision, rejected_error_details = _partial_decision(
@@ -953,6 +1022,7 @@ def _evaluate_quality(
             errors_by_batch.get(batch.id, []),
             company_code=company_code,
             accepted=batch.id in accepted_partial_ids,
+            required_metrics=required_metrics,
         )
         partial_decisions[batch.id] = decision
         if rejected_error_details:
@@ -1146,9 +1216,14 @@ def _evaluate_quality(
                     )
                 )
             metric_code = record.payload.get("metric_code")
-            if isinstance(metric_code, str) and metric_code in REQUIRED_QUARTERLY_METRICS:
+            if isinstance(metric_code, str) and metric_code in required_metrics:
                 batch_target_required[batch.id].append(record)
                 metric_records[metric_code].append(record)
+            elif (
+                profile == MONTHLY_SEMANTIC_PROFILE
+                and record.dataset_code in MONTHLY_SEMANTIC_DATASETS
+            ):
+                batch_target_required[batch.id].append(record)
         if not batch_target_required[batch.id]:
             issues.append(
                 _issue(
@@ -1161,13 +1236,13 @@ def _evaluate_quality(
                 )
             )
 
-    for metric_code in REQUIRED_QUARTERLY_METRICS:
+    for metric_code in required_metrics:
         matches = metric_records.get(metric_code, [])
         if not matches:
             issues.append(
                 _issue(
                     "MISSING_REQUIRED_METRIC",
-                    "quarterly_metric",
+                    profile.lower(),
                     metric_code,
                     company_code,
                     period,
@@ -1178,7 +1253,7 @@ def _evaluate_quality(
             issues.append(
                 _issue(
                     "DUPLICATE_SOURCE_ROW",
-                    "quarterly_metric",
+                    profile.lower(),
                     metric_code,
                     company_code,
                     period,
@@ -1242,7 +1317,7 @@ def _evaluate_quality(
     assert company is not None
     assert len(masters) == 1
     assert common_currency is not None and common_scale is not None
-    ordered_metrics = tuple(metric_records[metric][0] for metric in REQUIRED_QUARTERLY_METRICS)
+    ordered_metrics = tuple(metric_records[metric][0] for metric in required_metrics)
     control_total = _money_sum(
         (cast(Decimal, record.amount) for record in ordered_metrics),
         common_currency,
@@ -1251,7 +1326,7 @@ def _evaluate_quality(
     if not fits_database_amount(control_total):
         overflow = _issue(
             "CONTROL_TOTAL_MISMATCH",
-            "quarterly_metric",
+            profile.lower(),
             "snapshot_control_total",
             company_code,
             period,
@@ -1268,6 +1343,8 @@ def _evaluate_quality(
             partial_decisions=partial_decisions,
             master=masters[0],
             control_total=control_total,
+            required_metrics=required_metrics,
+            profile=profile,
         ),
         (),
     )
@@ -1279,6 +1356,7 @@ def _partial_decision(
     *,
     company_code: str,
     accepted: bool,
+    required_metrics: tuple[str, ...] = REQUIRED_QUARTERLY_METRICS,
 ) -> tuple[dict[str, Any], bool]:
     evidence: list[dict[str, Any]] = []
     safe = True
@@ -1308,7 +1386,7 @@ def _partial_decision(
         elif (
             error_company == company_code
             and isinstance(metric_code, str)
-            and metric_code not in REQUIRED_QUARTERLY_METRICS
+            and metric_code not in required_metrics
         ):
             classification = "NON_REQUIRED_METRIC"
         elif error_company == company_code:
@@ -1407,6 +1485,8 @@ def _source_record_mismatch(record: SourceRecord, batch: IngestBatch) -> str | N
 
 
 def _source_payload_mismatch(record: SourceRecord, batch: IngestBatch) -> str | None:
+    if batch.dataset_code.startswith("SAP_") and batch.dataset_code.endswith("_DETAIL"):
+        return _sap_source_payload_mismatch(record, batch)
     expected: tuple[tuple[str, object], ...] = (
         ("period", record.period.isoformat()),
         ("currency", record.currency),
@@ -1436,6 +1516,37 @@ def _source_payload_mismatch(record: SourceRecord, batch: IngestBatch) -> str | 
     return None
 
 
+def _sap_source_payload_mismatch(
+    record: SourceRecord,
+    batch: IngestBatch,
+) -> str | None:
+    expected: tuple[tuple[str, object], ...] = (
+        ("fiscal_year", record.period.year),
+        ("period", record.period.month),
+        ("currency", record.currency),
+    )
+    for field, value in expected:
+        if record.payload.get(field) != value:
+            return f"payload.{field}"
+    payload_amount = record.payload.get("amount")
+    if not isinstance(payload_amount, str):
+        return "payload.amount"
+    try:
+        parsed_amount = Decimal(payload_amount)
+    except InvalidOperation:
+        return "payload.amount"
+    if not parsed_amount.is_finite() or parsed_amount != record.amount:
+        return "payload.amount"
+    expected_family = {
+        "SAP_BUSINESS_ENTERTAINMENT_DETAIL": "BUSINESS_ENTERTAINMENT",
+        "SAP_WELFARE_DETAIL": "WELFARE",
+        "SAP_DONATION_DETAIL": "DONATION",
+    }.get(batch.dataset_code)
+    if expected_family is None or record.payload.get("account_family") != expected_family:
+        return "payload.account_family"
+    return None
+
+
 def _freeze_snapshot(
     *,
     company: Company,
@@ -1446,6 +1557,8 @@ def _freeze_snapshot(
     partial_decisions: Mapping[UUID, dict[str, Any]],
     master: TaxMasterVersion,
     control_total: Decimal,
+    required_metrics: tuple[str, ...] = REQUIRED_QUARTERLY_METRICS,
+    profile: str = QUARTERLY_PROFILE,
 ) -> _FrozenSnapshot:
     master_lineage = _master_lineage(master)
     frozen_sources: list[_FrozenSource] = []
@@ -1454,7 +1567,11 @@ def _freeze_snapshot(
         subset = sorted(
             records_by_batch.get(batch.id, ()),
             key=lambda item: (
-                REQUIRED_QUARTERLY_METRICS.index(str(item.payload.get("metric_code"))),
+                (
+                    required_metrics.index(str(item.payload.get("metric_code")))
+                    if item.payload.get("metric_code") in required_metrics
+                    else len(required_metrics)
+                ),
                 item.source_record_key,
                 item.id,
             ),
@@ -1488,7 +1605,11 @@ def _freeze_snapshot(
                 "company_code": company.company_code,
                 "record_count": len(subset),
                 "control_total": _decimal_string(subset_total),
-                "metric_codes": [record.payload["metric_code"] for record in subset],
+                "metric_codes": [
+                    metric
+                    for record in subset
+                    if isinstance((metric := record.payload.get("metric_code")), str)
+                ],
                 "source_record_ids": [str(record.id) for record in subset],
             },
             "partial_decision": deepcopy(partial_decisions[batch.id]),
@@ -1514,7 +1635,7 @@ def _freeze_snapshot(
                 "target_subset_checksum": canonical_sha256(
                     [
                         {
-                            "metric_code": record.payload["metric_code"],
+                            "metric_code": record.payload.get("metric_code"),
                             "amount": record.amount,
                             "source_record_id": record.id,
                             "source_record_key": record.source_record_key,
@@ -1527,7 +1648,7 @@ def _freeze_snapshot(
             }
         )
     metric_lineage = []
-    for metric_code, record in zip(REQUIRED_QUARTERLY_METRICS, records, strict=True):
+    for metric_code, record in zip(required_metrics, records, strict=True):
         metric_lineage.append(
             {
                 "metric_code": metric_code,
@@ -1542,7 +1663,12 @@ def _freeze_snapshot(
             }
         )
     lineage: dict[str, Any] = {
-        "schema_version": "quarterly-accounting-snapshot-v2",
+        "schema_version": (
+            "monthly-semantic-accounting-snapshot-v1"
+            if profile == MONTHLY_SEMANTIC_PROFILE
+            else "quarterly-accounting-snapshot-v2"
+        ),
+        "profile": profile,
         "company": {
             "id": str(company.id),
             "company_code": company.company_code,
@@ -1580,6 +1706,7 @@ def _freeze_snapshot(
         checksum=canonical_sha256(lineage),
         control_total=control_total,
         lineage=lineage,
+        record_count=len(required_metrics),
     )
 
 
@@ -1640,7 +1767,7 @@ def _frozen_mismatch(
         and snapshot.source_version_set_hash == frozen.source_hash
         and snapshot.currency == frozen.master.currency
         and snapshot.amount_scale == frozen.master.amount_scale
-        and snapshot.record_count == len(REQUIRED_QUARTERLY_METRICS)
+        and snapshot.record_count == frozen.record_count
         and snapshot.control_total == frozen.control_total
         and snapshot.checksum == frozen.checksum
         and snapshot.lineage == frozen.lineage

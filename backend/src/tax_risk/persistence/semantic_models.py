@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -21,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from tax_risk.domain.cases import MonitorType
 from tax_risk.persistence.models import AuditTimestampMixin, Base, UUIDPrimaryKeyMixin
 
 
@@ -43,7 +45,7 @@ class SapExpenseVoucherObservation(UUIDPrimaryKeyMixin, AuditTimestampMixin, Bas
         CheckConstraint("period BETWEEN 1 AND 12", name="period"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
         CheckConstraint(
-            "account_family = 'BUSINESS_ENTERTAINMENT'",
+            "account_family IN ('BUSINESS_ENTERTAINMENT', 'WELFARE', 'DONATION')",
             name="account_family",
         ),
         Index("ix_sap_obs_batch", "ingest_batch_id"),
@@ -246,6 +248,61 @@ class SemanticModelCallAudit(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class SemanticVersionSetRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
+    __tablename__ = "semantic_version_set"
+    __table_args__ = (
+        UniqueConstraint("set_key", name="uq_semantic_version_set_key"),
+        CheckConstraint("effective_to >= effective_from", name="effective_period"),
+        CheckConstraint("status IN ('PUBLISHED', 'RETIRED')", name="status"),
+        CheckConstraint("length(set_key) = 64", name="set_key_length"),
+    )
+
+    set_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "rule_version.id",
+            name="fk_semantic_version_set_rule_version_id_rule_version",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    model_artifact_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "semantic_artifact_version.id",
+            name="fk_sem_version_set_model_artifact",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    prompt_artifact_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "semantic_artifact_version.id",
+            name="fk_sem_version_set_prompt_artifact",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    case_library_artifact_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "semantic_artifact_version.id",
+            name="fk_sem_version_set_case_library_artifact",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    account_dictionary_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "suggested_account_dictionary_version.id",
+            name="fk_sem_version_set_account_dictionary",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 class SemanticDetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     __tablename__ = "semantic_detection_record"
     __table_args__ = (
@@ -273,6 +330,11 @@ class SemanticDetectionRecord(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
     company_code: Mapped[str] = mapped_column(String(64), nullable=False)
     fiscal_year: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     period: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    monitoring_type: Mapped[MonitorType] = mapped_column(
+        Enum(MonitorType, name="monitor_type", create_type=False),
+        nullable=False,
+        server_default="BUSINESS_ENTERTAINMENT",
+    )
     source_mode: Mapped[str] = mapped_column(String(64), nullable=False)
     canonical_source_record_id: Mapped[UUID] = mapped_column(
         ForeignKey("source_record.id", name="fk_sem_detection_source", ondelete="RESTRICT"),
@@ -347,6 +409,7 @@ __all__ = [
     "SuggestedAccountEntry",
     "SemanticArtifactVersion",
     "SemanticModelCallAudit",
+    "SemanticVersionSetRecord",
     "SemanticDetectionRecord",
     "SemanticEvidenceTask",
 ]

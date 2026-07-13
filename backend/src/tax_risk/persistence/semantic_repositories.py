@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from calendar import monthrange
+from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,6 +13,9 @@ from tax_risk.domain.semantic.sap_voucher import (
     AccountFamily,
     SnapshotBoundSapExpenseVoucher,
 )
+from tax_risk.domain.cases import MonitorType
+from tax_risk.domain.semantic.limited_scope import DuplicateScopeMetric
+from tax_risk.persistence.ingest_models import Company, SourceRecord
 from tax_risk.persistence.semantic_models import (
     SapExpenseVoucherObservation,
     SapExpenseVoucherSnapshotProjection,
@@ -21,11 +27,22 @@ from tax_risk.persistence.semantic_models import (
     SuggestedAccountEntry,
 )
 from tax_risk.persistence.snapshot_models import (
+    AccountingSnapshot,
     SnapshotSet,
     SnapshotSetMember,
     SnapshotSetStatus,
+    SnapshotSource,
 )
-from tax_risk.persistence.ingest_models import Company
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeFact:
+    company_code: str
+    period: str
+    snapshot_set_id: UUID
+    snapshot_id: UUID
+    cumulative_expense: Decimal | None
+    cumulative_base: Decimal | None
 
 
 class SnapshotBoundSourceError(Exception):
@@ -248,19 +265,28 @@ class SemanticRepository:
         self,
         company_code: str,
         period_end: date,
+        *,
+        batch_ids: tuple[UUID, ...] | None = None,
+        account_families: tuple[AccountFamily, ...] = (
+            AccountFamily.BUSINESS_ENTERTAINMENT,
+        ),
     ) -> list[SapExpenseVoucherObservation]:
+        statement = select(SapExpenseVoucherObservation).where(
+            SapExpenseVoucherObservation.company_code == company_code,
+            SapExpenseVoucherObservation.fiscal_year == period_end.year,
+            SapExpenseVoucherObservation.period <= period_end.month,
+            SapExpenseVoucherObservation.account_family.in_(
+                family.value for family in account_families
+            )
+        )
+        if batch_ids is not None:
+            statement = statement.where(
+                SapExpenseVoucherObservation.ingest_batch_id.in_(batch_ids)
+            )
         return list(
             self._session.scalars(
-                select(SapExpenseVoucherObservation)
-                .where(
-                    SapExpenseVoucherObservation.company_code == company_code,
-                    SapExpenseVoucherObservation.fiscal_year == period_end.year,
-                    SapExpenseVoucherObservation.period <= period_end.month,
-                    SapExpenseVoucherObservation.account_family
-                    == AccountFamily.BUSINESS_ENTERTAINMENT.value,
-                )
-                .order_by(
-                    SapExpenseVoucherObservation.period,
+                statement.order_by(
+                    SapExpenseVoucherObservation.posting_date,
                     SapExpenseVoucherObservation.document_number,
                     SapExpenseVoucherObservation.line_item,
                     SapExpenseVoucherObservation.id,
@@ -274,24 +300,15 @@ class SemanticRepository:
         account_family: AccountFamily,
         company_code: str,
         period_end: date,
+        *,
+        allow_empty: bool = False,
     ) -> list[SnapshotBoundSapExpenseVoucher]:
-        snapshot_set = self._session.get(SnapshotSet, snapshot_set_id)
-        if snapshot_set is None:
-            raise SnapshotBoundSourceError(
-                "SNAPSHOT_SET_NOT_FOUND", "snapshot set was not found"
-            )
-        if (
-            snapshot_set.status != SnapshotSetStatus.PUBLISHED
-            or snapshot_set.published_at is None
-        ):
-            raise SnapshotBoundSourceError(
-                "SNAPSHOT_SET_NOT_PUBLISHED",
-                "only a published snapshot set can supply evaluation input",
-            )
-        if snapshot_set.period != period_end:
-            raise SnapshotBoundSourceError(
-                "SNAPSHOT_PERIOD_MISMATCH", "period_end must equal the snapshot-set period"
-            )
+        member = self._require_published_member(
+            snapshot_set_id=snapshot_set_id,
+            snapshot_id=None,
+            company_code=company_code,
+            period_end=period_end,
+        )
 
         statement = (
             select(SapExpenseVoucherSnapshotProjection, SapExpenseVoucherObservation)
@@ -307,6 +324,8 @@ class SemanticRepository:
             )
             .where(
                 SnapshotSetMember.snapshot_set_id == snapshot_set_id,
+                SnapshotSetMember.id == member.id,
+                SapExpenseVoucherSnapshotProjection.snapshot_id == member.snapshot_id,
                 SapExpenseVoucherSnapshotProjection.company_code == company_code,
                 SapExpenseVoucherSnapshotProjection.period == period_end,
                 SapExpenseVoucherObservation.account_family == account_family.value,
@@ -314,7 +333,7 @@ class SemanticRepository:
                 SapExpenseVoucherObservation.period <= period_end.month,
             )
             .order_by(
-                SapExpenseVoucherObservation.period,
+                SapExpenseVoucherObservation.posting_date,
                 SapExpenseVoucherObservation.document_number,
                 SapExpenseVoucherObservation.line_item,
                 SapExpenseVoucherObservation.id,
@@ -322,18 +341,10 @@ class SemanticRepository:
         )
         rows = self._session.execute(statement).all()
         if not rows:
-            member_exists = self._session.scalar(
-                select(SnapshotSetMember.id)
-                .join(Company, Company.id == SnapshotSetMember.company_id)
-                .where(
-                    SnapshotSetMember.snapshot_set_id == snapshot_set_id,
-                    Company.company_code == company_code,
-                )
-                .limit(1)
-            )
-            code = "SNAPSHOT_SOURCE_MISSING" if member_exists else "SNAPSHOT_MEMBER_MISSING"
+            if allow_empty:
+                return []
             raise SnapshotBoundSourceError(
-                code,
+                "SNAPSHOT_SOURCE_MISSING",
                 "snapshot-bound SAP source is missing; absence is not treated as zero",
             )
         return [
@@ -361,5 +372,139 @@ class SemanticRepository:
             for projection, observation in rows
         ]
 
+    def _require_published_member(
+        self,
+        *,
+        snapshot_set_id: UUID,
+        snapshot_id: UUID | None,
+        company_code: str,
+        period_end: date,
+    ) -> SnapshotSetMember:
+        snapshot_set = self._session.get(SnapshotSet, snapshot_set_id)
+        if snapshot_set is None:
+            raise SnapshotBoundSourceError(
+                "SNAPSHOT_SET_NOT_FOUND", "snapshot set was not found"
+            )
+        if (
+            snapshot_set.status != SnapshotSetStatus.PUBLISHED
+            or snapshot_set.published_at is None
+        ):
+            raise SnapshotBoundSourceError(
+                "SNAPSHOT_SET_NOT_PUBLISHED",
+                "only a published snapshot set can supply evaluation input",
+            )
+        if snapshot_set.period != period_end:
+            raise SnapshotBoundSourceError(
+                "SNAPSHOT_PERIOD_MISMATCH", "period_end must equal the snapshot-set period"
+            )
+        statement = (
+            select(SnapshotSetMember)
+            .join(Company, Company.id == SnapshotSetMember.company_id)
+            .join(AccountingSnapshot, AccountingSnapshot.id == SnapshotSetMember.snapshot_id)
+            .where(
+                SnapshotSetMember.snapshot_set_id == snapshot_set_id,
+                Company.company_code == company_code,
+                AccountingSnapshot.period == period_end,
+            )
+        )
+        if snapshot_id is not None:
+            statement = statement.where(SnapshotSetMember.snapshot_id == snapshot_id)
+        member = self._session.scalar(statement)
+        if member is None:
+            raise SnapshotBoundSourceError(
+                "SNAPSHOT_MEMBER_MISSING",
+                "the published snapshot set has no exact member for the company",
+            )
+        return member
 
-__all__ = ["SemanticRepository", "SnapshotBoundSourceError"]
+
+class MonthlySemanticRepository:
+    METRICS = {
+        MonitorType.WELFARE: ("WELFARE_YTD", "SALARY_YTD"),
+        MonitorType.DONATION: ("DONATION_YTD", "PROFIT_YTD"),
+    }
+
+    def __init__(self, session: Session, semantic: SemanticRepository | None = None) -> None:
+        self._session = session
+        self._semantic = semantic or SemanticRepository(session)
+
+    def get_scope_fact(
+        self,
+        company_code: str,
+        period: str,
+        monitoring_type: MonitorType,
+        snapshot_set_id: UUID,
+        snapshot_id: UUID,
+    ) -> ScopeFact:
+        period_end = _month_end(period)
+        member = self._semantic._require_published_member(
+            snapshot_set_id=snapshot_set_id,
+            snapshot_id=snapshot_id,
+            company_code=company_code,
+            period_end=period_end,
+        )
+        expense_code, base_code = self.METRICS[monitoring_type]
+        rows = self._session.execute(
+            select(SourceRecord.dataset_code, SourceRecord.amount)
+            .join(
+                SnapshotSource,
+                SnapshotSource.ingest_batch_id == SourceRecord.batch_id,
+            )
+            .where(
+                SnapshotSource.snapshot_id == member.snapshot_id,
+                SourceRecord.company_id == member.company_id,
+                SourceRecord.period == period_end,
+                SourceRecord.dataset_code.in_((expense_code, base_code)),
+            )
+            .order_by(SourceRecord.dataset_code, SourceRecord.id)
+        ).all()
+        grouped: dict[str, list[Decimal]] = {expense_code: [], base_code: []}
+        for metric_code, amount in rows:
+            if amount is not None:
+                grouped[metric_code].append(amount)
+        duplicates = tuple(code for code, values in grouped.items() if len(values) > 1)
+        if duplicates:
+            raise DuplicateScopeMetric(
+                f"duplicate monthly scope metric: {', '.join(sorted(duplicates))}"
+            )
+        return ScopeFact(
+            company_code=company_code,
+            period=period,
+            snapshot_set_id=snapshot_set_id,
+            snapshot_id=member.snapshot_id,
+            cumulative_expense=grouped[expense_code][0] if grouped[expense_code] else None,
+            cumulative_base=grouped[base_code][0] if grouped[base_code] else None,
+        )
+
+    def load_snapshot_bound_sap_vouchers(
+        self,
+        *,
+        snapshot_set_id: UUID,
+        account_family: AccountFamily,
+        company_code: str,
+        period_end: date,
+    ) -> list[SnapshotBoundSapExpenseVoucher]:
+        return self._semantic.load_snapshot_bound_sap_vouchers(
+            snapshot_set_id,
+            account_family,
+            company_code,
+            period_end,
+            allow_empty=True,
+        )
+
+
+def _month_end(period: str) -> date:
+    try:
+        year_text, month_text = period.split("-", maxsplit=1)
+        year, month = int(year_text), int(month_text)
+        return date(year, month, monthrange(year, month)[1])
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError("period must use YYYY-MM format") from error
+
+
+__all__ = [
+    "MonthlySemanticRepository",
+    "ScopeFact",
+    "SemanticRepository",
+    "SnapshotBoundSourceError",
+]

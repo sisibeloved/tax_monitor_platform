@@ -217,7 +217,7 @@ class QuarterlyRunService:
                 case_fingerprint(
                     context.company.company_code,
                     context.run.fiscal_year,
-                    context.run.quarter,
+                    cast(int, context.run.quarter),
                     detection.monitor_type.value,
                 )
                 for detection in alert_detections
@@ -942,7 +942,7 @@ def _case_ids_for_detections(
         case_fingerprint(
             company_code,
             run.fiscal_year,
-            run.quarter,
+            cast(int, run.quarter),
             detection.monitor_type.value,
         )
         for detection in (_by_monitor(detections)[monitor] for monitor in MONITOR_ORDER)
