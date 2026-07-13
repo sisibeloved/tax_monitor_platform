@@ -411,13 +411,48 @@ class ReviewAction(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
 
 class AuditEvent(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "audit_event"
-    __table_args__ = (Index("ix_audit_event_entity", "entity_type", "entity_id"),)
+    __table_args__ = (
+        CheckConstraint(
+            "filters_hash IS NULL OR length(filters_hash) = 64",
+            name="filters_hash_length",
+        ),
+        CheckConstraint("row_count IS NULL OR row_count >= 0", name="nonnegative_row_count"),
+        CheckConstraint(
+            "result IN ('SUCCEEDED', 'DENIED', 'FAILED')",
+            name="result",
+        ),
+        Index("ix_audit_event_entity", "entity_type", "entity_id"),
+        Index("ix_audit_event_actor_time", "actor", "occurred_at"),
+        Index("ix_audit_event_action_time", "action", "occurred_at"),
+    )
 
     entity_type: Mapped[str] = mapped_column(String(128), nullable=False)
     entity_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     actor: Mapped[str] = mapped_column(String(256), nullable=False)
+    actor_roles: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    company_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     correlation_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True), index=True)
+    request_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    batch_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True), index=True)
+    query_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    export_job_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    filters_hash: Mapped[str | None] = mapped_column(String(64))
+    row_count: Mapped[int | None] = mapped_column(Integer)
+    before_summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    after_summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    result: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'SUCCEEDED'")
+    )
+    reason_code: Mapped[str | None] = mapped_column(String(128))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

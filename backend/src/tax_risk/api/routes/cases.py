@@ -111,6 +111,8 @@ def list_risk_cases(
         )
         start = (page - 1) * page_size
         selected = semantic_rows[start : start + page_size]
+        request.state.audit_row_count = len(selected)
+        request.state.audit_company_ids = frozenset(row.company_id for row in selected)
         return RiskCaseListResponse(
             total=len(semantic_rows),
             page=page,
@@ -229,6 +231,8 @@ def list_risk_cases(
             )
             for risk_case, detection, company_code, company_name in quarterly_rows
         )
+    request.state.audit_row_count = len(items)
+    request.state.audit_company_ids = frozenset(item.company_id for item in items)
     return RiskCaseListResponse(
         total=total or 0,
         page=page,
@@ -255,6 +259,8 @@ def get_business_entertainment_case(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail="Not Found",
         ) from error
+    request.state.audit_row_count = 1
+    request.state.audit_company_ids = frozenset({detail.company_id})
     return BusinessEntertainmentCaseDetailResponse.model_validate(detail)
 
 
@@ -327,6 +333,8 @@ def apply_case_action(
             )
         )
         uow.session.flush()
+        request.state.audit_row_count = 1
+        request.state.audit_company_ids = frozenset({risk_case.company_id})
         response = RiskCaseActionResponse.model_validate(risk_case)
         uow.commit()
         return response

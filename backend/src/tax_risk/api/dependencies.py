@@ -42,7 +42,9 @@ def get_principal(
 
     provider = cast(PrincipalProvider | None, request.app.state.principal_provider)
     if provider is not None:
-        return provider(request)
+        principal = provider(request)
+        request.state.principal = principal
+        return principal
 
     settings = cast(Settings, request.app.state.settings)
     if settings.environment != "development" or not settings.development_principal_enabled:
@@ -59,7 +61,9 @@ def get_principal(
         _unauthenticated()
     try:
         payload = json.loads(development_principal)
-        return _parse_principal_payload(payload)
+        principal = _parse_principal_payload(payload)
+        request.state.principal = principal
+        return principal
     except (TypeError, ValueError, KeyError):
         _unauthenticated()
 
@@ -81,6 +85,16 @@ def require_group_tax(principal: Annotated[Principal, Depends(get_principal)]) -
 def require_case_writer(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
     try:
         DEFAULT_POLICY.require(principal, Action.PROCESS_COMPANY_RISK)
+    except AuthorizationDenied:
+        _forbidden()
+    return principal
+
+
+def require_audit_reader(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> Principal:
+    try:
+        DEFAULT_POLICY.require(principal, Action.READ_AUDIT)
     except AuthorizationDenied:
         _forbidden()
     return principal
@@ -159,6 +173,7 @@ __all__ = [
     "company_scope",
     "get_principal",
     "require_case_writer",
+    "require_audit_reader",
     "require_group_tax",
     "require_reader",
 ]

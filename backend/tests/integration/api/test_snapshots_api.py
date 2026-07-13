@@ -728,7 +728,11 @@ def test_snapshot_api_rejects_oversized_collections_before_database_queries(
 
     assert source_response.status_code == 422
     assert set_response.status_code == 422
-    assert statements == []
+    assert statements
+    assert all(
+        "audit_event" in statement or "set_config('app." in statement
+        for statement in statements
+    )
 
 
 def test_publish_missing_or_quality_drift_has_stable_http_errors(
