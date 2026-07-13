@@ -26,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from tax_risk.domain.cases import MonitorType
 from tax_risk.persistence.models import AuditTimestampMixin, Base, UUIDPrimaryKeyMixin
 
 
@@ -48,13 +49,6 @@ class MonitoringRunCompanyStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
-
-
-class MonitorType(StrEnum):
-    ACCRUAL_ACCURACY = "ACCRUAL_ACCURACY"
-    TAX_BURDEN = "TAX_BURDEN"
-    POTENTIAL_TAX_COST = "POTENTIAL_TAX_COST"
-    BUSINESS_ENTERTAINMENT = "BUSINESS_ENTERTAINMENT"
 
 
 class CalculationStatus(StrEnum):

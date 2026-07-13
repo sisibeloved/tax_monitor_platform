@@ -26,6 +26,17 @@ class InvalidCaseTransition(ValueError):
     """Raised when a case workflow transition is not permitted."""
 
 
+class MonitorType(StrEnum):
+    """Supported deterministic and semantic income-tax monitors."""
+
+    ACCRUAL_ACCURACY = "ACCRUAL_ACCURACY"
+    TAX_BURDEN = "TAX_BURDEN"
+    POTENTIAL_TAX_COST = "POTENTIAL_TAX_COST"
+    BUSINESS_ENTERTAINMENT = "BUSINESS_ENTERTAINMENT"
+    WELFARE = "WELFARE"
+    DONATION = "DONATION"
+
+
 _ALLOWED_TRANSITIONS: dict[CaseStatus, frozenset[CaseStatus]] = {
     CaseStatus.NEW: frozenset({CaseStatus.ASSIGNED}),
     CaseStatus.ASSIGNED: frozenset({CaseStatus.PENDING_COMPANY_CONFIRMATION}),
