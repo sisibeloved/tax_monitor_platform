@@ -20,5 +20,5 @@ test -s "${OUTPUT_DIR}/replay-report.json"
 test -s "${OUTPUT_DIR}/release-manifest.json"
 test -s "${OUTPUT_DIR}/release-signature.json"
 test -s "${OUTPUT_DIR}/signed-manifest.json"
+test -s "${OUTPUT_DIR}/previous-signed-manifest.json"
 "${PYTHON}" -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); assert d["verification_passed"] is True; assert d["signing_mode"] == "CI_EPHEMERAL_NOT_FOR_PRODUCTION"' "${OUTPUT_DIR}/signed-manifest.json"
-

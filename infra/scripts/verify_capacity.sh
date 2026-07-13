@@ -19,5 +19,4 @@ cd "${ROOT_DIR}/backend"
 
 test -s "${OUTPUT_DIR}/capacity-report.json"
 test -s "${OUTPUT_DIR}/capacity.xml"
-"${ROOT_DIR}/backend/.venv/bin/python" -c 'import json, pathlib, sys; d=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert d["company_count"] == 126; assert d["valid_company_success_rate"] >= 0.98; assert d["t_plus_2_passed"] is True' "${OUTPUT_DIR}/capacity-report.json"
-
+"${ROOT_DIR}/backend/.venv/bin/python" -c 'import json, pathlib, sys; d=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert d["profile"]["company_count"] == 126; assert d["checks"]["failure_isolation"]["success_rate"] >= 0.98; assert d["checks"]["t_plus_2"]["passed"] is True; assert d["production_ready"] is True' "${OUTPUT_DIR}/capacity-report.json"

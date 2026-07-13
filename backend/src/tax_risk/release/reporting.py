@@ -372,6 +372,44 @@ def write_ci_release_evidence(output_dir: Path, repository_root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    previous_manifest = manifest.model_copy(
+        update={
+            "candidate_version": "phase-4-local-previous",
+            "application_image_digest": (
+                f"sha256:{sha256(b'tax-risk-phase-4-local-previous-image').hexdigest()}"
+            ),
+        }
+    )
+    previous_envelope = envelope.model_copy(
+        update={
+            "manifest_sha256": previous_manifest.manifest_sha256,
+            "signature_base64": b64encode(
+                private_key.sign(bytes.fromhex(previous_manifest.manifest_sha256))
+            ).decode("ascii"),
+        }
+    )
+    Ed25519ManifestVerifier((trusted,), clock=lambda: evaluated_at).verify(
+        previous_manifest,
+        previous_envelope,
+    )
+    previous_signed_path = output_dir / "previous-signed-manifest.json"
+    previous_signed_path.write_text(
+        json.dumps(
+            {
+                "manifest": previous_manifest.model_dump(mode="json"),
+                "manifest_sha256": previous_manifest.manifest_sha256,
+                "signature": previous_envelope.model_dump(mode="json"),
+                "trusted_public_key": trusted.model_dump(mode="json"),
+                "signing_mode": "CI_EPHEMERAL_NOT_FOR_PRODUCTION",
+                "verification_passed": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (output_dir / "release-report.md").write_text(
         "\n".join(
             (
@@ -388,7 +426,13 @@ def write_ci_release_evidence(output_dir: Path, repository_root: Path) -> None:
         encoding="utf-8",
     )
 
-    required = (replay_path, manifest_path, signature_path, signed_path)
+    required = (
+        replay_path,
+        manifest_path,
+        signature_path,
+        signed_path,
+        previous_signed_path,
+    )
     if not replay.decision.approved or any(not path.is_file() or path.stat().st_size == 0 for path in required):
         raise RuntimeError("发布证据生成或回放门禁失败")
 

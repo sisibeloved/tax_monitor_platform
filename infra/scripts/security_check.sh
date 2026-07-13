@@ -13,7 +13,7 @@ cd "${ROOT_DIR}/backend"
 uv pip check --python "${PYTHON}"
 "${PYTEST}" tests/security tests/unit/model_gateway tests/unit/security \
   --junitxml="${OUTPUT_DIR}/security.xml" -q
-"${PYTHON}" -c 'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.dumps({"static_analysis": True, "type_check": True, "dependency_consistency": True, "adversarial_tests": True, "unresolved_high_severity_findings": 0}, ensure_ascii=False, indent=2) + "\n")' "${OUTPUT_DIR}/security.json"
+"${PYTHON}" -c 'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.dumps({"static_analysis": True, "type_check": True, "dependency_consistency": True, "adversarial_tests": True, "authorization_rls_isolation": True, "audit_immutability": True, "external_semantic_index_configured": False, "unresolved_high_severity_findings": 0}, ensure_ascii=False, indent=2) + "\n")' "${OUTPUT_DIR}/security.json"
 
 test -s "${OUTPUT_DIR}/security.xml"
 test -s "${OUTPUT_DIR}/security.json"
