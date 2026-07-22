@@ -229,23 +229,27 @@ def test_tax_burden_alert_boundaries_include_exact_five_percent_and_signed_zero(
 
 
 @pytest.mark.parametrize("revenue", ["0", "-1", "-0.00"])
-def test_nonpositive_revenue_only_makes_tax_burden_not_calculable(revenue: str) -> None:
+def test_nonpositive_revenue_sets_tax_burden_to_zero(revenue: str) -> None:
     result = calculate_quarterly(
         _inputs(
             cumulative_profit=_money("100"),
             cumulative_revenue=_money(revenue),
+            historical_average_tax_burden=Rate.from_fraction("0.08"),
             other_payables_accrual=_money("10"),
         )
     )
 
     assert result.accrual_status is CalculationStatus.CALCULATED
-    assert result.tax_burden_status is CalculationStatus.NOT_CALCULABLE
+    assert result.tax_burden_status is CalculationStatus.CALCULATED
     assert result.potential_status is CalculationStatus.CALCULATED
-    assert result.current_tax_burden is None
-    assert result.tax_burden_deviation is None
-    assert result.tax_burden_alert_flag is False
-    assert result.tax_burden_alert_code is None
-    assert result.not_calculated_reason == "REVENUE_NON_POSITIVE"
+    assert result.current_tax_burden == Decimal("0")
+    assert result.tax_burden_deviation == Decimal("-0.08")
+    assert result.tax_burden_alert_flag is True
+    assert result.tax_burden_alert_code == "TAX_BURDEN_LOW"
+    assert result.tax_burden_not_calculated_reason is None
+    assert result.not_calculated_reason is None
+    assert result.formula_substitution["current_tax_burden"] == Decimal("0")
+    assert result.formula_substitution["tax_burden_deviation"] == Decimal("-0.08")
     assert result.cumulative_tax_payable.amount == Decimal("25.00")
     assert result.potential_tax_payable.amount == Decimal("27.50")
 
@@ -412,7 +416,7 @@ def test_potential_only_overflow_does_not_hide_other_monitor_results() -> None:
     assert result.potential_not_calculated_reason == "AMOUNT_OVERFLOW"
 
 
-def test_monitor_specific_reasons_preserve_simultaneous_distinct_failures() -> None:
+def test_nonpositive_revenue_does_not_add_a_reason_to_other_monitor_failures() -> None:
     result = calculate_quarterly(
         _inputs(
             cumulative_profit=_money(str(PERSISTED_MAX)),
@@ -423,9 +427,11 @@ def test_monitor_specific_reasons_preserve_simultaneous_distinct_failures() -> N
     )
 
     assert result.accrual_status is CalculationStatus.CALCULATED
-    assert result.tax_burden_status is CalculationStatus.NOT_CALCULABLE
+    assert result.tax_burden_status is CalculationStatus.CALCULATED
     assert result.potential_status is CalculationStatus.FAILED
     assert result.accrual_not_calculated_reason is None
-    assert result.tax_burden_not_calculated_reason == "REVENUE_NON_POSITIVE"
+    assert result.current_tax_burden == Decimal("0")
+    assert result.tax_burden_deviation == Decimal("0")
+    assert result.tax_burden_not_calculated_reason is None
     assert result.potential_not_calculated_reason == "AMOUNT_OVERFLOW"
-    assert result.not_calculated_reason == "MULTIPLE_MONITOR_REASONS"
+    assert result.not_calculated_reason == "AMOUNT_OVERFLOW"

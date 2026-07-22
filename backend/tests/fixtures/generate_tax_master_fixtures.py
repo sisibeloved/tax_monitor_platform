@@ -12,6 +12,7 @@ HEADERS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -29,6 +30,7 @@ def _workbook(rows: list[tuple[object, ...]], destination: Path) -> None:
         worksheet.cell(row_number, 3).number_format = "yyyy-mm-dd"
         worksheet.cell(row_number, 4).number_format = "yyyy-mm-dd"
     worksheet["E3"].number_format = "0.00%"
+    worksheet["F3"].number_format = "0.00%"
     workbook.save(destination)
     workbook.close()
 
@@ -42,6 +44,7 @@ def main() -> None:
                 date(2026, 1, 1),
                 None,
                 "25%",
+                "20%",
                 "100000.00",
                 "9%",
             ),
@@ -51,6 +54,7 @@ def main() -> None:
                 date(2026, 4, 1),
                 date(2026, 12, 31),
                 0.25,
+                0.2,
                 0,
                 0.08,
             ),
@@ -65,6 +69,7 @@ def main() -> None:
                 date(2026, 1, 1),
                 date(2026, 6, 30),
                 "25%",
+                "20%",
                 0,
                 "9%",
             ),
@@ -74,6 +79,7 @@ def main() -> None:
                 date(2026, 6, 1),
                 None,
                 "25%",
+                "20%",
                 0,
                 "9%",
             ),

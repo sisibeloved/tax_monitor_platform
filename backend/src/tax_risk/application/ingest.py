@@ -239,7 +239,10 @@ class IngestService:
     def ingest_csv(self, batch_id: UUID, filename: str, payload: bytes) -> BatchView:
         checksum = sha256(payload).hexdigest()
         try:
-            return self._ingest_csv_transaction(batch_id, filename, payload, checksum)
+            adapter = self._adapter_factory(payload, self._batch_dataset_code(batch_id))
+            if adapter.checksum != checksum:
+                raise RuntimeError("adapter checksum does not match the uploaded file")
+            return self._ingest_adapter_transaction(batch_id, filename, adapter, checksum)
         except IngestApplicationError:
             raise
         except Exception as error:
@@ -250,11 +253,44 @@ class IngestService:
             self._audit_processing_failure(batch_id, filename, checksum)
             raise IngestProcessingError("ingest file processing failed") from error
 
-    def _ingest_csv_transaction(
+    def ingest_adapter(
         self,
         batch_id: UUID,
-        filename: str,
-        payload: bytes,
+        payload_ref: str,
+        adapter: BulkFileAdapter,
+    ) -> BatchView:
+        """Persist an already materialized adapter through the controlled ingest path."""
+
+        checksum = adapter.checksum
+        try:
+            return self._ingest_adapter_transaction(
+                batch_id,
+                payload_ref,
+                adapter,
+                checksum,
+            )
+        except IngestApplicationError:
+            raise
+        except Exception as error:
+            logger.exception(
+                "ingest_processing_failed",
+                extra={"event": "ingest_processing_failed", "batch_id": str(batch_id)},
+            )
+            self._audit_processing_failure(batch_id, payload_ref, checksum)
+            raise IngestProcessingError("ingest adapter processing failed") from error
+
+    def _batch_dataset_code(self, batch_id: UUID) -> str:
+        with self._uow_factory() as uow:
+            batch = uow.ingest.get_batch(batch_id)
+            if batch is None:
+                raise BatchNotFoundError(f"ingest batch {batch_id} was not found")
+            return batch.dataset_code
+
+    def _ingest_adapter_transaction(
+        self,
+        batch_id: UUID,
+        payload_ref: str,
+        adapter: BulkFileAdapter,
         checksum: str,
     ) -> BatchView:
         with self._uow_factory() as uow:
@@ -272,9 +308,6 @@ class IngestService:
                     f"batch {batch_id} cannot accept a file while {batch.status.value}"
                 )
 
-            adapter = self._adapter_factory(payload, batch.dataset_code)
-            if adapter.checksum != checksum:
-                raise RuntimeError("adapter checksum does not match the uploaded file")
             if isinstance(adapter, BusinessEntertainmentCsvAdapter) and (
                 batch.schema_version != adapter.schema_version
                 or batch.source_primary_key_definition
@@ -284,7 +317,7 @@ class IngestService:
                     "business-entertainment batch metadata does not match adapter contract"
                 )
             batch.status = IngestBatchStatus.VALIDATING
-            batch.payload_ref = filename
+            batch.payload_ref = payload_ref
             batch.checksum = checksum
             try:
                 adapter.validate_header()

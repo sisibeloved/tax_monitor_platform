@@ -31,6 +31,13 @@ from tax_risk.workers.exports import (
     default_export_service_factory,
     register_export_tasks,
 )
+from tax_risk.workers.income_tax_refund_writebacks import (
+    DELIVER_WRITEBACK_TASK,
+    DISPATCH_PENDING_WRITEBACKS_TASK,
+    INCOME_TAX_REFUND_WRITEBACK_QUEUE,
+    default_income_tax_refund_writeback_service_factory,
+    register_income_tax_refund_writeback_tasks,
+)
 
 
 def create_celery_app(settings: Settings | None = None) -> Celery:
@@ -41,9 +48,7 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         configure_structured_logging()
     visibility_timeout = resolved.celery_visibility_timeout_seconds
     # Eager work stays in-process, so its stored results should not require Redis.
-    result_backend = (
-        "cache+memory://" if resolved.celery_task_always_eager else resolved.redis_url
-    )
+    result_backend = "cache+memory://" if resolved.celery_task_always_eager else resolved.redis_url
     app = Celery(
         "tax_risk",
         broker=resolved.redis_url,
@@ -74,19 +79,30 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         task_routes={
             RUN_COMPANY_TASK: {"queue": QUARTERLY_QUEUE},
             SUMMARIZE_BATCH_TASK: {"queue": QUARTERLY_QUEUE},
-            RUN_BUSINESS_ENTERTAINMENT_COMPANY_TASK: {
-                "queue": BUSINESS_ENTERTAINMENT_QUEUE
-            },
+            RUN_BUSINESS_ENTERTAINMENT_COMPANY_TASK: {"queue": BUSINESS_ENTERTAINMENT_QUEUE},
             RUN_MONTHLY_SEMANTIC_COMPANY_TASK: {"queue": MONTHLY_SEMANTIC_QUEUE},
             SUMMARIZE_MONTHLY_SEMANTIC_TASK: {"queue": MONTHLY_SEMANTIC_QUEUE},
             RENDER_EXPORT_TASK: {"queue": EXPORT_QUEUE},
+            DELIVER_WRITEBACK_TASK: {"queue": INCOME_TAX_REFUND_WRITEBACK_QUEUE},
+            DISPATCH_PENDING_WRITEBACKS_TASK: {"queue": INCOME_TAX_REFUND_WRITEBACK_QUEUE},
         },
-        quarterly_task_max_retries=resolved.quarterly_task_max_retries,
-        quarterly_task_retry_backoff_seconds=(
-            resolved.quarterly_task_retry_backoff_seconds
+        beat_schedule=(
+            {
+                "dispatch-pending-income-tax-refund-writebacks": {
+                    "task": DISPATCH_PENDING_WRITEBACKS_TASK,
+                    "schedule": 60.0,
+                    "options": {"queue": INCOME_TAX_REFUND_WRITEBACK_QUEUE},
+                }
+            }
+            if resolved.lark_refund_writeback_enabled
+            else {}
         ),
+        quarterly_task_max_retries=resolved.quarterly_task_max_retries,
+        quarterly_task_retry_backoff_seconds=(resolved.quarterly_task_retry_backoff_seconds),
         runtime_environment=resolved.environment,
         worker_scope_secret=resolved.worker_scope_secret,
+        lark_refund_max_retries=resolved.lark_refund_max_retries,
+        lark_refund_dispatch_batch_size=1_000,
     )
     install_celery_context(app)
     return app
@@ -106,6 +122,10 @@ register_monthly_tasks(
     service_factory=default_monthly_service_factory,
 )
 register_export_tasks(app=celery_app, service_factory=default_export_service_factory)
+register_income_tax_refund_writeback_tasks(
+    app=celery_app,
+    service_factory=default_income_tax_refund_writeback_service_factory,
+)
 app = celery_app
 
 __all__ = ["app", "celery_app", "create_celery_app"]

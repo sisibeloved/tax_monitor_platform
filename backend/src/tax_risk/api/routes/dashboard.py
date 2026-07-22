@@ -39,6 +39,7 @@ router = APIRouter(tags=["dashboard"])
 _ZERO_AMOUNT = Decimal("0.000000000000")
 _QUARTERLY_MONITOR_TYPES = (
     MonitorType.ACCRUAL_ACCURACY,
+    MonitorType.DEFERRED_TAX_ACCURACY,
     MonitorType.TAX_BURDEN,
     MonitorType.POTENTIAL_TAX_COST,
 )

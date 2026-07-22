@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import select, text
 
 from tax_risk.application.quarterly_runs import (
+    APPROVED_QUARTERLY_RULE_VERSIONS,
     QuarterlyRunError,
     QuarterlyRunResult,
     QuarterlyRunService,
@@ -529,15 +530,14 @@ def _assert_snapshot_set_ready(
 def _assert_rule_ready(rule: RuleVersion | None, snapshot_set: SnapshotSet) -> None:
     if (
         rule is None
-        or rule.rule_code != "QUARTERLY_V1"
-        or rule.version != "phase-1-reviewed"
+        or APPROVED_QUARTERLY_RULE_VERSIONS.get(rule.rule_code) != rule.version
         or rule.status != VersionStatus.PUBLISHED
         or rule.effective_from > snapshot_set.period
         or (rule.effective_to is not None and rule.effective_to < snapshot_set.period)
     ):
         raise QuarterlyBatchError(
             "QUARTERLY_RULE_NOT_EFFECTIVE",
-            "batch must pin the fixed effective reviewed QUARTERLY_V1 rule",
+            "batch must pin a fixed effective reviewed quarterly rule",
         )
     try:
         assert_approved_quarterly_rule_manifest(rule)

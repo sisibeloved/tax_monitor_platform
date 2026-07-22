@@ -20,6 +20,13 @@ class CalculationStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class DeferredTaxBaseFormula(StrEnum):
+    """Versioned deferred-tax base formulas retained for deterministic replay."""
+
+    LOSS_PLUS_PROFIT = "LOSS_PLUS_PROFIT"
+    LOSS_MINUS_PROFIT = "LOSS_MINUS_PROFIT"
+
+
 @dataclass(frozen=True, slots=True)
 class QuarterlyInputs:
     cumulative_profit: Money
@@ -71,6 +78,44 @@ class QuarterlyInputs:
             raise TypeError("historical_average_tax_burden must be Rate")
 
 
+@dataclass(frozen=True, slots=True)
+class DeferredTaxInputs:
+    cumulative_profit: Money
+    loss_carryforward: Money
+    deferred_tax_rate: Rate
+    sap_cumulative_deferred_tax_expense: Money
+
+    def __post_init__(self) -> None:
+        money_fields = (
+            "cumulative_profit",
+            "loss_carryforward",
+            "sap_cumulative_deferred_tax_expense",
+        )
+        reference: Money | None = None
+        for field in money_fields:
+            value = getattr(self, field)
+            if not isinstance(value, Money):
+                raise TypeError(f"{field} must be Money")
+            if not _fits_database_amount(value.amount):
+                raise ValueError(f"{field} must fit NUMERIC(38, 12)")
+            if reference is None:
+                reference = value
+                continue
+            if value.currency != reference.currency:
+                raise ValueError("deferred tax money inputs must use one currency")
+            if value.scale != reference.scale:
+                raise ValueError("deferred tax money inputs must use one amount scale")
+        assert reference is not None
+        if re.fullmatch(r"[A-Z]{3}", reference.currency) is None:
+            raise ValueError("deferred tax input currency must use three uppercase letters")
+        if reference.scale > 12:
+            raise ValueError("deferred tax input amount scale must not exceed 12")
+        if self.loss_carryforward.amount < Decimal("0"):
+            raise ValueError("loss_carryforward must be non-negative")
+        if not isinstance(self.deferred_tax_rate, Rate):
+            raise TypeError("deferred_tax_rate must be Rate")
+
+
 FormulaValue: TypeAlias = Decimal | str | int | None
 
 
@@ -103,6 +148,21 @@ class QuarterlyResult:
     accrual_not_calculated_reason: str | None
     tax_burden_not_calculated_reason: str | None
     potential_not_calculated_reason: str | None
+    not_calculated_reason: str | None
+    formula_substitution: Mapping[str, FormulaValue]
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredTaxResult:
+    currency: str
+    amount_scale: int
+    rounding_mode: str
+    status: CalculationStatus
+    deferred_tax_base: Money | None
+    system_cumulative_deferred_tax: Money | None
+    current_year_deferred_tax_adjustment: Money | None
+    alert_flag: bool
+    alert_code: str | None
     not_calculated_reason: str | None
     formula_substitution: Mapping[str, FormulaValue]
 
@@ -174,11 +234,13 @@ def calculate_quarterly(inputs: QuarterlyInputs) -> QuarterlyResult:
         tax_burden_alert_code = None
         tax_burden_reason = "AMOUNT_OVERFLOW"
     elif inputs.cumulative_revenue.amount <= Decimal("0"):
-        current_tax_burden = None
-        tax_burden_deviation = None
-        tax_burden_status = CalculationStatus.NOT_CALCULABLE
-        tax_burden_alert_code = None
-        tax_burden_reason = "REVENUE_NON_POSITIVE"
+        current_tax_burden = Decimal("0")
+        tax_burden_deviation = (
+            current_tax_burden - inputs.historical_average_tax_burden.value
+        )
+        tax_burden_status = CalculationStatus.CALCULATED
+        tax_burden_alert_code = _tax_burden_alert(tax_burden_deviation)
+        tax_burden_reason = None
     else:
         try:
             current_tax_burden, tax_burden_deviation = _tax_burden(
@@ -302,6 +364,86 @@ def calculate_quarterly(inputs: QuarterlyInputs) -> QuarterlyResult:
     )
 
 
+def calculate_deferred_tax(
+    inputs: DeferredTaxInputs,
+    *,
+    base_formula: DeferredTaxBaseFormula = DeferredTaxBaseFormula.LOSS_MINUS_PROFIT,
+) -> DeferredTaxResult:
+    """Calculate the cumulative deferred-tax target and required adjustment."""
+
+    if not isinstance(inputs, DeferredTaxInputs):
+        raise TypeError("calculate_deferred_tax requires DeferredTaxInputs")
+    if not isinstance(base_formula, DeferredTaxBaseFormula):
+        raise TypeError("base_formula must be a DeferredTaxBaseFormula")
+
+    raw_base = (
+        inputs.loss_carryforward + inputs.cumulative_profit
+        if base_formula is DeferredTaxBaseFormula.LOSS_PLUS_PROFIT
+        else inputs.loss_carryforward - inputs.cumulative_profit
+    )
+    raw_system_cumulative = (raw_base * inputs.deferred_tax_rate).quantized()
+    raw_adjustment = (
+        raw_system_cumulative - inputs.sap_cumulative_deferred_tax_expense
+    ).quantized()
+
+    base_is_persistable = _fits_database_amount(raw_base.amount)
+    system_is_persistable = base_is_persistable and _fits_database_amount(
+        raw_system_cumulative.amount
+    )
+    adjustment_is_persistable = system_is_persistable and _fits_database_amount(
+        raw_adjustment.amount
+    )
+    if adjustment_is_persistable:
+        status = CalculationStatus.CALCULATED
+        reason = None
+        if raw_adjustment.amount > Decimal("0"):
+            alert_code = "DEFERRED_TAX_TO_ACCRUE"
+        elif raw_adjustment.amount < Decimal("0"):
+            alert_code = "DEFERRED_TAX_TO_REVERSE"
+        else:
+            alert_code = None
+    else:
+        status = CalculationStatus.FAILED
+        reason = "AMOUNT_OVERFLOW"
+        alert_code = None
+
+    formula_substitution: Mapping[str, FormulaValue] = MappingProxyType(
+        {
+            "currency": inputs.cumulative_profit.currency,
+            "amount_scale": inputs.cumulative_profit.scale,
+            "cumulative_profit": inputs.cumulative_profit.amount,
+            "loss_carryforward": inputs.loss_carryforward.amount,
+            "deferred_tax_rate": inputs.deferred_tax_rate.value,
+            "sap_cumulative_deferred_tax_expense": (
+                inputs.sap_cumulative_deferred_tax_expense.amount
+            ),
+            "deferred_tax_base_formula": base_formula.value,
+            "deferred_tax_base": raw_base.amount,
+            "system_cumulative_deferred_tax": raw_system_cumulative.amount,
+            "current_year_deferred_tax_adjustment": raw_adjustment.amount,
+            "rounding_mode": "ROUND_HALF_UP",
+        }
+    )
+
+    return DeferredTaxResult(
+        currency=inputs.cumulative_profit.currency,
+        amount_scale=inputs.cumulative_profit.scale,
+        rounding_mode="ROUND_HALF_UP",
+        status=status,
+        deferred_tax_base=raw_base if base_is_persistable else None,
+        system_cumulative_deferred_tax=(
+            raw_system_cumulative if system_is_persistable else None
+        ),
+        current_year_deferred_tax_adjustment=(
+            raw_adjustment if adjustment_is_persistable else None
+        ),
+        alert_flag=alert_code is not None,
+        alert_code=alert_code,
+        not_calculated_reason=reason,
+        formula_substitution=formula_substitution,
+    )
+
+
 def _floor_at_zero(value: Money) -> Money:
     if value.amount > Decimal("0"):
         return value
@@ -376,7 +518,11 @@ def _reason_summary(*reasons: str | None) -> str | None:
 
 __all__ = [
     "CalculationStatus",
+    "DeferredTaxBaseFormula",
+    "DeferredTaxInputs",
+    "DeferredTaxResult",
     "QuarterlyInputs",
     "QuarterlyResult",
+    "calculate_deferred_tax",
     "calculate_quarterly",
 ]

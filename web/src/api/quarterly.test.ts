@@ -37,8 +37,10 @@ function riskCase(index: number) {
     input_amount: "700000.000000000000",
     result_amount: "725000.000000000000",
     difference_amount: "25000.000000000000",
+    rate_value: "0.250000000000",
     tax_burden_rate: null,
     tax_burden_deviation: null,
+    formula_substitution: {},
     not_calculated_reason: null,
     alert_code: "UNDER_ACCRUED",
     risk_direction: "UNDER",
@@ -84,6 +86,7 @@ describe("quarterly paginated API", () => {
             amount_scale: 2,
             monitoring_type_counts: {
               ACCRUAL_ACCURACY: 105,
+              DEFERRED_TAX_ACCURACY: 105,
               TAX_BURDEN: 105,
               POTENTIAL_TAX_COST: 105,
             },
@@ -147,6 +150,7 @@ describe("quarterly paginated API", () => {
             amount_scale: 2,
             monitoring_type_counts: {
               ACCRUAL_ACCURACY: 0,
+              DEFERRED_TAX_ACCURACY: 0,
               TAX_BURDEN: 0,
               POTENTIAL_TAX_COST: 0,
             },

@@ -8,6 +8,7 @@ const MONITOR_LABELS: Readonly<
   Record<RiskCaseItem["monitoring_type"], string>
 > = {
   ACCRUAL_ACCURACY: "所得税计提准确性",
+  DEFERRED_TAX_ACCURACY: "递延所得税计提/转回准确性",
   TAX_BURDEN: "累计税负率异常",
   POTENTIAL_TAX_COST: "潜在风险估算",
 };
@@ -19,7 +20,11 @@ const DIRECTION_LABELS: Readonly<Record<string, string>> = {
   LOW: "偏低",
   INCREASE: "增加",
   DECREASE: "减少",
+  ACCRUE: "应计提",
+  REVERSE: "应转回",
 };
+
+const HIGH_RISK_DIRECTIONS = new Set(["UNDER", "INCREASE", "ACCRUE"]);
 
 const STATUS_LABELS: Readonly<Record<RiskCaseItem["status"], string>> = {
   NEW: "待处理",
@@ -56,6 +61,32 @@ function renderValue(
   );
 }
 
+function renderDeferredMoney(item: RiskCaseItem, key: string): string {
+  if (
+    item.monitoring_type !== "DEFERRED_TAX_ACCURACY" ||
+    item.calculation_status !== "CALCULATED"
+  ) {
+    return "—";
+  }
+  const value = item.formula_substitution?.[key];
+  return formatMoney(
+    typeof value === "string" ? value : null,
+    item.currency,
+    item.amount_scale,
+  );
+}
+
+function renderDeferredRate(item: RiskCaseItem): string {
+  if (
+    item.monitoring_type !== "DEFERRED_TAX_ACCURACY" ||
+    item.calculation_status !== "CALCULATED"
+  ) {
+    return "—";
+  }
+  const value = item.formula_substitution?.deferred_tax_rate;
+  return formatPercent(typeof value === "string" ? value : item.rate_value);
+}
+
 export interface QuarterlyRunTableProps {
   items: RiskCaseItem[];
   loading?: boolean;
@@ -87,27 +118,40 @@ export function QuarterlyRunTable({
       title: "方向",
       dataIndex: "risk_direction",
       render: (value: string) => (
-        <Tag
-          color={value === "UNDER" || value === "INCREASE" ? "red" : "orange"}
-        >
+        <Tag color={HIGH_RISK_DIRECTIONS.has(value) ? "red" : "orange"}>
           {DIRECTION_LABELS[value] ?? value}
         </Tag>
       ),
     },
     {
-      title: "实际值",
+      title: "账面/SAP值",
       key: "actual",
       render: (_, item) => renderValue(item, "input_amount"),
     },
     {
-      title: "应计/测算值",
+      title: "系统测算值",
       key: "expected",
       render: (_, item) => renderValue(item, "result_amount"),
     },
     {
-      title: "差异",
+      title: "差异/应计提转回",
       key: "difference",
       render: (_, item) => renderValue(item, "difference_amount"),
+    },
+    {
+      title: "可弥补以前年度亏损",
+      key: "loss_carryforward",
+      render: (_, item) => renderDeferredMoney(item, "loss_carryforward"),
+    },
+    {
+      title: "损益表累计利润总额",
+      key: "cumulative_profit",
+      render: (_, item) => renderDeferredMoney(item, "cumulative_profit"),
+    },
+    {
+      title: "递延所得税税率",
+      key: "deferred_tax_rate",
+      render: (_, item) => renderDeferredRate(item),
     },
     {
       title: "状态",
@@ -146,7 +190,7 @@ export function QuarterlyRunTable({
         loading={loading}
         pagination={false}
         locale={{ emptyText: "当前期间无风险案件" }}
-        scroll={{ x: 1040 }}
+        scroll={{ x: 1520 }}
       />
     </section>
   );

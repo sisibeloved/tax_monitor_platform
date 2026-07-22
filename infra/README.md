@@ -176,11 +176,12 @@ curl -fsS -X POST "$WEB_URL/api/v1/operations/runs/$RUN_ID/retry" \
 ```bash
 docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f \
   api worker-quarterly worker-business-entertainment worker-monthly-semantic \
-  worker-exports web
+  worker-exports worker-income-tax-refund-writeback web
 mkdir -p artifacts/logs
 docker compose --env-file infra/.env -f infra/docker-compose.yml logs --no-color --since=24h \
   postgres database-roles redis migrate api worker-quarterly \
-  worker-business-entertainment worker-monthly-semantic worker-exports web \
+  worker-business-entertainment worker-monthly-semantic worker-exports \
+  worker-income-tax-refund-writeback web \
   > artifacts/logs/platform-stack.log
 ```
 

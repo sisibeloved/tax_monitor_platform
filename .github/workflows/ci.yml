@@ -34,6 +34,8 @@ jobs:
       ENVIRONMENT: test
     steps:
       - uses: actions/checkout@v4
+      - name: 清理历史验收制品
+        run: make clean-test-artifacts
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4
         with:
@@ -44,12 +46,20 @@ jobs:
         run: uv venv backend/.venv && uv pip install --python backend/.venv/bin/python -e 'backend[dev]'
       - name: 安装前端依赖和浏览器
         run: cd web && npm ci && npx playwright install --with-deps chromium
+      - name: Compose 生产拓扑门禁
+        run: make test-infra
       - name: 授权、隔离与安全门禁
         run: make verify-governance security-check
       - name: 数据库迁移门禁
         run: make verify-migrations
-      - name: 后端与前端单元验证
-        run: make test-backend && cd web && npm test -- --run && npm run build
+      - name: 后端单元覆盖率门禁
+        run: make test-backend-unit-coverage
+      - name: 退款回写聚焦覆盖率门禁
+        run: make test-backend-refund-coverage
+      - name: 后端完整回归
+        run: make test-backend
+      - name: 前端单元、构建与 Playwright 门禁
+        run: make test-web
       - name: 发布重放与容量门禁
         run: make verify-release verify-capacity
       - name: 上传验收证据
@@ -58,4 +68,82 @@ jobs:
         with:
           name: phase-4-acceptance
           path: artifacts/acceptance
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 计算候选镜像名称
+        run: |
+          echo "APPLICATION_IMAGE_NAME=$(echo "ghcr.io/${GITHUB_REPOSITORY}/tax-risk-backend" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+      - name: 登录 GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 配置 Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: 构建并推送提交绑定镜像
+        id: application_image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: ${{ env.APPLICATION_IMAGE_NAME }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: 签发镜像构建证明
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.APPLICATION_IMAGE_NAME }}
+          subject-digest: ${{ steps.application_image.outputs.digest }}
+          push-to-registry: true
+      - name: 记录 CI 镜像来源
+        env:
+          APPLICATION_IMAGE_DIGEST: ${{ steps.application_image.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          digest = os.environ["APPLICATION_IMAGE_DIGEST"]
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("构建步骤未返回规范 OCI 镜像摘要")
+          payload = {
+              "application_image_digest": digest,
+              "application_image_name": os.environ["APPLICATION_IMAGE_NAME"],
+              "application_image_reference": (
+                  f'{os.environ["APPLICATION_IMAGE_NAME"]}@{digest}'
+              ),
+              "ci_run_id": os.environ["GITHUB_RUN_ID"],
+              "source_commit": os.environ["GITHUB_SHA"],
+              "workflow": ".github/workflows/ci.yml",
+          }
+          output = Path("artifacts/acceptance/ci-image-provenance.json")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: 上传提交绑定镜像来源
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-image-provenance
+          path: artifacts/acceptance/ci-image-provenance.json
+          if-no-files-found: error
+          retention-days: 30
 

@@ -17,6 +17,18 @@ build/
 node_modules/
 dist/
 web/test-results/
+web/playwright-report/
+artifacts/acceptance/web-test-results/
+web/public/real-validation-latest.json
+artifacts/acceptance/backend-tiered.xml
+artifacts/acceptance/*full-validation*.png
+artifacts/acceptance/six-capability-*.png
+artifacts/acceptance/five-monitor-*.png
+artifacts/acceptance/five-monitor-smoke.json
+artifacts/acceptance/publish-size-check.tar.gz
+artifacts/legal_entity_metrics_latest.xlsx
+web/artifacts/
+web/test-results-external/
 
 # Local configuration
 .env

@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg)](backend/pyproject.toml)
 [![React](https://img.shields.io/badge/React-18-61DAFB.svg)](web/package.json)
 
-面向 100 家以上集团公司的所得税风险监测平台，将汇算清缴时集中发现的问题前移到月度或季度自动监测。平台按季度检查所得税计提、累计税负和潜在纳税调增成本，按月识别业务招待费、福利费和公益性捐赠疑似错入明细，形成风险清单、证据链和改账建议。
+面向 100 家以上集团公司的所得税风险监测平台，将汇算清缴时集中发现的问题前移到月度或季度自动监测。平台具备六项核心能力：按季度检查所得税计提、递延所得税计提/转回、累计税负和潜在纳税调增成本，按月识别业务招待费、福利费和公益性捐赠疑似错入明细，并在每年 3-12 月执行“所得税退税进度监控及入账科目准确性检查”，形成风险清单、证据链和改账建议。
 
 当前已完成第一至第四阶段的离线可开发实现。现有验收证据范围为 `LOCAL_SYNTHETIC`：可以证明技术门禁通过，但不能替代真实公司试点、生产 KMS/HSM 签名和集团税务、数据、安全、运维四方批准。
 
@@ -17,11 +17,29 @@
 | 监测环节 | 频率 | 核心判断 | 主要输出 |
 |---|---|---|---|
 | 所得税计提准确性 | 季度 | 系统测算本季度应计提额与 SAP 实际计提额是否一致 | 差异公司、应计提额、实际计提额、计提差异 |
+| 递延所得税计提/转回准确性 | 季度 | 系统累计递延所得税费用与 SAP 累计已计提的递延所得税费用是否一致 | 应计提或转回公司、本年应计提/转回额、亏损、累计利润、SAP 累计已计提额 |
 | 累计税负率异常 | 季度 | 当年累计税负率与线下表维护的前三个完整年度平均税负率偏离绝对值是否达到 5% | 异常公司、当年税负率、历史平均税负率、偏离度 |
 | 潜在纳税调增成本 | 季度 | 其他应付款暂估与合思无票报销形成的潜在调增是否产生所得税成本 | 潜在调增金额、潜在应纳税额、潜在税务成本 |
 | 纳税调增科目准确性 | 月度 | 业务招待费、福利费和公益性捐赠明细是否错入当前科目 | 疑似错入明细、证据、置信度、改账建议、复核任务 |
+| 所得税退税进度监控及入账科目准确性检查 | 每年 3-12 月每月 | 退税所属年 N 的应退金额是否在扫描年 N+1 的 SAP 单条贷方未冲销明细中唯一等额命中，且命中科目是否为所得税费用 | 已退税公司清单、未退税公司清单、所得税退税金额、所得税退税入账科目 |
 
-税率、可弥补以前年度亏损和前三个完整年度平均税负率均来自受控线下表，平台只按公司和有效期匹配，不自行判断税率或重新计算历史平均税负率。累计分红金额取 SAP 账上收到分红的金额。
+适用税率、递延所得税税率、可弥补以前年度亏损和前三个完整年度平均税负率均来自受控线下表，平台只按公司和有效期匹配，不自行判断税率或重新计算历史平均税负率。递延所得税税率是独立的公司级主数据字段，不默认等同于适用税率。累计分红金额取 SAP 账上收到分红的金额。
+
+本年累计所得税税负率原则上按“本年累计应纳税额÷损益表累计营业收入”计算；损益表累计营业收入小于或等于0时，税负率直接取0，并继续与历史平均税负率计算偏离度和判断是否示警。
+
+季度递延所得税准确性检查采用以下口径，不对计税基础取零，并保留用户确认的“可弥补以前年度亏损 + 损益表累计利润总额”加法语义：
+
+```text
+系统累计递延所得税费用
+=（可弥补以前年度亏损 + 损益表累计利润总额）
+  × 递延所得税税率
+
+本年应计提/转回的递延所得税费用
+= 系统累计递延所得税费用
+- SAP累计已计提的递延所得税费用
+```
+
+本年应计提/转回额按公司账簿币种精度四舍五入后不为0即示警；正数表示应计提，负数表示应转回。SAP 累计已计提递延所得税费用按科目余额表 `1811030000`（递延所得税资产-可抵扣亏损）的期末余额原值取数，不做符号翻转；科目余额表查询成功且未找到该科目时，视为该公司未计提并取0。整个接口调用失败、响应不合法或未导入时仍按缺数据阻断。
 
 季度潜在税务成本采用以下口径，保留加号语义：
 
@@ -53,7 +71,7 @@ SAP及线下税务主数据
 → 数据质量和有效期校验
 → 冻结公司快照集
 → 确定性公式逐公司测算
-→ 计提/税负/潜在成本风险事项
+→ 当期所得税计提/递延所得税/税负/潜在成本风险事项
 → 公司复核、处理与审计留痕
 ```
 
@@ -76,14 +94,32 @@ SAP凭证及OA/合思业务证据
 
 福利费只有在“累计福利费－累计工资薪金×14%＞0”时进入明细检查；公益性捐赠只有在“累计公益性捐赠－累计利润总额×12%＞0”时进入明细检查。
 
+### 所得税退税进度监控及入账科目准确性检查
+
+```text
+飞书应退税公司及金额（退税所属年 N）
+→ 扫描年 N+1 的 3-12 月按月拉取 SAP 候选凭证行
+→ 按公司币种和 amount scale 使用 ROUND_HALF_UP 量化
+→ 仅在贷方、未冲销的单条明细中完全等额匹配
+→ 到账状态、入账科目结论、风险案件和幂等回写 outbox
+```
+
+- 没有等额候选时为 `NOT_RECEIVED`，不示警且次月继续扫描；
+- 唯一命中所得税费用时为 `RECEIVED + CORRECT`，停止后续扫描并安排回写“已退税”；
+- 唯一命中其他收益时为 `RECEIVED + WRONG_ACCOUNT`，停止后续扫描、安排回写并生成 `REFUND_BOOKED_TO_WRONG_ACCOUNT` 风险；
+- 多个等额候选时为 `AMBIGUOUS`，不自动回写、不生成科目错误案且次月继续扫描。
+
+下月是否跳过以平台数据库中“公司 + 退税所属年”的本地 `RECEIVED` 状态为准，飞书状态只是异步同步结果，不能替代平台主事实。
+
 ## 🧪 代表性验收场景
 
 ### 季度标准公司
 
-标准样例使用累计利润总额 1,000 万元、收到分红 100 万元、公允价值变动损益 50 万元、可弥补亏损 200 万元、税率 25%、累计营业收入 5,000 万元和历史平均税负率 9%。预期结果为：
+标准样例使用累计利润总额 1,000 万元、收到分红 100 万元、公允价值变动损益 50 万元、可弥补亏损 200 万元、适用税率和递延所得税税率均为 25%、SAP 累计已计提递延所得税费用 280 万元、累计营业收入 5,000 万元和历史平均税负率 9%。预期结果为：
 
 - 本年累计应纳税额 162.50 万元；
 - 本季度应计提 72.50 万元，SAP 实际计提 70 万元，少计提 2.50 万元；
+- 系统累计递延所得税费用 300 万元，本年仍应计提 20 万元；
 - 当年累计税负率 3.25%，偏离度 -5.75%，触发税负偏低提示；
 - 潜在调增 170 万元，潜在应纳税额 205 万元，潜在税务成本 42.50 万元。
 
@@ -100,6 +136,8 @@ SAP凭证及OA/合思业务证据
 | 福利费：员工年度体检 | 当前科目合理 | 无需改账 |
 | 公益性捐赠：活动冠名及品牌露出 | 疑似错入 | 建议转广告宣传费 |
 | 公益性捐赠：无对价公益捐赠且材料完整 | 当前科目合理 | 无需改账 |
+
+退税验收至少覆盖无候选、唯一所得税费用、唯一其他收益、第一阶段零命中后的唯一应交税费、第一阶段优先级、飞书手工已退税停扫和多个等额候选；金额比较必须验证四舍五入边界、币种、scale、贷方及冲销标志，不能使用金额容差或多行求和替代单条完全等额。
 
 本地验收还覆盖 105 家公司批次中 103 家成功、2 家因受控主数据问题阻断，以及 126 家公司容量场景。完整样例和阈值见[第四阶段验收评分卡](docs/operations/acceptance-scorecard.md)。
 
@@ -167,10 +205,153 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 
 Web 默认地址为 `http://127.0.0.1:8080/`，API 为 `http://127.0.0.1:8000/`。本地固定身份只能用于隔离开发机；生产必须关闭开发身份并接入批准的 IdP。
 
+## SAP 利润表 DGC 接口
+
+平台按真实接口 `https://116.63.221.181/post/sapincome` 拉取 SAP 利润表。默认使用 DGC AppKey/AppSecret 对完整请求体执行华为 APIG `SDK-HMAC-SHA256` 签名，并发送 `X-Sdk-Date`、`Authorization` 和 `x-Authorization`；IAM Token 方式仅作为显式兼容配置。连接器管理 `limitValue`、`offsetValue` 分页，默认每页 `15000` 条。认证拒绝、`DLM.4018` 及其他远端或响应格式错误会直接失败，不写入半批数据；IAM 模式遇到 HTTP 401/403 或 `DLM.4211` 时只刷新 Token 并重试一次。单页字节数、总记录数和最大页数均有硬上限，远端错误详情不会原样返回调用方。
+
+启用前在部署密钥管理和环境配置中提供以下值：
+
+```dotenv
+DGC_SAP_PROFIT_ENABLED=true
+DGC_SAP_PROFIT_API_URL=https://116.63.221.181/post/sapincome
+DGC_APP_KEY=<secret-store-injected-app-key>
+DGC_APP_SECRET=<secret-store-injected-app-secret>
+DGC_PAGE_SIZE=15000
+DGC_MAX_RECORDS=100000
+DGC_MAX_PAGE_BYTES=10485760
+DGC_MAX_TOTAL_BYTES=67108864
+DGC_TLS_SERVER_NAME=dgc.huaweicloud.com
+DGC_TLS_PINNED_CERTIFICATE_SHA256=AF3850E5ACC206D12082BDD32E94AD4675F3AD7AB0AE23A247053DE9ED2883BF
+DGC_SAP_PROFIT_FIELD_MAP={"client":"mandt","company_code":"bukrs","company_name":"companyname","fiscal_year":"gjahr","fiscal_period":"monat","ledger":"rldnr","line_number":"hs","line_item":"ztext","current_month_amount":"nmhsl","year_to_date_amount":"nyhsl"}
+DGC_SAP_PROFIT_METRIC_MAP={"cumulative_profit":["利润总额","四、利润总额","四、利润总额（损失以“－”号填列）","四、利润总额(损失以\"-\"号填列)"],"fair_value_change":["公允价值变动收益","公允价值变动损益","公允价值变动收益（损失以“－”号填列）","公允价值变动收益(损失以\"-\"号填列)"],"cumulative_revenue":["一、营业总收入","营业收入"]}
+DGC_SAP_PROFIT_LEDGER=0L
+DGC_SAP_TRIAL_BALANCE_ENABLED=false
+DGC_SAP_TRIAL_BALANCE_API_URL=https://116.63.221.181/fin/trial_balance
+DGC_SAP_TRIAL_BALANCE_APP_KEY=<secret-store-injected-app-key>
+DGC_SAP_TRIAL_BALANCE_APP_SECRET=<secret-store-injected-app-secret>
+DGC_SAP_TRIAL_BALANCE_PAGE_SIZE=1000
+DGC_SAP_ACCOUNT_BALANCE_ENABLED=false
+DGC_SAP_ACCOUNT_BALANCE_API_URL=https://116.63.221.181/post/sapaccountbalance
+DGC_SAP_ACCOUNT_BALANCE_APP_KEY=<secret-store-injected-app-key>
+DGC_SAP_ACCOUNT_BALANCE_APP_SECRET=<secret-store-injected-app-secret>
+DGC_SAP_ACCOUNT_BALANCE_PAGE_SIZE=15000
+DGC_HESI_REIMBURSEMENT_ENABLED=false
+DGC_HESI_REIMBURSEMENT_API_URL=https://116.63.221.181/post/hesimingxi
+DGC_HESI_REIMBURSEMENT_APP_KEY=<secret-store-injected-app-key>
+DGC_HESI_REIMBURSEMENT_APP_SECRET=<secret-store-injected-app-secret>
+DGC_HESI_REIMBURSEMENT_PAGE_SIZE=15000
+DGC_HESI_REIMBURSEMENT_FIELD_MAP={"company_code":"company_code","approval_completed_at":"approval_completed_at","expense_type_code":"expense_type_code","expense_type_amount":"expense_type_amount"}
+DGC_HESI_INVOICE_ENABLED=false
+DGC_HESI_INVOICE_API_URL=https://116.63.221.181/post/hesiinvoice
+DGC_HESI_INVOICE_APP_KEY=<secret-store-injected-app-key>
+DGC_HESI_INVOICE_APP_SECRET=<secret-store-injected-app-secret>
+DGC_HESI_INVOICE_PAGE_SIZE=15000
+DGC_HESI_INVOICE_FIELD_MAP={"company_code":"company_code","approval_completed_at":"approval_completed_at","expense_type_code":"expense_type_code","invoice_approved_amount":"invoice_approved_amount"}
+DGC_SAP_DIVIDEND_DETAIL_ENABLED=false
+DGC_SAP_DIVIDEND_DETAIL_API_URL=https://116.63.221.181/post/settlement_adjustment
+DGC_SAP_DIVIDEND_DETAIL_APP_KEY=<secret-store-injected-app-key>
+DGC_SAP_DIVIDEND_DETAIL_APP_SECRET=<secret-store-injected-app-secret>
+DGC_SAP_DIVIDEND_DETAIL_PAGE_SIZE=15000
+LARK_REFUND_WRITEBACK_ENABLED=false
+LARK_REFUND_BASE_URL=https://hailiang.feishu.cn/base/A1Kwb4tkZaZdE2s3C2dcG49Fn2d
+LARK_REFUND_API_BASE_URL=https://open.feishu.cn
+LARK_REFUND_BASE_TOKEN=A1Kwb4tkZaZdE2s3C2dcG49Fn2d
+LARK_REFUND_TABLE_ID=tbl4PCNdcl4BYzgZ
+LARK_REFUND_COMPANY_CODE_FIELD_ID=fld5uBjB9R
+LARK_REFUND_STATUS_FIELD_ID=fld4HLnqDk
+LARK_REFUND_APP_ID=<secret-store-injected-app-id>
+LARK_REFUND_APP_SECRET=<secret-store-injected-app-secret>
+LARK_REFUND_TIMEOUT_SECONDS=30
+LARK_REFUND_PAGE_SIZE=100
+LARK_REFUND_MAX_RETRIES=3
+LARK_REFUND_WORKER_CONCURRENCY=2
+```
+
+生产外部取数默认使用受控线程池和 Redis 防击穿缓存。并发上限、TTL、锁租约、重试策略、失败语义及监控指标见 [并行取数与 Redis 缓存运维](docs/operations/parallel-external-fetch.md)。真实接口失败不会回退到模拟数据或过期缓存，真实空结果按 `REAL/NO_DATA` 处理。
+
+所得税退税状态回写配置默认关闭。目标已切换为飞书多维表“法人主体指标汇总表”，数据表为“法人主体所得税税负率&利润率等”。季度主数据按 `fldgeRGkKv`（所得税税率）、`fld3zvDri3`（递延所得税税率）、`fld70tcRFh`（可弥补亏损额合计）和 `fld5c2IX6N`（3年平均税负率）读取，税率使用 Base 返回的 0-1 小数口径；仅处理 `fld5uBjB9R`（公司代码）非空且唯一的记录，空代码记录排除。退税清单使用 `fld6bBYJeP`（2025年是否涉及退税）和 `fld5KnsfqZ`（2025年应退税金额），并只更新 `fld4HLnqDk`（是否已收到退税）为“已退税”。零条或多条精确匹配均失败，不猜测记录；远端已是“已退税”时按幂等成功处理。App ID/App Secret 必须由部署密钥管理注入，不得提交到仓库，且只向专用 `worker-income-tax-refund-writeback` 进程提供。
+
+平台数据库和幂等 outbox 仍是主事实：扫描事务先持久化 `PENDING` 回写记录，专用 Worker 再获取租户令牌、查找 Base 记录并更新状态；网络或远端错误记录为 `FAILED` 并按有限次数重试。启用前须确认飞书应用已发布、拥有该多维表的记录读取/编辑权限，并被授权访问目标 Base。金额匹配仍按公司币种、`scale=2` 和 `ROUND_HALF_UP` 执行，该精度口径须经业务验收。
+
+利润表、科目余额表和汇总科目发生额接口不足以执行退税单条明细匹配。“汇算清缴相关科目明细”虽已提供凭证号、借贷标志、科目和摘要，但仍缺行项目唯一标识、过账日期和冲销标志。所得税费用科目范围已经业务表明确为 `6801010000/6801020000/6801030000`，平台只按代码匹配，不根据科目名称猜测；生产启用前仍必须取得完整 SAP 凭证行接口合同。由于尚未确认每月具体运行日，当前只允许通过幂等 API 或外部调度在 3-12 月触发，不内置未经确认的日历计划。
+
+科目发生额表使用独立 AppKey/AppSecret。本地配置时在受 Git 忽略的 `infra/.env` 中填写密钥，在入库连接器完成前保持启用开关为 `false`，不要把密钥写入 `infra/env.example`。接口分页大小按合同默认值配置为 `1000`，`offsetValue` 从 `0` 开始并由后续连接器管理。
+
+科目余额表接口地址为 `https://116.63.221.181/post/sapaccountbalance`，使用独立 AppKey/AppSecret。Body 参数为可选字符串 `company_code`、必填字符串 `fiscal_year/fiscal_period` 以及分页参数 `limitValue/offsetValue`；季度导入将月份规范为三位（如 `006`）。真实响应合同固定为 `account_code/account_name/closing_balance/company_code/company_name/credit_amount/debit_amount/fiscal_period/fiscal_year/input_tax_process_method/net_amount/opening_balance/sfkf` 共13个字段，并严格校验公司、年度和期间作用域。其他应付款暂估只取工作簿列示的十个 `224105` 科目：逐行期末余额大于等于0时取0，小于0时乘以-1，再精确求和；目标科目完全缺失时仍保持缺数据。SAP累计已计提递延所得税费用只取 `1811030000` 的期末余额原值；查询成功但未找到该科目时生成有来源校验和的正零指标。受控导入端点为 `POST /api/v1/ingest-batches/dgc-sap-account-balance`。
+
+合思报销单明细接口地址为 `https://116.63.221.181/post/hesimingxi`，使用独立 AppKey/AppSecret。Body 参数 `company_code`（公司代码编码）和 `submit_date`（提交时间）可选，提供时不可为空；`limitValue` 和 `offsetValue` 必填并由连接器按 `15000` 的默认页大小自动管理。当前按原始明细接入，字段合同通过真实查询验证后再完成业务映射。
+
+“合思报销单发票查询”接口地址为 `https://116.63.221.181/post/hesiinvoice`，使用独立 AppKey/AppSecret。Body 参数 `company_code`（公司代码编码）可选，提供时不可为空；`limitValue` 和 `offsetValue` 必填并由连接器按 `15000` 的默认页大小自动管理。当前按原始发票数据接入，字段合同通过真实查询验证后再完成业务映射。
+
+合思无票报销金额按公司、本年1月1日至季度末的审批完成时间聚合。合思报销单与合思发票均排除以下费用类型编码：`CLF0101`、`CLF0102`、`CLF0103`、`CLF0117`、`CLF0118`、`CLF0119`、`CLF0120`、`CLF0126`、`CLF0130`、`CLF0131`、`F0507`、`F0508`、`F0605`、`F5409`、`F5724`、`F5725`、`F5809`、`F5811`、`F6309`。计算公式为 `max(符合条件的费用类型金额合计 - 符合条件的发票核准金额合计, 0)`，金额使用精确十进制；跨公司、日期或金额字段不合法时阻断，不补造指标。受控导入端点为 `POST /api/v1/ingest-batches/dgc-hesi-no-invoice`。两张表的真实返回字段合同尚未验证，默认字段映射只是逻辑占位，启用生产导入前必须按真实字段更新并通过接口验收。
+
+“发票明细”接口地址为 `https://116.63.221.181/post/writeoff`，使用独立 AppKey/AppSecret。Body 参数 `accounting_date`（入账日期）和 `comp`（公司代码）可选，提供时不可为空；`limitValue`和 `offsetValue` 必填并由连接器按 `15000` 的默认页大小自动管理。当前已完成独立配置、HTTPS 校验、签名分页和原始请求接线；因尚未提供返回字段合同，默认保持禁用，不做业务字段映射或入库。
+
+“汇算清缴相关科目明细”数据表接口地址为 `https://116.63.221.181/post/settlement_adjustment`，使用独立 AppKey/AppSecret。平台按公司和年度发送 `company`、`fiscal_year`，不向远端发送 `fiscal_period`；`limitValue`、`offsetValue` 由连接器以 `15000` 为默认页大小自动管理。平台导入参数 `through_period` 仅用于在完整年度响应中按 3、6、9、12 月截取季度累计，防止历史季度重跑混入后续月份。发布合同包含以下 15 个字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `company` | 公司代码 |
+| `companyname` | 公司名称 |
+| `fiscal_year` | 会计年度 |
+| `fiscal_period` | 会计期间 |
+| `voucher_no` | 凭证号 |
+| `header_text` | 头摘要 |
+| `detail_text` | 明细摘要 |
+| `amount_ksl` | 金额 KSL |
+| `gl_account` | 科目编码 |
+| `account_name` | 科目名称 |
+| `project_code` | 项目编码 |
+| `project_name` | 项目名称 |
+| `debit_credit_flag` | 借贷标志 |
+| `group_currency` | 集团货币 |
+| `original_system_doc_no` | 原始系统单据号 |
+
+真实 scoped 查询已确认稳定返回其中 13 个字段，即省略作为查询作用域的 `company` 和展示字段 `companyname`。平台仅在请求明确指定公司时接受该精确 13 字段形态并回填公司作用域；若上游返回其他缺失或额外字段则直接拒绝。发布版完整 15 字段响应仍受支持，并会额外校验返回公司与查询公司一致。
+
+累计分红取数仅保留 `gl_account` 精确等于 `6111010000`、`6111020000`、`6111030000`、`6111990000` 或 `6111150000`，且 `header_text`、`detail_text` 任一字段包含“分红”“股利”或“利润分配”的明细。累计分红金额按筛选后明细的 `sum(amount_ksl) * -1` 计算；`amount_ksl` 必须以 `Decimal` 解析和求和，并符合平台 `NUMERIC(38,12)` 金额范围，不得使用二进制浮点数，也不得再根据 `debit_credit_flag` 翻转符号，避免重复改变借贷方向。零结果统一规范为 `0`。
+
+其他收益发生额复用同一“汇算清缴相关科目明细”响应，仅保留 `6112010000`、`6112020000`、`6112040000` 三个科目，并按 `sum(amount_ksl) * -1` 计算；季度截止、精确小数、币种和响应作用域校验与累计分红一致。该聚合变量已经接入解析层，但当前接口仍缺少退税单条匹配所需的行项目唯一标识、过账日期和冲销标志，因此不能替代完整退税凭证行合同。
+
+所得税费用发生额同样复用“汇算清缴相关科目明细”，只保留 `6801010000`（当期所得税费用）、`6801020000`（递延所得税费用）、`6801030000`（以前年度所得税费用）。该变量按明细逐条计算：每条 `income_tax_expense_amount = amount_ksl * -1`，保留各自的凭证号、摘要、科目、期间和币种，不跨明细求和；单条 KSL 为0时规范为正零，零命中返回空明细。适配器先严格校验完整响应，再应用季度截止和科目过滤。该变量已接入解析层，但上述行项目唯一标识、过账日期和冲销标志缺口仍限制退税等额候选行的生产接线。
+
+接口只接受 HTTPS；明文 HTTP 会返回 `DLM.4474`。正式客户端使用此前利润表、发生额表和合思联调相同的固定证书方式：发送凭据前先核对叶证书 SHA-256 指纹，匹配后将该证书作为唯一信任锚，并使用 `dgc.huaweicloud.com` SNI 完成主机名校验。客户端不关闭 TLS 校验、不跟随重定向、不读取环境代理，并复用连接。证书指纹变化时会在发送 AppKey 签名请求前失败。
+
+受控导入端点为 `POST /api/v1/ingest-batches/dgc-sap-dividend-detail`。它先完成远端拉取、13/15 字段校验、季度截止过滤和币种校验，再创建批次并写入唯一的 `quarterly_metric/received_dividends` 行；零命中也写入有来源 checksum 和 scope 哈希的 `0`。外部部署仍默认关闭，只有在密钥、证书指纹、公司主数据和验收证据均已批准时才启用。
+
+实时联调已确认可选 Body 参数为 `company_code/fiscal_period/fiscal_year/gl_account_code/input_tax_process_method/sfkf`，必填分页参数为 `limitValue/offsetValue`。成功响应使用 `errCode=DLM.0` 和 `data.data` 行数组，列为 `company_code/company_name/fiscal_year/fiscal_period/gl_account_code/gl_account_name/bank_center_code/bank_account_number/cost_center_code/cost_center_name/profit_center_code/profit_center_name/internal_order_code/internal_order_name/business_area_code/business_area_name/customer_code/customer_name/vendor_code/vendor_name/asset_code/asset_name/rstgr/rstgr_name/input_tax_process_method/sfkf/total_debit_amount/total_credit_amount`。
+
+受控导入端点为 `POST /api/v1/ingest-batches/dgc-sap-trial-balance`。调用方按公司、年度和季度截止月份提交任务；平台只查询总账科目 `6801010000`，一次拉取该公司年度数据，不逐月重复请求。平台严格校验已发布的 28 个响应字段及公司、年度、科目作用域，再按截止月份将季度之前月份的 `total_debit_amount + total_credit_amount` 汇总为 `prior_quarter_current_tax`，将本季度三个月汇总为 `current_quarter_current_tax`。源金额符号原样参与加总，不按借贷方向二次翻转；空响应不补零，第一季度的“以前季度金额”在已有本季度源数据时记为有证据的 `0`。批次创建在远端拉取与完整校验之后，避免失败时写入半批数据。外部部署仍默认关闭。
+
+利润表变量使用 `nyhsl` 本年累计金额，并精确匹配“`四、利润总额(损失以"-"号填列)`”“`公允价值变动收益(损失以"-"号填列)`”和“`一、营业总收入`”；同时保留真实接口返回的全角项目名称及历史“营业收入”别名，以兼容 SAP 展示格式差异。汇算清缴相关科目明细中的可选摘要、项目及原始单据字段允许源接口返回 `null`，并在过滤前规范为空字符串；凭证、科目、期间、金额和币种等业务身份字段仍禁止为空。
+
+调用方提交受控批次元数据及 SAP 会计年度、期间和可选公司代码。平台将 `monat` 规范为两位并以对应月末作为批次期间，分页参数由连接器自动添加：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/ingest-batches/dgc-sap-profit \
+  -H 'Content-Type: application/json' \
+  -H 'X-Principal: <approved-principal>' \
+  -H 'X-Principal-Signature: <signature>' \
+  -d '{
+    "source_batch_key": "sap-profit-2026-q1",
+    "extraction_time": "2026-04-01T08:00:00Z",
+    "gjahr": "2026",
+    "monat": "03",
+    "bukrs": "C001",
+    "currency": "CNY",
+    "amount_scale": 2
+  }'
+```
+
+接口返回长表字段 `mandt/bukrs/companyname/gjahr/monat/rldnr/hs/ztext/nmhsl/nyhsl`。平台先按配置分类账精确过滤，再用 `ztext` 的配置标签映射 `cumulative_profit`、`fair_value_change`、`cumulative_revenue`；累计指标只读取 `nyhsl`，不读取本月金额 `nmhsl`。非目标项目被忽略，同一公司、期间、分类账和指标出现多行时整组拒绝，禁止静默求和。指定 `bukrs` 时，返回的其他公司也会被拒绝。
+
+规范化的 `gjahr/monat/bukrs` 查询参数 SHA-256 会写入批次幂等元数据和 `payload_ref`，同一批次键不能改用另一组参数。响应中的财年和期间仍由批次校验确认，禁止用调用方期间替代缺失源字段。缺少某项指标时不补零，后续快照质量门禁会阻断计算。分红、所得税计提、暂估及合思无票报销等其他必需指标仍须由各自受控数据源导入。内网 HTTPS 证书必须包含接口 IP 的有效 SAN，并由容器信任链验证；不得通过关闭 TLS 校验规避证书问题。
+
 ## ✅ 验证
 
 ```bash
 make test-backend
+make test-backend-tiered
 make test-web
 make verify-governance
 make security-check
@@ -180,6 +361,10 @@ make verify-capacity COMPANY_FIXTURE=126
 make verify-rollback
 make uat SNAPSHOT_SET=pilot-2026q2
 ```
+
+`make test-backend-tiered` 对已接入的外部数据源执行二级接口测试。每个数据源独立判断：接口地址与完整密钥均存在时必须调用真实接口并标记为 `REAL`；密钥完全缺失时使用确定性模拟接口并标记为 `MOCK`。真实接口超时、签名失败、协议错误或字段校验失败会直接使测试失败，禁止静默回退到模拟数据；真实接口成功返回空列表时标记为 `NO_DATA`，仍保留 `REAL` 来源。唯一的业务解释例外是专用科目发生额查询：公司、年度和总账科目 `6801010000` 作用域完整且真实返回空列表时，表示该公司未计提，平台生成有来源 checksum 和查询范围哈希的以前季度、本季度金额 `0`；其他接口的空结果仍不得补零。判级不依赖生产启用开关，进程环境变量优先于本地 `infra/.env`。终端和 `artifacts/acceptance/backend-tiered.xml` 都会记录数据源、`REAL/MOCK` 模式、`DATA/NO_DATA` 状态及记录数，不记录密钥。
+
+当前分级契约测试覆盖 SAP 利润表、SAP 科目发生额表、SAP 科目余额表、“汇算清缴相关科目明细”、合思报销单明细、合思报销单发票查询和发票明细。合思报销单明细的 `company_code` 与 `submit_date`、合思报销单发票查询的 `company_code` 仅在有值时发送，空字符串会在网络请求前被拒绝。
 
 所有脚本使用失败即退出，并检查 JSON 或 JUnit 制品是否存在且满足阈值。季度外部技术栈浏览器测试需要先注入唯一的 105 家公司验收数据；未配置真实外部 E2E 时会明确标记为跳过，不能计入生产证据。
 
@@ -191,7 +376,7 @@ curl -fsS http://127.0.0.1:8000/health/ready
 curl -fsS http://127.0.0.1:8000/metrics
 docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f \
   api worker-quarterly worker-business-entertainment worker-monthly-semantic \
-  worker-exports web
+  worker-exports worker-income-tax-refund-writeback web
 ```
 
 运维驾驶舱分别展示数据错误、技术失败和税务风险。`SnapshotSet.published_at` 是唯一数据就绪时间；公司成功提交完整结果后才写入 `company_output_ready_at`。数据或主数据阻断不得输出“无风险”，技术失败不得写入虚假输出就绪时间。

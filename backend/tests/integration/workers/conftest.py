@@ -26,6 +26,7 @@ METRICS: dict[str, Decimal] = {
     "current_quarter_current_tax": Decimal("0"),
     "other_payables_accrual": Decimal("100"),
     "hesi_no_invoice": Decimal("0"),
+    "sap_cumulative_deferred_tax_expense": Decimal("200"),
 }
 
 
@@ -112,12 +113,13 @@ def _seed_105_company_snapshot_set(
                     INSERT INTO tax_master_version (
                         company_id, source_batch_id, valid_from, version, status,
                         tax_rate, loss_carryforward, average_tax_burden_rate_3y,
-                        currency, amount_scale, source_file_name, source_checksum,
+                        deferred_tax_rate, currency, amount_scale,
+                        source_file_name, source_checksum,
                         source_row_number, uploaded_by, data, published_at, approved_by
                     )
                     VALUES (
                         :company_id, :source_batch_id, DATE '2026-01-01', :version,
-                        'PUBLISHED', 0.25, 0, 0.08, 'CNY', 2,
+                        'PUBLISHED', 0.25, 0, 0.08, 0.20, 'CNY', 2,
                         'tax-master.xlsx', :checksum, :row_number, 'maker',
                         '{}'::jsonb, now(), 'reviewer'
                     )

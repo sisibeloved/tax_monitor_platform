@@ -120,14 +120,22 @@ def test_standard_company_calculates_exact_values_from_published_source_lineage(
                 {"company_id": seed.standard_company_id},
             ).scalar_one()
 
-        assert len(detections) == 3
-        assert case_count == 3
+        assert len(detections) == 4
+        assert case_count == 4
         by_type = {str(row["monitor_type"]): row for row in detections}
 
         accrual = by_type["ACCRUAL_ACCURACY"]
         assert accrual["input_amount"] == Decimal("700000.000000000000")
         assert accrual["result_amount"] == Decimal("725000.000000000000")
         assert accrual["difference_amount"] == Decimal("25000.000000000000")
+
+        deferred = by_type["DEFERRED_TAX_ACCURACY"]
+        assert deferred["input_amount"] == Decimal("2000000.000000000000")
+        assert deferred["result_amount"] == Decimal("-1600000.000000000000")
+        assert deferred["difference_amount"] == Decimal("-3600000.000000000000")
+        assert deferred["rate_value"] == Decimal("0.200000000000")
+        assert deferred["alert_code"] == "DEFERRED_TAX_TO_REVERSE"
+        assert deferred["direction"] == "REVERSE"
 
         burden = by_type["TAX_BURDEN"]
         assert burden["input_amount"] == Decimal("1625000.000000000000")
@@ -147,6 +155,14 @@ def test_standard_company_calculates_exact_values_from_published_source_lineage(
         assert formula["potential_adjustment"] == "1700000.000000000000"
         assert formula["potential_tax_payable"] == "2050000.00"
         assert formula["potential_tax_cost"] == "425000.00"
+        assert formula["deferred_tax_rate"] == "0.200000000000"
+        assert formula["sap_cumulative_deferred_tax_expense"] == (
+            "2000000.000000000000"
+        )
+        assert formula["deferred_tax_base_formula"] == "LOSS_MINUS_PROFIT"
+        assert formula["deferred_tax_base"] == "-8000000.000000000000"
+        assert formula["system_cumulative_deferred_tax"] == "-1600000.00"
+        assert formula["current_year_deferred_tax_adjustment"] == "-3600000.00"
 
         lineage = potential["lineage"]
         assert lineage["company"]["id"] == str(seed.standard_company_id)
@@ -155,6 +171,6 @@ def test_standard_company_calculates_exact_values_from_published_source_lineage(
             seed.tax_master_version_ids[0]
         )
         assert lineage["sources"][0]["batch"]["id"] == str(seed.sap_batch_id)
-        assert len(lineage["metrics"]) == 8
+        assert len(lineage["metrics"]) == 9
     finally:
         engine.dispose()

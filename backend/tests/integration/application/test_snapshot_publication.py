@@ -64,6 +64,7 @@ def _seed_quality_case(
     master_valid_to: date | None = None,
     master_currency: str = "CNY",
     master_scale: int = 2,
+    deferred_tax_rate: Decimal | None = Decimal("0.20"),
     payload_overrides: dict[str, object] | None = None,
     row_overrides: dict[str, object] | None = None,
 ) -> tuple[str, UUID]:
@@ -216,13 +217,15 @@ def _seed_quality_case(
                         INSERT INTO tax_master_version (
                             company_id, source_batch_id, valid_from, valid_to, version,
                             status, tax_rate, loss_carryforward,
-                            average_tax_burden_rate_3y, currency, amount_scale,
+                            average_tax_burden_rate_3y, deferred_tax_rate,
+                            currency, amount_scale,
                             source_file_name, source_checksum, source_row_number,
                             uploaded_by, data, published_at, approved_by
                         )
                         VALUES (
                             :company_id, :batch_id, :valid_from, :valid_to, :version,
-                            'PUBLISHED', 0.25, 100.00, 0.08, :currency, :scale,
+                            'PUBLISHED', 0.25, 100.00, 0.08, :deferred_tax_rate,
+                            :currency, :scale,
                             'tax-master.xlsx', :checksum, :row_number, 'maker',
                             '{}'::jsonb, now(), 'reviewer'
                         )
@@ -236,6 +239,7 @@ def _seed_quality_case(
                         "version": f"v{index + 1}",
                         "currency": master_currency,
                         "scale": master_scale,
+                        "deferred_tax_rate": deferred_tax_rate,
                         "checksum": (f"{index}{token}").ljust(64, "c")[:64],
                         "row_number": index + 2,
                     },
@@ -289,6 +293,27 @@ def test_each_missing_required_metric_is_data_quality_not_zero(
             {"company_code": company_code},
         ).scalar_one() == 0
         assert connection.execute(text("SELECT count(*) FROM detection_record")).scalar_one() == 0
+
+
+def test_missing_deferred_tax_rate_blocks_quarterly_snapshot_publication(
+    service_resources: tuple[SnapshotService, Engine, sessionmaker[Session]],
+) -> None:
+    service, engine, _ = service_resources
+    company_code, batch_id = _seed_quality_case(
+        engine,
+        deferred_tax_rate=None,
+    )
+
+    result = _validate(service, company_code, batch_id)
+
+    assert result.valid is False
+    assert result.snapshot is None
+    assert any(
+        issue.error_code == "DEFERRED_TAX_RATE_MISSING"
+        and issue.source == "tax_master"
+        and issue.field == "deferred_tax_rate"
+        for issue in result.issues
+    )
 
 
 def test_duplicate_metric_blocks_with_stable_code(
@@ -566,6 +591,7 @@ def test_master_effective_boundaries_and_zero_negative_metrics_are_valid(
         Decimal("0.00"),
         Decimal("-5.00"),
         Decimal("6.00"),
+        Decimal("-7.00"),
     )
     company_code, batch_id = _seed_quality_case(
         engine,
@@ -580,7 +606,7 @@ def test_master_effective_boundaries_and_zero_negative_metrics_are_valid(
     assert result.snapshot is not None
     amounts = [metric["amount"] for metric in result.snapshot.lineage["metrics"]]
     assert amounts == [f"{value:.12f}" for value in values]
-    assert result.snapshot.record_count == 8
+    assert result.snapshot.record_count == len(REQUIRED_QUARTERLY_METRICS)
     assert result.snapshot.control_total == sum(values, Decimal("0"))
 
 
@@ -863,6 +889,7 @@ def test_snapshot_freezes_source_extraction_and_tax_master_import_identity(
     assert source_batch["extraction_time"] == "2026-07-01T08:15:30Z"
     assert source_batch["payload_ref"] == "sap-quarterly-2026-q2.csv"
     master_lineage = result.snapshot.lineage["tax_master"]
+    assert master_lineage["deferred_tax_rate"] == "0.200000000000"
     assert master_lineage["source_file_name"] == "group-tax-master-2026.xlsx"
     assert master_lineage["imported_at"] == "2026-07-01T09:45:00Z"
     captured_batch = captured["batches"]
@@ -922,12 +949,17 @@ def test_selected_batch_input_order_reuses_identical_draft_hash_and_sources(
             text(
                 """
                 UPDATE ingest_batch
-                SET record_count = 4, accepted_count = 4,
+                SET record_count = :remaining_count,
+                    accepted_count = :remaining_count,
                     control_total = control_total - :moved_total
                 WHERE id = :batch_id
                 """
             ),
-            {"batch_id": first_batch, "moved_total": moved_total},
+            {
+                "batch_id": first_batch,
+                "moved_total": moved_total,
+                "remaining_count": len(REQUIRED_QUARTERLY_METRICS) - len(moved_ids),
+            },
         )
 
     first = service.validate(
@@ -958,7 +990,7 @@ def test_selected_batch_input_order_reuses_identical_draft_hash_and_sources(
             ),
             {"snapshot_id": first.snapshot.id},
         ).scalars().all()
-    assert sources == [4, 4]
+    assert sorted(sources) == [4, len(REQUIRED_QUARTERLY_METRICS) - 4]
 
 
 def _draft_snapshot(

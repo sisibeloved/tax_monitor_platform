@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import date
 from decimal import Decimal
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -30,6 +32,9 @@ EXPECTED_TABLES = {
     "company",
     "ingest_batch",
     "ingest_error",
+    "income_tax_refund_scan_result",
+    "income_tax_refund_target",
+    "income_tax_refund_writeback",
     "source_record",
     "tax_master_version",
     "accounting_snapshot",
@@ -45,7 +50,9 @@ EXPECTED_TABLES = {
     "review_action",
     "sap_expense_voucher_observation",
     "sap_expense_voucher_snapshot_projection",
+    "sap_gl_line_observation",
     "sap_link_coverage",
+    "sap_refund_evidence_batch",
     "suggested_account_dictionary_version",
     "suggested_account_entry",
     "semantic_artifact_version",
@@ -80,7 +87,9 @@ def test_persistence_engine_uses_marker_owned_random_pytest_schema(engine: Engin
 
     assert PYTEST_SCHEMA_PATTERN.fullmatch(schema_name), schema_name
     assert schema_marker == PYTEST_SCHEMA_MARKER
-    assert revision == "0017_strict_rls_runtime"
+    assert revision == "0022_refund_taxes_payable_priority"
+    version_column = _column(engine, "alembic_version", "version_num")
+    assert version_column["type"].length == 64
 
 
 def _column(engine: Engine, table_name: str, column_name: str) -> dict[str, object]:
@@ -171,6 +180,8 @@ def test_schema_uses_postgresql_enums_and_timezone_aware_audit_fields(engine: En
                 "BUSINESS_ENTERTAINMENT",
                 "WELFARE",
                 "DONATION",
+                "DEFERRED_TAX_ACCURACY",
+                "INCOME_TAX_REFUND_ACCOUNT_ACCURACY",
             ],
         ),
         (
@@ -226,6 +237,7 @@ def test_numeric_and_json_lineage_contracts_are_exact(engine: Engine) -> None:
 
     for table_name, column_name in {
         ("tax_master_version", "tax_rate"),
+        ("tax_master_version", "deferred_tax_rate"),
         ("tax_master_version", "average_tax_burden_rate_3y"),
         ("detection_record", "rate_value"),
     }:
@@ -261,9 +273,7 @@ def test_only_material_requisition_source_rows_may_omit_amount(engine: Engine) -
     }
 
     assert "ck_source_record_amount_required_by_dataset" in constraints
-    assert "oa_material_requisition" in constraints[
-        "ck_source_record_amount_required_by_dataset"
-    ]
+    assert "oa_material_requisition" in constraints["ck_source_record_amount_required_by_dataset"]
 
 
 def test_tax_master_governance_has_strict_state_loss_and_no_legacy_defaults(
@@ -271,6 +281,7 @@ def test_tax_master_governance_has_strict_state_loss_and_no_legacy_defaults(
 ) -> None:
     source_row = _column(engine, "tax_master_version", "source_row_number")
     uploaded_by = _column(engine, "tax_master_version", "uploaded_by")
+    deferred_tax_rate = _column(engine, "tax_master_version", "deferred_tax_rate")
     checks = {
         constraint["name"]: constraint["sqltext"]
         for constraint in inspect(engine).get_check_constraints("tax_master_version")
@@ -280,7 +291,13 @@ def test_tax_master_governance_has_strict_state_loss_and_no_legacy_defaults(
     assert source_row["default"] is None
     assert uploaded_by["nullable"] is False
     assert uploaded_by["default"] is None
+    assert deferred_tax_rate["nullable"] is True
+    assert deferred_tax_rate["default"] is None
     assert any("loss_carryforward >= 0" in sql for sql in checks.values())
+    deferred_rate_sql = checks["ck_tax_master_version_deferred_tax_rate"]
+    assert "deferred_tax_rate IS NULL" in deferred_rate_sql
+    assert "deferred_tax_rate >= 0" in deferred_rate_sql
+    assert "deferred_tax_rate <= 1" in deferred_rate_sql
     state_sql = next(sql for name, sql in checks.items() if "published_at_state" in name)
     assert "approved_by IS NOT NULL" in state_sql
     assert "approved_by IS NULL" in state_sql
@@ -395,8 +412,7 @@ def test_review_action_assignment_owner_is_nullable_and_action_scoped(
 
 def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: Engine) -> None:
     columns = {
-        column["name"]: column
-        for column in inspect(engine).get_columns("monitoring_run_company")
+        column["name"]: column for column in inspect(engine).get_columns("monitoring_run_company")
     }
     assert {
         "run_id",
@@ -417,10 +433,7 @@ def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: En
     assert isinstance(columns["case_ids"]["type"], JSONB)
 
     uniques = inspect(engine).get_unique_constraints("monitoring_run_company")
-    assert any(
-        unique["column_names"] == ["run_id", "snapshot_set_member_id"]
-        for unique in uniques
-    )
+    assert any(unique["column_names"] == ["run_id", "snapshot_set_member_id"] for unique in uniques)
     index_columns = {
         tuple(index["column_names"])
         for index in inspect(engine).get_indexes("monitoring_run_company")
@@ -440,23 +453,16 @@ def test_quarterly_batch_company_state_has_retry_and_result_contracts(engine: En
     member_foreign_key = next(
         foreign_key
         for foreign_key in run_company_foreign_keys
-        if foreign_key["constrained_columns"]
-        == ["snapshot_set_member_id", "snapshot_set_id"]
+        if foreign_key["constrained_columns"] == ["snapshot_set_member_id", "snapshot_set_id"]
     )
     assert member_foreign_key["referred_table"] == "snapshot_set_member"
     assert member_foreign_key["referred_columns"] == ["id", "snapshot_set_id"]
     assert member_foreign_key["options"].get("ondelete") == "RESTRICT"
 
     run_uniques = inspect(engine).get_unique_constraints("monitoring_run")
-    assert any(
-        unique["column_names"] == ["id", "snapshot_set_id"]
-        for unique in run_uniques
-    )
+    assert any(unique["column_names"] == ["id", "snapshot_set_id"] for unique in run_uniques)
     member_uniques = inspect(engine).get_unique_constraints("snapshot_set_member")
-    assert any(
-        unique["column_names"] == ["id", "snapshot_set_id"]
-        for unique in member_uniques
-    )
+    assert any(unique["column_names"] == ["id", "snapshot_set_id"] for unique in member_uniques)
 
 
 def test_quarterly_rule_seed_records_0004_migration_provenance(engine: Engine) -> None:
@@ -474,6 +480,117 @@ def test_quarterly_rule_seed_records_0004_migration_provenance(engine: Engine) -
         "revision": "0004_quarterly_detection",
         "seed": "QUARTERLY_V1:phase-1-reviewed",
     }
+
+
+def test_deferred_tax_migration_seeds_reviewed_v2_and_preserves_v1(
+    engine: Engine,
+) -> None:
+    with engine.connect() as connection:
+        v2 = (
+            connection.execute(
+                text(
+                    """
+                SELECT status, effective_from, effective_to, definition,
+                       change_reason, published_at, approved_by
+                FROM rule_version
+                WHERE rule_code = 'QUARTERLY_V2'
+                  AND version = 'deferred-tax-reviewed'
+                """
+                )
+            )
+            .mappings()
+            .one()
+        )
+        v1_count = connection.execute(
+            text(
+                "SELECT count(*) FROM rule_version "
+                "WHERE rule_code = 'QUARTERLY_V1' "
+                "AND version = 'phase-1-reviewed'"
+            )
+        ).scalar_one()
+
+    definition = v2["definition"]
+    manifest = definition["formula_manifest"]
+    canonical = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert v1_count == 1
+    assert v2["status"] == "PUBLISHED"
+    assert v2["effective_from"] == date(2000, 1, 1)
+    assert v2["effective_to"] is None
+    assert v2["published_at"] is not None
+    assert v2["approved_by"] == "deferred-tax-business-rule-confirmation-2026-07-16"
+    assert "deferred income tax accuracy" in v2["change_reason"]
+    assert definition["review_status"] == "REVIEWED"
+    assert definition["formula_manifest_sha256"] == sha256(canonical).hexdigest()
+    assert definition["migration_provenance"] == {
+        "revision": "0019_deferred_tax_accuracy",
+        "seed": "QUARTERLY_V2:deferred-tax-reviewed",
+    }
+    assert manifest["schema_version"] == "QUARTERLY_V2"
+    assert manifest["rounding_mode"] == "ROUND_HALF_UP"
+    assert manifest["formulas"]["deferred_tax_base"] == ("loss_carryforward+cumulative_profit")
+    assert manifest["formulas"]["current_year_deferred_tax_adjustment"] == (
+        "system_cumulative_deferred_tax-sap_cumulative_deferred_tax_expense"
+    )
+    assert manifest["alert_boundaries"]["deferred_tax_accuracy"] == ("adjustment != 0")
+
+
+def test_deferred_tax_formula_migration_seeds_reviewed_v3_and_preserves_v2(
+    engine: Engine,
+) -> None:
+    with engine.connect() as connection:
+        v3 = (
+            connection.execute(
+                text(
+                    """
+                SELECT status, effective_from, effective_to, definition,
+                       change_reason, published_at, approved_by
+                FROM rule_version
+                WHERE rule_code = 'QUARTERLY_V3'
+                  AND version = 'deferred-tax-loss-less-profit-reviewed'
+                """
+                )
+            )
+            .mappings()
+            .one()
+        )
+        v2_count = connection.execute(
+            text(
+                "SELECT count(*) FROM rule_version "
+                "WHERE rule_code = 'QUARTERLY_V2' "
+                "AND version = 'deferred-tax-reviewed'"
+            )
+        ).scalar_one()
+
+    definition = v3["definition"]
+    manifest = definition["formula_manifest"]
+    canonical = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert v2_count == 1
+    assert v3["status"] == "PUBLISHED"
+    assert v3["effective_from"] == date(2000, 1, 1)
+    assert v3["effective_to"] is None
+    assert v3["published_at"] is not None
+    assert v3["approved_by"] == "deferred-tax-business-rule-confirmation-2026-07-22"
+    assert "loss carryforward less cumulative profit" in v3["change_reason"]
+    assert definition["review_status"] == "REVIEWED"
+    assert definition["formula_manifest_sha256"] == sha256(canonical).hexdigest()
+    assert definition["migration_provenance"] == {
+        "revision": "0021_deferred_tax_loss_less_profit",
+        "seed": "QUARTERLY_V3:deferred-tax-loss-less-profit-reviewed",
+    }
+    assert manifest["schema_version"] == "QUARTERLY_V3"
+    assert manifest["formulas"]["deferred_tax_base"] == ("loss_carryforward-cumulative_profit")
 
 
 def test_repositories_import_cleanly_in_a_fresh_interpreter() -> None:
@@ -569,9 +686,7 @@ def _owned_migration_schema() -> Iterator[tuple[str, Engine]]:
         with admin_engine.begin() as connection:
             connection.execute(CreateSchema(schema_name))
             quoted = connection.dialect.identifier_preparer.quote(schema_name)
-            connection.exec_driver_sql(
-                f"COMMENT ON SCHEMA {quoted} IS '{PYTEST_SCHEMA_MARKER}'"
-            )
+            connection.exec_driver_sql(f"COMMENT ON SCHEMA {quoted} IS '{PYTEST_SCHEMA_MARKER}'")
         database_url = base_url.update_query_dict(
             {"options": f"-csearch_path={schema_name}"}
         ).render_as_string(hide_password=False)
@@ -840,11 +955,10 @@ def test_alembic_current_accepts_a_percent_encoded_database_url(
     completed = _run_alembic(encoded_url, "current")
 
     assert completed.returncode == 0, completed.stderr
-    assert "0017_strict_rls_runtime (head)" in completed.stdout
+    assert "0022_refund_taxes_payable_priority (head)" in completed.stdout
 
 
-def test_alembic_check_and_round_trip_stay_in_the_isolated_schema(
-) -> None:
+def test_alembic_check_and_round_trip_stay_in_the_isolated_schema() -> None:
     with _owned_migration_schema() as (database_url, _engine):
         upgrade_first = _run_alembic(database_url, "upgrade", "head")
         assert upgrade_first.returncode == 0, upgrade_first.stderr
@@ -866,7 +980,271 @@ def test_database_is_at_current_schema_revision(engine: Engine) -> None:
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0017_strict_rls_runtime"
+    assert revision == "0022_refund_taxes_payable_priority"
+
+
+def test_0022_accepts_taxes_payable_evidence_and_blocks_unsafe_downgrade() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade.returncode == 0, upgrade.stderr
+        source_batch_key = f"refund-taxes-payable-{uuid4().hex}"
+        with isolated_engine.begin() as connection:
+            company_id = connection.execute(
+                text(
+                    "INSERT INTO company (company_code, company_name, lifecycle) "
+                    "VALUES (:code, 'Taxes Payable Migration', 'ACTIVE') RETURNING id"
+                ),
+                {"code": f"REFUND-MIGRATION-{uuid4().hex}"},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO sap_refund_evidence_batch ("
+                    "source_batch_key, fiscal_year, through_period, company_ids, "
+                    "status, record_count, checksum"
+                    ") VALUES ("
+                    ":source_batch_key, 2041, DATE '2041-03-31', "
+                    "CAST(:company_ids AS jsonb), 'COMPLETE', 1, :checksum"
+                    ")"
+                ),
+                {
+                    "source_batch_key": source_batch_key,
+                    "company_ids": json.dumps([str(company_id)]),
+                    "checksum": "a" * 64,
+                },
+            )
+            taxes_payable_line_id = connection.execute(
+                text(
+                    "INSERT INTO sap_gl_line_observation ("
+                    "company_id, source_batch_key, client, ledger, fiscal_year, "
+                    "fiscal_period, posting_date, document_number, line_item, "
+                    "gl_account_code, gl_account_name, account_category, debit_credit, "
+                    "amount, currency, amount_scale, is_reversed, source_hash"
+                    ") VALUES ("
+                    ":company_id, :source_batch_key, '800', '0L', 2041, 3, "
+                    "DATE '2041-03-15', '990001', '001', '2221130000', "
+                    "'应交税费-企业所得税', 'TAXES_PAYABLE', 'CREDIT', "
+                    "100.00, 'CNY', 2, false, :source_hash"
+                    ") RETURNING id"
+                ),
+                {
+                    "company_id": company_id,
+                    "source_batch_key": source_batch_key,
+                    "source_hash": "b" * 64,
+                },
+            ).scalar_one()
+
+        downgrade = _run_alembic(
+            database_url,
+            "downgrade",
+            "0021_deferred_tax_loss_less_profit",
+        )
+
+        assert downgrade.returncode != 0
+        assert "REFUND_TAXES_PAYABLE_DOWNGRADE_BLOCKED" in downgrade.stderr
+        with isolated_engine.connect() as connection:
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            retained_line = connection.execute(
+                text("SELECT id FROM sap_gl_line_observation WHERE id = :id"),
+                {"id": taxes_payable_line_id},
+            ).scalar_one()
+        assert revision == "0022_refund_taxes_payable_priority"
+        assert retained_line == taxes_payable_line_id
+
+
+def test_0019_refuses_conflicting_v2_rule_seed_without_overwriting_it() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade_0018 = _run_alembic(
+            database_url,
+            "upgrade",
+            "0018_nonpositive_revenue_tax_burden",
+        )
+        assert upgrade_0018.returncode == 0, upgrade_0018.stderr
+        forged_definition = {"owner": "preexisting", "formula": "forged"}
+        with isolated_engine.begin() as connection:
+            forged_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO rule_version (
+                        rule_code, version, status, effective_from, definition,
+                        change_reason, published_at, approved_by
+                    ) VALUES (
+                        'QUARTERLY_V2', 'deferred-tax-reviewed', 'PUBLISHED',
+                        DATE '1999-01-01', CAST(:definition AS jsonb),
+                        'preexisting forged row', now(), 'preexisting-owner'
+                    ) RETURNING id
+                    """
+                ),
+                {"definition": json.dumps(forged_definition)},
+            ).scalar_one()
+
+        upgrade_0019 = _run_alembic(database_url, "upgrade", "head")
+
+        assert upgrade_0019.returncode != 0
+        with isolated_engine.connect() as connection:
+            preserved = (
+                connection.execute(
+                    text(
+                        """
+                    SELECT id, definition, change_reason FROM rule_version
+                    WHERE rule_code = 'QUARTERLY_V2'
+                      AND version = 'deferred-tax-reviewed'
+                    """
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+
+        columns = {
+            column["name"] for column in inspect(isolated_engine).get_columns("tax_master_version")
+        }
+        assert preserved == {
+            "id": forged_id,
+            "definition": forged_definition,
+            "change_reason": "preexisting forged row",
+        }
+        assert revision == "0018_nonpositive_revenue_tax_burden"
+        assert "deferred_tax_rate" not in columns
+        assert "DEFERRED_TAX_ACCURACY" not in _enum_labels(
+            isolated_engine,
+            "monitor_type",
+        )
+
+
+def test_0019_and_0020_downgrade_reupgrade_keep_additive_enums_idempotent() -> None:
+    refund_tables = {
+        "income_tax_refund_scan_result",
+        "income_tax_refund_target",
+        "income_tax_refund_writeback",
+        "sap_gl_line_observation",
+        "sap_refund_evidence_batch",
+    }
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade.returncode == 0, upgrade.stderr
+
+        downgrade = _run_alembic(
+            database_url,
+            "downgrade",
+            "0018_nonpositive_revenue_tax_burden",
+        )
+        assert downgrade.returncode == 0, downgrade.stderr
+        with isolated_engine.connect() as connection:
+            remaining_v2 = connection.execute(
+                text(
+                    "SELECT count(*) FROM rule_version "
+                    "WHERE rule_code = 'QUARTERLY_V2' "
+                    "AND version = 'deferred-tax-reviewed'"
+                )
+            ).scalar_one()
+        downgraded_columns = {
+            column["name"] for column in inspect(isolated_engine).get_columns("tax_master_version")
+        }
+        assert remaining_v2 == 0
+        assert "deferred_tax_rate" not in downgraded_columns
+        assert _enum_labels(isolated_engine, "monitor_type").count("DEFERRED_TAX_ACCURACY") == 1
+        assert (
+            _enum_labels(isolated_engine, "monitor_type").count(
+                "INCOME_TAX_REFUND_ACCOUNT_ACCURACY"
+            )
+            == 1
+        )
+        assert not refund_tables.intersection(inspect(isolated_engine).get_table_names())
+
+        reupgrade = _run_alembic(database_url, "upgrade", "head")
+        assert reupgrade.returncode == 0, reupgrade.stderr
+        with isolated_engine.connect() as connection:
+            restored_v2 = connection.execute(
+                text(
+                    "SELECT count(*) FROM rule_version "
+                    "WHERE rule_code = 'QUARTERLY_V2' "
+                    "AND version = 'deferred-tax-reviewed'"
+                )
+            ).scalar_one()
+        restored_columns = {
+            column["name"] for column in inspect(isolated_engine).get_columns("tax_master_version")
+        }
+        assert restored_v2 == 1
+        assert "deferred_tax_rate" in restored_columns
+        assert _enum_labels(isolated_engine, "monitor_type").count("DEFERRED_TAX_ACCURACY") == 1
+        assert (
+            _enum_labels(isolated_engine, "monitor_type").count(
+                "INCOME_TAX_REFUND_ACCOUNT_ACCURACY"
+            )
+            == 1
+        )
+        assert refund_tables <= set(inspect(isolated_engine).get_table_names())
+
+
+def test_0019_downgrade_refuses_a_referenced_v2_rule() -> None:
+    with _owned_migration_schema() as (database_url, isolated_engine):
+        upgrade = _run_alembic(database_url, "upgrade", "head")
+        assert upgrade.returncode == 0, upgrade.stderr
+        with isolated_engine.begin() as connection:
+            rule_id = connection.execute(
+                text(
+                    "SELECT id FROM rule_version "
+                    "WHERE rule_code = 'QUARTERLY_V2' "
+                    "AND version = 'deferred-tax-reviewed'"
+                )
+            ).scalar_one()
+            snapshot_set_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO snapshot_set (
+                        set_key, period, status, expected_member_count
+                    ) VALUES (
+                        :key, DATE '2026-06-30', 'DRAFT', 100
+                    ) RETURNING id
+                    """
+                ),
+                {"key": f"deferred-tax-downgrade-{uuid4().hex}"},
+            ).scalar_one()
+            run_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO monitoring_run (
+                        run_key, run_type, snapshot_set_id, rule_version_id, status,
+                        fiscal_year, quarter, requested_company_count
+                    ) VALUES (
+                        :key, 'QUARTERLY', :snapshot_set_id, :rule_id, 'PENDING',
+                        2026, 2, 0
+                    ) RETURNING id
+                    """
+                ),
+                {
+                    "key": f"deferred-tax-downgrade-run-{uuid4().hex}",
+                    "snapshot_set_id": snapshot_set_id,
+                    "rule_id": rule_id,
+                },
+            ).scalar_one()
+
+        downgrade = _run_alembic(
+            database_url,
+            "downgrade",
+            "0018_nonpositive_revenue_tax_burden",
+        )
+
+        assert downgrade.returncode != 0
+        assert "DEFERRED_TAX_DOWNGRADE_BLOCKED" in downgrade.stderr
+        with isolated_engine.connect() as connection:
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            retained_run = connection.execute(
+                text("SELECT id FROM monitoring_run WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one()
+        assert revision == "0022_refund_taxes_payable_priority"
+        assert retained_run == run_id
+        assert "deferred_tax_rate" in {
+            column["name"] for column in inspect(isolated_engine).get_columns("tax_master_version")
+        }
 
 
 def test_0004_migrates_dataful_legacy_tax_burden_rows_safely() -> None:
@@ -981,33 +1359,39 @@ def test_0004_refuses_incomplete_legacy_burden_evidence_referenced_by_case() -> 
             "0003_tax_master_governance",
         )
         assert upgrade_0003.returncode == 0, upgrade_0003.stderr
-        _, _, incomplete_detection_id = _insert_pre_0004_tax_burden_detections(
-            isolated_engine
-        )
+        _, _, incomplete_detection_id = _insert_pre_0004_tax_burden_detections(isolated_engine)
         case_id = _reference_pre_0004_detection_from_risk_case(
             isolated_engine,
             incomplete_detection_id,
         )
         with isolated_engine.connect() as connection:
-            before_detection = connection.execute(
-                text(
-                    """
+            before_detection = (
+                connection.execute(
+                    text(
+                        """
                     SELECT calculation_status, result_amount, difference_amount,
                            not_calculated_reason, alert_code, direction
                     FROM detection_record WHERE id = :detection_id
                     """
-                ),
-                {"detection_id": incomplete_detection_id},
-            ).mappings().one()
-            before_case = connection.execute(
-                text(
-                    """
+                    ),
+                    {"detection_id": incomplete_detection_id},
+                )
+                .mappings()
+                .one()
+            )
+            before_case = (
+                connection.execute(
+                    text(
+                        """
                     SELECT latest_detection_id, status, risk_amount, risk_direction
                     FROM risk_case WHERE id = :case_id
                     """
-                ),
-                {"case_id": case_id},
-            ).mappings().one()
+                    ),
+                    {"case_id": case_id},
+                )
+                .mappings()
+                .one()
+            )
 
         upgrade_0004 = _run_alembic(database_url, "upgrade", "head")
 
@@ -1017,41 +1401,57 @@ def test_0004_refuses_incomplete_legacy_burden_evidence_referenced_by_case() -> 
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            after_detection = connection.execute(
-                text(
-                    """
+            after_detection = (
+                connection.execute(
+                    text(
+                        """
                     SELECT calculation_status, result_amount, difference_amount,
                            not_calculated_reason, alert_code, direction
                     FROM detection_record WHERE id = :detection_id
                     """
-                ),
-                {"detection_id": incomplete_detection_id},
-            ).mappings().one()
-            after_case = connection.execute(
-                text(
-                    """
+                    ),
+                    {"detection_id": incomplete_detection_id},
+                )
+                .mappings()
+                .one()
+            )
+            after_case = (
+                connection.execute(
+                    text(
+                        """
                     SELECT latest_detection_id, status, risk_amount, risk_direction
                     FROM risk_case WHERE id = :case_id
                     """
-                ),
-                {"case_id": case_id},
-            ).mappings().one()
+                    ),
+                    {"case_id": case_id},
+                )
+                .mappings()
+                .one()
+            )
 
         assert revision == "0003_tax_master_governance"
-        assert after_detection == before_detection == {
-            "calculation_status": "CALCULATED",
-            "result_amount": Decimal("0.110000000000"),
-            "difference_amount": None,
-            "not_calculated_reason": None,
-            "alert_code": "TAX_BURDEN_DEVIATION",
-            "direction": "HIGH",
-        }
-        assert after_case == before_case == {
-            "latest_detection_id": incomplete_detection_id,
-            "status": "NEW",
-            "risk_amount": Decimal("0.050000000000"),
-            "risk_direction": "HIGH",
-        }
+        assert (
+            after_detection
+            == before_detection
+            == {
+                "calculation_status": "CALCULATED",
+                "result_amount": Decimal("0.110000000000"),
+                "difference_amount": None,
+                "not_calculated_reason": None,
+                "alert_code": "TAX_BURDEN_DEVIATION",
+                "direction": "HIGH",
+            }
+        )
+        assert (
+            after_case
+            == before_case
+            == {
+                "latest_detection_id": incomplete_detection_id,
+                "status": "NEW",
+                "risk_amount": Decimal("0.050000000000"),
+                "risk_direction": "HIGH",
+            }
+        )
 
 
 def test_0004_refuses_conflicting_fixed_rule_seed_without_overwriting_it() -> None:
@@ -1084,15 +1484,19 @@ def test_0004_refuses_conflicting_fixed_rule_seed_without_overwriting_it() -> No
 
         assert upgrade_0004.returncode != 0
         with isolated_engine.connect() as connection:
-            preserved = connection.execute(
-                text(
-                    """
+            preserved = (
+                connection.execute(
+                    text(
+                        """
                     SELECT id, definition, change_reason FROM rule_version
                     WHERE rule_code = 'QUARTERLY_V1'
                       AND version = 'phase-1-reviewed'
                     """
+                    )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
@@ -1133,15 +1537,19 @@ def test_0004_downgrade_preserves_same_key_row_without_its_provenance() -> None:
 
         assert downgrade_0003.returncode == 0, downgrade_0003.stderr
         with isolated_engine.connect() as connection:
-            preserved = connection.execute(
-                text(
-                    """
+            preserved = (
+                connection.execute(
+                    text(
+                        """
                     SELECT id, definition, change_reason FROM rule_version
                     WHERE rule_code = 'QUARTERLY_V1'
                       AND version = 'phase-1-reviewed'
                     """
+                    )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         assert preserved == {
             "id": fixed_rule_id,
             "definition": preexisting_definition,
@@ -1229,15 +1637,19 @@ def test_0004_reuses_its_referenced_seed_after_downgrade_and_reupgrade() -> None
 
         assert reupgrade_0004.returncode == 0, reupgrade_0004.stderr
         with isolated_engine.connect() as connection:
-            retained_ids = connection.execute(
-                text(
-                    """
+            retained_ids = (
+                connection.execute(
+                    text(
+                        """
                     SELECT id FROM rule_version
                     WHERE rule_code = 'QUARTERLY_V1'
                       AND version = 'phase-1-reviewed'
                     """
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         assert retained_ids == [fixed_rule_id]
 
 
@@ -1259,14 +1671,18 @@ def test_0003_backfills_legacy_approval_audit_then_removes_insert_defaults() -> 
         upgrade_0003 = _run_alembic(database_url, "upgrade", "head")
         assert upgrade_0003.returncode == 0, upgrade_0003.stderr
         with isolated_engine.connect() as connection:
-            governed = connection.execute(
-                text(
-                    """
+            governed = (
+                connection.execute(
+                    text(
+                        """
                     SELECT approved_by, uploaded_by, source_row_number
                     FROM tax_master_version WHERE version = 'legacy-v1'
                     """
+                    )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         columns = {
             column["name"]: column
             for column in inspect(isolated_engine).get_columns("tax_master_version")
@@ -1310,10 +1726,7 @@ def test_0003_refuses_historical_negative_loss_without_modifying_it() -> None:
         assert upgrade_0003.returncode != 0
         with isolated_engine.connect() as connection:
             loss = connection.execute(
-                text(
-                    "SELECT loss_carryforward FROM tax_master_version "
-                    "WHERE version = 'legacy-v1'"
-                )
+                text("SELECT loss_carryforward FROM tax_master_version WHERE version = 'legacy-v1'")
             ).scalar_one()
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")

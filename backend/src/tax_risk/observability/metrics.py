@@ -231,6 +231,27 @@ def build_default_registry() -> MetricRegistry:
     registry.gauge(
         "tax_risk_readiness_component", "Readiness component state.", ("component", "code")
     )
+    registry.counter(
+        "tax_risk_external_fetch_total",
+        "External financial data fetch outcomes.",
+        ("source", "provenance", "result"),
+    )
+    registry.counter(
+        "tax_risk_external_fetch_retry_total",
+        "External financial data fetch retries.",
+        ("source", "error_code"),
+    )
+    registry.counter(
+        "tax_risk_external_fetch_failure_total",
+        "External financial data fetch failures.",
+        ("source", "error_code"),
+    )
+    registry.histogram(
+        "tax_risk_external_fetch_duration_seconds",
+        "External financial data fetch duration including cache coordination.",
+        ("source", "provenance"),
+        buckets=(0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 15, 30, 60, 300),
+    )
     return registry
 
 

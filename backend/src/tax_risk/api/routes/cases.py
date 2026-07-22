@@ -27,6 +27,7 @@ from tax_risk.application.business_entertainment.reporting import (
     BusinessEntertainmentReportingService,
 )
 from tax_risk.domain.cases import CaseStatus, InvalidCaseTransition, transition_case
+from tax_risk.domain.income_tax_refund import WRONG_ACCOUNT_ALERT_CODE
 from tax_risk.persistence.ingest_models import Company
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.persistence.risk_models import (
@@ -128,8 +129,10 @@ def list_risk_cases(
                     input_amount=None,
                     result_amount=None,
                     difference_amount=None,
+                    rate_value=None,
                     tax_burden_rate=None,
                     tax_burden_deviation=None,
+                    formula_substitution=None,
                     not_calculated_reason=None,
                     alert_code=None,
                     risk_direction=row.risk_direction,
@@ -153,6 +156,101 @@ def list_risk_cases(
                 )
                 for row in selected
             ),
+        )
+    if monitoring_type is MonitorType.INCOME_TAX_REFUND_ACCOUNT_ACCURACY:
+        conditions = [RiskCase.monitor_type == monitoring_type]
+        if source_mode is not None and source_mode != "SAP_LINE":
+            conditions.append(RiskCase.id.is_(None))
+        if sap_link_status is not None and sap_link_status != "LINKED":
+            conditions.append(RiskCase.id.is_(None))
+        if confidence_tier is not None:
+            conditions.append(RiskCase.id.is_(None))
+        if fiscal_year is not None:
+            conditions.append(RiskCase.lineage["scan_year"].as_integer() == fiscal_year)
+        if quarter is not None:
+            first_month = (quarter - 1) * 3 + 1
+            conditions.append(
+                RiskCase.lineage["scan_month"]
+                .as_integer()
+                .between(
+                    first_month,
+                    first_month + 2,
+                )
+            )
+        if period is not None:
+            conditions.append(RiskCase.lineage["scan_month"].as_integer() == period)
+        if direction is not None:
+            conditions.append(RiskCase.risk_direction == direction)
+        if case_status is not None:
+            conditions.append(RiskCase.status == case_status)
+        if company is not None:
+            conditions.append(RiskCase.company_id == company)
+        if scope is not None:
+            conditions.append(RiskCase.company_id.in_(scope))
+
+        with uow_factory() as uow:
+            joined = RiskCase.__table__.join(
+                Company.__table__,
+                RiskCase.company_id == Company.id,
+            )
+            total = uow.session.scalar(
+                select(func.count(RiskCase.id)).select_from(joined).where(*conditions)
+            )
+            refund_rows = uow.session.execute(
+                select(
+                    RiskCase,
+                    Company.company_code,
+                    Company.company_name,
+                )
+                .select_from(joined)
+                .where(*conditions)
+                .order_by(Company.company_code, RiskCase.id)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+            items = tuple(
+                RiskCaseItemResponse(
+                    id=risk_case.id,
+                    company_id=risk_case.company_id,
+                    company_code=company_code,
+                    company_name=company_name,
+                    latest_detection_id=None,
+                    monitoring_type=risk_case.monitor_type,
+                    input_amount=risk_case.risk_amount,
+                    result_amount=None,
+                    difference_amount=None,
+                    rate_value=None,
+                    tax_burden_rate=None,
+                    tax_burden_deviation=None,
+                    formula_substitution=None,
+                    not_calculated_reason=None,
+                    alert_code=WRONG_ACCOUNT_ALERT_CODE,
+                    risk_direction=risk_case.risk_direction,
+                    risk_amount=risk_case.risk_amount,
+                    risk_rate=None,
+                    currency=risk_case.currency,
+                    amount_scale=risk_case.amount_scale,
+                    status=risk_case.status,
+                    priority=risk_case.priority,
+                    assignee=risk_case.assignee,
+                    row_version=risk_case.row_version,
+                    fiscal_year=int(risk_case.lineage["scan_year"]),
+                    period=int(risk_case.lineage["scan_month"]),
+                    source_mode="SAP_LINE",
+                    sap_link_status="LINKED",
+                    sap_document_number=str(risk_case.lineage["document_number"]),
+                    sap_line_item=str(risk_case.lineage["line_item"]),
+                    workflow_note="所得税退税误计入其他收益",
+                )
+                for risk_case, company_code, company_name in refund_rows
+            )
+        request.state.audit_row_count = len(items)
+        request.state.audit_company_ids = frozenset(item.company_id for item in items)
+        return RiskCaseListResponse(
+            total=total or 0,
+            page=page,
+            page_size=page_size,
+            items=items,
         )
     if fiscal_year is None or quarter is None:
         raise HTTPException(
@@ -215,8 +313,10 @@ def list_risk_cases(
                 input_amount=detection.input_amount,
                 result_amount=detection.result_amount,
                 difference_amount=detection.difference_amount,
+                rate_value=detection.rate_value,
                 tax_burden_rate=detection.tax_burden_rate,
                 tax_burden_deviation=detection.tax_burden_deviation,
+                formula_substitution=detection.formula_substitution,
                 not_calculated_reason=detection.not_calculated_reason,
                 alert_code=detection.alert_code,
                 risk_direction=risk_case.risk_direction,

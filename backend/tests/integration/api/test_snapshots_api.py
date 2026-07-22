@@ -75,7 +75,8 @@ def _seed_api_case(engine: Engine, *, with_master: bool = True) -> tuple[str, UU
                     accepted_count, rejected_count, control_total, checksum
                 ) VALUES (
                     'SAP', :key, 'quarterly_metric', 'SUCCEEDED', now(),
-                    :period, 'FULL', 'api-v1', 'CNY', 2, 8, 8, 0, 36,
+                    :period, 'FULL', 'api-v1', 'CNY', 2,
+                    :metric_count, :metric_count, 0, :control_total,
                     :checksum
                 ) RETURNING id
                 """
@@ -83,6 +84,10 @@ def _seed_api_case(engine: Engine, *, with_master: bool = True) -> tuple[str, UU
             {
                 "key": f"api-batch-{token}",
                 "period": PERIOD,
+                "metric_count": len(REQUIRED_QUARTERLY_METRICS),
+                "control_total": sum(
+                    range(1, len(REQUIRED_QUARTERLY_METRICS) + 1)
+                ),
                 "checksum": token.ljust(64, "a")[:64],
             },
         ).scalar_one()
@@ -148,11 +153,12 @@ def _seed_api_case(engine: Engine, *, with_master: bool = True) -> tuple[str, UU
                     INSERT INTO tax_master_version (
                         company_id, source_batch_id, valid_from, version, status,
                         tax_rate, loss_carryforward, average_tax_burden_rate_3y,
-                        currency, amount_scale, source_file_name, source_checksum,
+                        deferred_tax_rate, currency, amount_scale,
+                        source_file_name, source_checksum,
                         source_row_number, uploaded_by, data, published_at, approved_by
                     ) VALUES (
                         :company_id, :batch_id, DATE '2026-01-01', 'v1', 'PUBLISHED',
-                        0.25, 0, 0.08, 'CNY', 2, 'api.xlsx', :checksum, 2,
+                        0.25, 0, 0.08, 0.20, 'CNY', 2, 'api.xlsx', :checksum, 2,
                         'maker', '{}'::jsonb, now(), 'reviewer'
                     )
                     """
@@ -244,11 +250,12 @@ def _seed_public_tax_master(engine: Engine, company_code: str) -> None:
                 INSERT INTO tax_master_version (
                     company_id, source_batch_id, valid_from, version, status,
                     tax_rate, loss_carryforward, average_tax_burden_rate_3y,
-                    currency, amount_scale, source_file_name, source_checksum,
+                    deferred_tax_rate, currency, amount_scale,
+                    source_file_name, source_checksum,
                     source_row_number, uploaded_by, data, published_at, approved_by
                 ) VALUES (
                     :company_id, :source_batch_id, DATE '2026-01-01', 'v1',
-                    'PUBLISHED', 0.25, 0, 0.08, 'CNY', 2, 'master.xlsx',
+                    'PUBLISHED', 0.25, 0, 0.08, 0.20, 'CNY', 2, 'master.xlsx',
                     :checksum, 2, 'maker',
                     jsonb_build_object('company_name', CAST(:company_name AS text)),
                     now(), 'reviewer'
@@ -322,7 +329,7 @@ def test_real_partial_ingest_evidence_can_be_explicitly_accepted_by_snapshot_api
     assert uploaded.status_code == 200, uploaded.text
     batch = uploaded.json()
     assert batch["status"] == "PARTIAL"
-    assert batch["accepted_count"] == 8
+    assert batch["accepted_count"] == len(REQUIRED_QUARTERLY_METRICS)
     assert batch["rejected_count"] == 1
     assert batch["errors"][0]["details"] == {
         "company_code": other_code,
@@ -369,8 +376,10 @@ def test_validate_and_publish_api_returns_frozen_snapshot_and_utc_z(
     assert body["issues"] == []
     assert body["reused"] is False
     assert body["snapshot"]["status"] == "DRAFT"
-    assert len(body["snapshot"]["lineage"]["metrics"]) == 8
-    assert body["snapshot"]["control_total"] == "36.000000000000"
+    assert len(body["snapshot"]["lineage"]["metrics"]) == len(
+        REQUIRED_QUARTERLY_METRICS
+    )
+    assert body["snapshot"]["control_total"] == "45.000000000000"
 
     replay = _validate(client, company_code, batch_id)
     published = client.post(

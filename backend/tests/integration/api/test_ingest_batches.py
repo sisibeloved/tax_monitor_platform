@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -17,7 +17,13 @@ from sqlalchemy import Engine, text
 from starlette.requests import Request
 
 from tax_risk.adapters.ingest.base import AdapterRow, CompanyMasterRow
+from tax_risk.adapters.ingest.dgc_sap_profit import DgcFetchResult
 from tax_risk.api.routes.ingest import upload_ingest_file
+from tax_risk.application.dgc_sap_dividend_detail import dgc_dividend_scope_sha256
+from tax_risk.application.dgc_sap_profit import dgc_parameters_sha256
+from tax_risk.application.dgc_sap_trial_balance import (
+    dgc_trial_balance_scope_sha256,
+)
 from tax_risk.config import Settings
 from tax_risk.main import create_app
 from tax_risk.persistence.ingest_models import SourceRecord
@@ -123,6 +129,169 @@ def _single_company_master_payload(
         "source_record_key,company_code,company_name,lifecycle,extracted_at\n"
         f"event-{uuid4().hex},{company_code},{company_name},{lifecycle},{extracted_at}\n"
     ).encode()
+
+
+class _DgcSapProfitSource:
+    def __init__(self) -> None:
+        self.parameters: list[Mapping[str, object]] = []
+
+    def fetch(self, parameters: Mapping[str, object]) -> DgcFetchResult:
+        self.parameters.append(dict(parameters))
+        return DgcFetchResult(
+            records=(
+                {
+                    "mandt": "100",
+                    "bukrs": "C001",
+                    "companyname": "Company One",
+                    "gjahr": "2026",
+                    "monat": "03",
+                    "rldnr": "0L",
+                    "hs": "10",
+                    "ztext": "利润总额",
+                    "nmhsl": "999.00",
+                    "nyhsl": "100.00",
+                },
+                {
+                    "mandt": "100",
+                    "bukrs": "C001",
+                    "companyname": "Company One",
+                    "gjahr": "2026",
+                    "monat": "03",
+                    "rldnr": "0L",
+                    "hs": "20",
+                    "ztext": "公允价值变动收益",
+                    "nmhsl": "999.00",
+                    "nyhsl": "-2.50",
+                },
+                {
+                    "mandt": "100",
+                    "bukrs": "C001",
+                    "companyname": "Company One",
+                    "gjahr": "2026",
+                    "monat": "03",
+                    "rldnr": "0L",
+                    "hs": "30",
+                    "ztext": "营业收入",
+                    "nmhsl": "999.00",
+                    "nyhsl": "500.00",
+                },
+                {
+                    "rldnr": "2L",
+                    "ztext": "利润总额",
+                    "nyhsl": "999999.00",
+                },
+                {
+                    "rldnr": "0L",
+                    "ztext": "管理费用",
+                    "nyhsl": "888888.00",
+                },
+            ),
+            checksum="d" * 64,
+        )
+
+
+class _DgcSapDividendDetailSource:
+    def __init__(self) -> None:
+        self.parameters: list[Mapping[str, object]] = []
+
+    def fetch(self, parameters: Mapping[str, object]) -> DgcFetchResult:
+        self.parameters.append(dict(parameters))
+        return DgcFetchResult(
+            records=(
+                _dgc_dividend_row(
+                    voucher_no="q2-dividend",
+                    fiscal_period="006",
+                    header_text="收到子公司分红",
+                    amount_ksl="-12.50",
+                ),
+                _dgc_dividend_row(
+                    voucher_no="future-q3-dividend",
+                    fiscal_period="007",
+                    detail_text="收到股利",
+                    amount_ksl="-20.00",
+                ),
+                _dgc_dividend_row(
+                    voucher_no="not-a-dividend",
+                    fiscal_period="006",
+                    header_text="投资收益",
+                    amount_ksl="-1000.00",
+                ),
+            ),
+            checksum="e" * 64,
+        )
+
+
+class _DgcSapTrialBalanceSource:
+    def __init__(self) -> None:
+        self.parameters: list[Mapping[str, object]] = []
+
+    def fetch(self, parameters: Mapping[str, object]) -> DgcFetchResult:
+        self.parameters.append(dict(parameters))
+        return DgcFetchResult(
+            records=(
+                _dgc_trial_balance_row(
+                    fiscal_period="003",
+                    total_debit_amount="900000",
+                ),
+                _dgc_trial_balance_row(
+                    fiscal_period="006",
+                    total_debit_amount="750000",
+                    total_credit_amount="-50000",
+                ),
+            ),
+            checksum="f" * 64,
+        )
+
+
+def _dgc_trial_balance_row(**overrides: object) -> dict[str, object]:
+    return {
+        "company_code": "C001",
+        "company_name": "Company One",
+        "fiscal_year": "2026",
+        "fiscal_period": "006",
+        "gl_account_code": "6801010000",
+        "gl_account_name": "所得税费用-当期所得税费用",
+        "bank_center_code": "",
+        "bank_account_number": "",
+        "cost_center_code": "",
+        "cost_center_name": "",
+        "profit_center_code": "",
+        "profit_center_name": "",
+        "internal_order_code": "",
+        "internal_order_name": "",
+        "business_area_code": "",
+        "business_area_name": "",
+        "customer_code": "",
+        "customer_name": "",
+        "vendor_code": "",
+        "vendor_name": "",
+        "asset_code": "",
+        "asset_name": "",
+        "rstgr": "",
+        "rstgr_name": "",
+        "input_tax_process_method": "",
+        "sfkf": "",
+        "total_debit_amount": "0",
+        "total_credit_amount": "0",
+    } | overrides
+
+
+def _dgc_dividend_row(**overrides: object) -> dict[str, object]:
+    return {
+        "fiscal_year": "2026",
+        "fiscal_period": "006",
+        "voucher_no": "default-voucher",
+        "header_text": "",
+        "detail_text": "",
+        "amount_ksl": "0",
+        "gl_account": "6111010000",
+        "account_name": "投资收益",
+        "project_code": "",
+        "project_name": "",
+        "debit_credit_flag": "H",
+        "group_currency": "CNY",
+        "original_system_doc_no": "",
+    } | overrides
 
 
 class _BarrierCompanyAdapter:
@@ -459,6 +628,330 @@ def test_valid_financial_file_succeeds_and_persists_canonical_controls(
     assert records[1]["amount"] == Decimal("-500.000000000000")
     assert records[1]["payload"]["metric_code"] == "received_dividends"
     assert records[1]["lineage"]["row_number"] == 3
+
+
+def test_dgc_sap_profit_endpoint_reuses_controlled_financial_ingest(
+    isolated_database_url: str,
+) -> None:
+    database_engine, factory = create_session_factory(isolated_database_url)
+    source = _DgcSapProfitSource()
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+        dgc_sap_profit_source=source,
+    )
+    request_body = {
+        "source_batch_key": f"sap-profit-{uuid4().hex}",
+        "extraction_time": "2026-04-01T08:00:00Z",
+        "gjahr": "2026",
+        "monat": "03",
+        "bukrs": "C001",
+        "currency": "CNY",
+        "amount_scale": 2,
+    }
+
+    try:
+        with TestClient(app) as client:
+            _seed_active_companies(client)
+            response = client.post(
+                "/api/v1/ingest-batches/dgc-sap-profit",
+                json=request_body,
+            )
+            replay = client.post(
+                "/api/v1/ingest-batches/dgc-sap-profit",
+                json=request_body,
+            )
+            conflicting_query = client.post(
+                "/api/v1/ingest-batches/dgc-sap-profit",
+                json=request_body | {"bukrs": "C002"},
+            )
+
+        assert response.status_code == 201, response.text
+        assert replay.status_code == 200, replay.text
+        assert conflicting_query.status_code == 409, conflicting_query.text
+        assert conflicting_query.json()["detail"]["code"] == ("IDEMPOTENCY_METADATA_CONFLICT")
+        result = response.json()
+        assert replay.json()["id"] == result["id"]
+        assert result["source"] == "DGC_SAP"
+        assert result["dataset_code"] == "quarterly_metric"
+        assert result["period"] == "2026-03-31"
+        assert result["status"] == "SUCCEEDED"
+        assert result["record_count"] == 3
+        assert result["accepted_count"] == 3
+        assert result["rejected_count"] == 0
+        assert result["checksum"] == "d" * 64
+        parameters_sha256 = dgc_parameters_sha256({"gjahr": "2026", "monat": "03", "bukrs": "C001"})
+        assert result["source_primary_key_definition"] == {
+            "fields": ["source_record_key"],
+            "dgc_parameters_sha256": parameters_sha256,
+        }
+        assert result["payload_ref"] == (f"dgc://sap-income?query_sha256={parameters_sha256}")
+        assert source.parameters == [
+            {"gjahr": "2026", "monat": "03", "bukrs": "C001"},
+            {"gjahr": "2026", "monat": "03", "bukrs": "C001"},
+            {"gjahr": "2026", "monat": "03", "bukrs": "C002"},
+        ]
+
+        with database_engine.connect() as connection:
+            records = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT source_record_key, amount, payload ->> 'metric_code' AS metric_code
+                        FROM source_record
+                        WHERE batch_id = :batch_id
+                        ORDER BY metric_code
+                        """
+                    ),
+                    {"batch_id": result["id"]},
+                )
+                .mappings()
+                .all()
+            )
+
+        assert [(row["metric_code"], row["amount"]) for row in records] == [
+            ("cumulative_profit", Decimal("100.00")),
+            ("cumulative_revenue", Decimal("500.00")),
+            ("fair_value_change", Decimal("-2.50")),
+        ]
+        assert all(row["source_record_key"].startswith("dgc-sap-profit:") for row in records)
+    finally:
+        database_engine.dispose()
+
+
+def test_dgc_sap_dividend_endpoint_reuses_controlled_quarterly_ingest(
+    isolated_database_url: str,
+) -> None:
+    database_engine, factory = create_session_factory(isolated_database_url)
+    source = _DgcSapDividendDetailSource()
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+        dgc_sap_dividend_detail_source=source,
+    )
+    request_body = {
+        "source_batch_key": f"sap-dividend-{uuid4().hex}",
+        "extraction_time": "2026-07-01T08:00:00Z",
+        "company": "C001",
+        "fiscal_year": "2026",
+        "through_period": "006",
+        "currency": "CNY",
+        "amount_scale": 2,
+    }
+
+    try:
+        with TestClient(app) as client:
+            _seed_active_companies(client)
+            response = client.post(
+                "/api/v1/ingest-batches/dgc-sap-dividend-detail",
+                json=request_body,
+            )
+            replay = client.post(
+                "/api/v1/ingest-batches/dgc-sap-dividend-detail",
+                json=request_body,
+            )
+            conflicting_scope = client.post(
+                "/api/v1/ingest-batches/dgc-sap-dividend-detail",
+                json=request_body | {"through_period": 9},
+            )
+
+        assert response.status_code == 201, response.text
+        assert replay.status_code == 200, replay.text
+        assert conflicting_scope.status_code == 409, conflicting_scope.text
+        assert conflicting_scope.json()["detail"]["code"] == (
+            "IDEMPOTENCY_METADATA_CONFLICT"
+        )
+        result = response.json()
+        assert replay.json()["id"] == result["id"]
+        assert result["source"] == "DGC_SAP_DIVIDEND"
+        assert result["dataset_code"] == "quarterly_metric"
+        assert result["period"] == "2026-06-30"
+        assert result["status"] == "SUCCEEDED"
+        assert result["record_count"] == 1
+        assert result["accepted_count"] == 1
+        assert result["rejected_count"] == 0
+        assert result["checksum"] == "e" * 64
+        scope = {"company": "C001", "fiscal_year": "2026", "through_period": 6}
+        scope_sha256 = dgc_dividend_scope_sha256(scope)
+        assert result["source_primary_key_definition"] == {
+            "fields": ["source_record_key"],
+            "dgc_dividend_scope_sha256": scope_sha256,
+        }
+        assert result["payload_ref"] == (
+            f"dgc://sap-dividend-detail?scope_sha256={scope_sha256}"
+        )
+        assert source.parameters == [
+            {"company": "C001", "fiscal_year": "2026"},
+            {"company": "C001", "fiscal_year": "2026"},
+            {"company": "C001", "fiscal_year": "2026"},
+        ]
+
+        with database_engine.connect() as connection:
+            records = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT source_record_key, amount,
+                               payload ->> 'metric_code' AS metric_code
+                        FROM source_record
+                        WHERE batch_id = :batch_id
+                        """
+                    ),
+                    {"batch_id": result["id"]},
+                )
+                .mappings()
+                .all()
+            )
+
+        assert len(records) == 1
+        assert records[0]["metric_code"] == "received_dividends"
+        assert records[0]["amount"] == Decimal("12.500000000000")
+        assert records[0]["source_record_key"].startswith(
+            "dgc-sap-dividend-detail:"
+        )
+    finally:
+        database_engine.dispose()
+
+
+def test_dgc_sap_trial_balance_endpoint_reuses_controlled_quarterly_ingest(
+    isolated_database_url: str,
+) -> None:
+    database_engine, factory = create_session_factory(isolated_database_url)
+    source = _DgcSapTrialBalanceSource()
+    app = create_app(
+        uow_factory=partial(UnitOfWork, factory),
+        principal_provider=_group_tax_admin,
+        dgc_sap_trial_balance_source=source,
+    )
+    request_body = {
+        "source_batch_key": f"sap-trial-balance-{uuid4().hex}",
+        "extraction_time": "2026-07-01T08:00:00Z",
+        "company_code": "C001",
+        "fiscal_year": "2026",
+        "through_period": "006",
+        "currency": "CNY",
+        "amount_scale": 2,
+    }
+
+    try:
+        with TestClient(app) as client:
+            _seed_active_companies(client)
+            response = client.post(
+                "/api/v1/ingest-batches/dgc-sap-trial-balance",
+                json=request_body,
+            )
+            replay = client.post(
+                "/api/v1/ingest-batches/dgc-sap-trial-balance",
+                json=request_body,
+            )
+            conflicting_scope = client.post(
+                "/api/v1/ingest-batches/dgc-sap-trial-balance",
+                json=request_body | {"through_period": 9},
+            )
+
+        assert response.status_code == 201, response.text
+        assert replay.status_code == 200, replay.text
+        assert conflicting_scope.status_code == 409, conflicting_scope.text
+        assert conflicting_scope.json()["detail"]["code"] == (
+            "IDEMPOTENCY_METADATA_CONFLICT"
+        )
+        result = response.json()
+        assert replay.json()["id"] == result["id"]
+        assert result["source"] == "DGC_SAP_TRIAL_BALANCE"
+        assert result["dataset_code"] == "quarterly_metric"
+        assert result["period"] == "2026-06-30"
+        assert result["status"] == "SUCCEEDED"
+        assert result["record_count"] == 2
+        assert result["accepted_count"] == 2
+        assert result["rejected_count"] == 0
+        assert result["checksum"] == "f" * 64
+        parameters = {
+            "company_code": "C001",
+            "fiscal_year": "2026",
+            "gl_account_code": "6801010000",
+        }
+        scope_sha256 = dgc_trial_balance_scope_sha256(
+            {**parameters, "through_period": 6}
+        )
+        assert result["source_primary_key_definition"] == {
+            "fields": ["source_record_key"],
+            "dgc_trial_balance_scope_sha256": scope_sha256,
+        }
+        assert result["payload_ref"] == (
+            f"dgc://sap-trial-balance?scope_sha256={scope_sha256}"
+        )
+        assert source.parameters == [parameters, parameters, parameters]
+
+        with database_engine.connect() as connection:
+            records = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT source_record_key, amount,
+                               payload ->> 'metric_code' AS metric_code
+                        FROM source_record
+                        WHERE batch_id = :batch_id
+                        ORDER BY metric_code
+                        """
+                    ),
+                    {"batch_id": result["id"]},
+                )
+                .mappings()
+                .all()
+            )
+
+        assert [(row["metric_code"], row["amount"]) for row in records] == [
+            ("current_quarter_current_tax", Decimal("700000.000000000000")),
+            ("prior_quarter_current_tax", Decimal("900000.000000000000")),
+        ]
+        assert all(
+            row["source_record_key"].startswith("dgc-sap-trial-balance:")
+            for row in records
+        )
+    finally:
+        database_engine.dispose()
+
+
+def test_dgc_sap_trial_balance_endpoint_is_unavailable_when_not_configured(
+    api_resources: tuple[TestClient, Engine],
+) -> None:
+    client, _database_engine = api_resources
+
+    response = client.post(
+        "/api/v1/ingest-batches/dgc-sap-trial-balance",
+        json={
+            "source_batch_key": "disabled-trial-balance-source",
+            "extraction_time": "2026-07-01T08:00:00Z",
+            "company_code": "C001",
+            "fiscal_year": "2026",
+            "through_period": 6,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DGC_SAP_TRIAL_BALANCE_DISABLED"
+
+
+def test_dgc_sap_dividend_endpoint_is_unavailable_when_not_configured(
+    api_resources: tuple[TestClient, Engine],
+) -> None:
+    client, _database_engine = api_resources
+
+    response = client.post(
+        "/api/v1/ingest-batches/dgc-sap-dividend-detail",
+        json={
+            "source_batch_key": "disabled-dividend-source",
+            "extraction_time": "2026-07-01T08:00:00Z",
+            "company": "C001",
+            "fiscal_year": "2026",
+            "through_period": 6,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == (
+        "DGC_SAP_DIVIDEND_DETAIL_DISABLED"
+    )
 
 
 def test_partial_file_reports_exact_rows_and_excludes_invalid_amount_from_total(

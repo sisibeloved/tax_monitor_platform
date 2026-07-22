@@ -469,6 +469,7 @@ def test_quarterly_dashboard_returns_scoped_counts_cost_and_company_pagination(
     assert body["amount_scale"] == 2
     assert body["monitoring_type_counts"] == {
         "ACCRUAL_ACCURACY": 1,
+        "DEFERRED_TAX_ACCURACY": 0,
         "TAX_BURDEN": 0,
         "POTENTIAL_TAX_COST": 1,
     }

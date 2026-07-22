@@ -14,6 +14,7 @@ from tax_risk.api.routes.health import router as health_router
 from tax_risk.api.routes.health import DefaultReadinessProbe, ReadinessProbe
 from tax_risk.api.routes.audit import router as audit_router
 from tax_risk.api.routes.ingest import router as ingest_router
+from tax_risk.api.routes.income_tax_refunds import router as income_tax_refunds_router
 from tax_risk.api.routes.cases import router as cases_router
 from tax_risk.api.routes.dashboard import router as dashboard_router
 from tax_risk.api.routes.master_data import router as master_data_router
@@ -27,6 +28,32 @@ from tax_risk.api.routes.business_entertainment import (
     router as business_entertainment_router,
 )
 from tax_risk.adapters.ingest.tax_master_xlsx import XlsxResourceLimits
+from tax_risk.adapters.ingest.dgc_sap_profit import (
+    DgcClientConfig,
+    DgcSapProfitClient,
+    DgcSapProfitFieldMap,
+    DgcSapProfitMetricMap,
+)
+from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (
+    DgcHesiInvoiceFieldMap,
+    DgcHesiReimbursementFieldMap,
+)
+from tax_risk.application.dgc_sap_profit import DgcSapProfitSource
+from tax_risk.application.dgc_sap_account_balance import DgcSapAccountBalanceSource
+from tax_risk.application.dgc_sap_dividend_detail import DgcSapDividendDetailSource
+from tax_risk.application.dgc_hesi_reimbursement import DgcHesiReimbursementSource
+from tax_risk.application.dgc_hesi_invoice import DgcHesiInvoiceSource
+from tax_risk.application.dgc_invoice_detail import DgcInvoiceDetailSource
+from tax_risk.application.dgc_sap_trial_balance import DgcSapTrialBalanceSource
+from tax_risk.application.external_fetch import (
+    CoordinatedDgcSource,
+    DgcFetchSource,
+    FetchCache,
+)
+from tax_risk.application.external_fetch_runtime import (
+    MetricFetchObserver,
+    build_external_fetch_coordinator,
+)
 from tax_risk.application.ingest import (
     AdapterFactory,
     UowFactory,
@@ -63,15 +90,24 @@ def create_app(
     *,
     uow_factory: UowFactory | None = None,
     adapter_factory: AdapterFactory | None = None,
+    dgc_sap_profit_source: DgcSapProfitSource | None = None,
+    dgc_sap_trial_balance_source: DgcSapTrialBalanceSource | None = None,
+    dgc_sap_account_balance_source: DgcSapAccountBalanceSource | None = None,
+    dgc_sap_dividend_detail_source: DgcSapDividendDetailSource | None = None,
+    dgc_hesi_reimbursement_source: DgcHesiReimbursementSource | None = None,
+    dgc_hesi_invoice_source: DgcHesiInvoiceSource | None = None,
+    dgc_invoice_detail_source: DgcInvoiceDetailSource | None = None,
     settings: Settings | None = None,
     principal_provider: PrincipalProvider | None = None,
     quarterly_dispatcher: Callable[..., None] | None = None,
     monthly_semantic_dispatcher: Callable[..., None] | None = None,
+    income_tax_refund_writeback_dispatcher: Callable[[], object] | None = None,
     semantic_credential_resolver: Callable[[str], str] | None = None,
     export_dispatcher: Callable[..., None] | None = None,
     export_object_store: ExportObjectStore | None = None,
     readiness_probe: ReadinessProbe | None = None,
     metrics_registry: MetricRegistry | None = None,
+    external_fetch_cache: FetchCache | None = None,
 ) -> FastAPI:
     """Create the tax risk monitoring API."""
 
@@ -102,8 +138,302 @@ def create_app(
         object_store=resolved_export_store,
     )
     app.state.settings = resolved_settings
+    if income_tax_refund_writeback_dispatcher is not None:
+        app.state.income_tax_refund_writeback_dispatcher = income_tax_refund_writeback_dispatcher
+    elif resolved_settings.lark_refund_writeback_enabled:
+        app.state.income_tax_refund_writeback_dispatcher = partial(
+            _dispatch_income_tax_refund_writebacks,
+            uow_factory=app.state.uow_factory,
+            worker_scope_secret=resolved_settings.worker_scope_secret,
+            max_retries=resolved_settings.lark_refund_max_retries,
+        )
+    else:
+        app.state.income_tax_refund_writeback_dispatcher = lambda: ()
     app.state.principal_provider = principal_provider
     app.state.adapter_factory = adapter_factory or create_csv_adapter
+    app.state.dgc_sap_profit_field_map = DgcSapProfitFieldMap(
+        **resolved_settings.dgc_sap_profit_field_map
+    )
+    app.state.dgc_sap_profit_metric_map = DgcSapProfitMetricMap(
+        **resolved_settings.dgc_sap_profit_metric_map
+    )
+    app.state.dgc_sap_profit_ledger = resolved_settings.dgc_sap_profit_ledger
+    app.state.dgc_hesi_reimbursement_field_map = DgcHesiReimbursementFieldMap(
+        **resolved_settings.dgc_hesi_reimbursement_field_map
+    )
+    app.state.dgc_hesi_invoice_field_map = DgcHesiInvoiceFieldMap(
+        **resolved_settings.dgc_hesi_invoice_field_map
+    )
+    app.state.dgc_sap_profit_client = dgc_sap_profit_source
+    owned_dgc_sap_profit_client: DgcSapProfitClient | None = None
+    if app.state.dgc_sap_profit_client is None and resolved_settings.dgc_sap_profit_enabled:
+        assert resolved_settings.dgc_sap_profit_api_url is not None
+        if resolved_settings.dgc_app_key is not None:
+            assert resolved_settings.dgc_app_secret is not None
+            client_config = DgcClientConfig(
+                api_url=resolved_settings.dgc_sap_profit_api_url,
+                app_key=resolved_settings.dgc_app_key.get_secret_value(),
+                app_secret=resolved_settings.dgc_app_secret.get_secret_value(),
+                timeout=resolved_settings.dgc_timeout_seconds,
+                page_size=resolved_settings.dgc_page_size,
+                max_pages=resolved_settings.dgc_max_pages,
+                max_records=resolved_settings.dgc_max_records,
+                max_page_bytes=resolved_settings.dgc_max_page_bytes,
+                max_total_bytes=resolved_settings.dgc_max_total_bytes,
+                token_ttl=resolved_settings.dgc_token_ttl_seconds,
+                tls_server_name=resolved_settings.dgc_tls_server_name,
+                tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+            )
+        else:
+            assert resolved_settings.dgc_iam_username is not None
+            assert resolved_settings.dgc_iam_password is not None
+            client_config = DgcClientConfig(
+                iam_url=resolved_settings.dgc_iam_url,
+                api_url=resolved_settings.dgc_sap_profit_api_url,
+                username=resolved_settings.dgc_iam_username,
+                password=resolved_settings.dgc_iam_password.get_secret_value(),
+                domain=resolved_settings.dgc_iam_domain,
+                project=resolved_settings.dgc_iam_project,
+                timeout=resolved_settings.dgc_timeout_seconds,
+                page_size=resolved_settings.dgc_page_size,
+                max_pages=resolved_settings.dgc_max_pages,
+                max_records=resolved_settings.dgc_max_records,
+                max_page_bytes=resolved_settings.dgc_max_page_bytes,
+                max_total_bytes=resolved_settings.dgc_max_total_bytes,
+                token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            )
+        owned_dgc_sap_profit_client = DgcSapProfitClient(client_config)
+        app.state.dgc_sap_profit_client = owned_dgc_sap_profit_client
+        app.router.add_event_handler("shutdown", owned_dgc_sap_profit_client.close)
+    app.state.dgc_sap_trial_balance_client = dgc_sap_trial_balance_source
+    owned_dgc_sap_trial_balance_client: DgcSapProfitClient | None = None
+    if (
+        app.state.dgc_sap_trial_balance_client is None
+        and resolved_settings.dgc_sap_trial_balance_enabled
+    ):
+        assert resolved_settings.dgc_sap_trial_balance_api_url is not None
+        assert resolved_settings.dgc_sap_trial_balance_app_key is not None
+        assert resolved_settings.dgc_sap_trial_balance_app_secret is not None
+        trial_balance_client_config = DgcClientConfig(
+            api_url=resolved_settings.dgc_sap_trial_balance_api_url,
+            app_key=resolved_settings.dgc_sap_trial_balance_app_key.get_secret_value(),
+            app_secret=(resolved_settings.dgc_sap_trial_balance_app_secret.get_secret_value()),
+            timeout=resolved_settings.dgc_timeout_seconds,
+            page_size=resolved_settings.dgc_sap_trial_balance_page_size,
+            max_pages=resolved_settings.dgc_max_pages,
+            max_records=resolved_settings.dgc_max_records,
+            max_page_bytes=resolved_settings.dgc_max_page_bytes,
+            max_total_bytes=resolved_settings.dgc_max_total_bytes,
+            token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            tls_server_name=resolved_settings.dgc_tls_server_name,
+            tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+        )
+        owned_dgc_sap_trial_balance_client = DgcSapProfitClient(trial_balance_client_config)
+        app.state.dgc_sap_trial_balance_client = owned_dgc_sap_trial_balance_client
+        app.router.add_event_handler(
+            "shutdown",
+            owned_dgc_sap_trial_balance_client.close,
+        )
+    app.state.dgc_sap_account_balance_client = dgc_sap_account_balance_source
+    owned_dgc_sap_account_balance_client: DgcSapProfitClient | None = None
+    if (
+        app.state.dgc_sap_account_balance_client is None
+        and resolved_settings.dgc_sap_account_balance_enabled
+    ):
+        assert resolved_settings.dgc_sap_account_balance_api_url is not None
+        assert resolved_settings.dgc_sap_account_balance_app_key is not None
+        assert resolved_settings.dgc_sap_account_balance_app_secret is not None
+        account_balance_client_config = DgcClientConfig(
+            api_url=resolved_settings.dgc_sap_account_balance_api_url,
+            app_key=(resolved_settings.dgc_sap_account_balance_app_key.get_secret_value()),
+            app_secret=(resolved_settings.dgc_sap_account_balance_app_secret.get_secret_value()),
+            timeout=resolved_settings.dgc_timeout_seconds,
+            page_size=resolved_settings.dgc_sap_account_balance_page_size,
+            max_pages=resolved_settings.dgc_max_pages,
+            max_records=resolved_settings.dgc_max_records,
+            max_page_bytes=resolved_settings.dgc_max_page_bytes,
+            max_total_bytes=resolved_settings.dgc_max_total_bytes,
+            token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            tls_server_name=resolved_settings.dgc_tls_server_name,
+            tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+        )
+        owned_dgc_sap_account_balance_client = DgcSapProfitClient(account_balance_client_config)
+        app.state.dgc_sap_account_balance_client = owned_dgc_sap_account_balance_client
+        app.router.add_event_handler(
+            "shutdown",
+            owned_dgc_sap_account_balance_client.close,
+        )
+    app.state.dgc_sap_dividend_detail_client = dgc_sap_dividend_detail_source
+    owned_dgc_sap_dividend_detail_client: DgcSapProfitClient | None = None
+    if (
+        app.state.dgc_sap_dividend_detail_client is None
+        and resolved_settings.dgc_sap_dividend_detail_enabled
+    ):
+        assert resolved_settings.dgc_sap_dividend_detail_api_url is not None
+        assert resolved_settings.dgc_sap_dividend_detail_app_key is not None
+        assert resolved_settings.dgc_sap_dividend_detail_app_secret is not None
+        dividend_client_config = DgcClientConfig(
+            api_url=resolved_settings.dgc_sap_dividend_detail_api_url,
+            app_key=(resolved_settings.dgc_sap_dividend_detail_app_key.get_secret_value()),
+            app_secret=(resolved_settings.dgc_sap_dividend_detail_app_secret.get_secret_value()),
+            timeout=resolved_settings.dgc_timeout_seconds,
+            page_size=resolved_settings.dgc_sap_dividend_detail_page_size,
+            max_pages=resolved_settings.dgc_max_pages,
+            max_records=resolved_settings.dgc_max_records,
+            max_page_bytes=resolved_settings.dgc_max_page_bytes,
+            max_total_bytes=resolved_settings.dgc_max_total_bytes,
+            token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            tls_server_name=resolved_settings.dgc_tls_server_name,
+            tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+        )
+        owned_dgc_sap_dividend_detail_client = DgcSapProfitClient(dividend_client_config)
+        app.state.dgc_sap_dividend_detail_client = owned_dgc_sap_dividend_detail_client
+        app.router.add_event_handler(
+            "shutdown",
+            owned_dgc_sap_dividend_detail_client.close,
+        )
+    app.state.dgc_hesi_reimbursement_client = dgc_hesi_reimbursement_source
+    owned_dgc_hesi_reimbursement_client: DgcSapProfitClient | None = None
+    if (
+        app.state.dgc_hesi_reimbursement_client is None
+        and resolved_settings.dgc_hesi_reimbursement_enabled
+    ):
+        assert resolved_settings.dgc_hesi_reimbursement_api_url is not None
+        assert resolved_settings.dgc_hesi_reimbursement_app_key is not None
+        assert resolved_settings.dgc_hesi_reimbursement_app_secret is not None
+        hesi_client_config = DgcClientConfig(
+            api_url=resolved_settings.dgc_hesi_reimbursement_api_url,
+            app_key=(resolved_settings.dgc_hesi_reimbursement_app_key.get_secret_value()),
+            app_secret=(resolved_settings.dgc_hesi_reimbursement_app_secret.get_secret_value()),
+            timeout=resolved_settings.dgc_timeout_seconds,
+            page_size=resolved_settings.dgc_hesi_reimbursement_page_size,
+            max_pages=resolved_settings.dgc_max_pages,
+            max_records=resolved_settings.dgc_max_records,
+            max_page_bytes=resolved_settings.dgc_max_page_bytes,
+            max_total_bytes=resolved_settings.dgc_max_total_bytes,
+            token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            tls_server_name=resolved_settings.dgc_tls_server_name,
+            tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+        )
+        owned_dgc_hesi_reimbursement_client = DgcSapProfitClient(hesi_client_config)
+        app.state.dgc_hesi_reimbursement_client = owned_dgc_hesi_reimbursement_client
+        app.router.add_event_handler(
+            "shutdown",
+            owned_dgc_hesi_reimbursement_client.close,
+        )
+    app.state.dgc_hesi_invoice_client = dgc_hesi_invoice_source
+    owned_dgc_hesi_invoice_client: DgcSapProfitClient | None = None
+    if app.state.dgc_hesi_invoice_client is None and resolved_settings.dgc_hesi_invoice_enabled:
+        assert resolved_settings.dgc_hesi_invoice_api_url is not None
+        assert resolved_settings.dgc_hesi_invoice_app_key is not None
+        assert resolved_settings.dgc_hesi_invoice_app_secret is not None
+        hesi_invoice_client_config = DgcClientConfig(
+            api_url=resolved_settings.dgc_hesi_invoice_api_url,
+            app_key=resolved_settings.dgc_hesi_invoice_app_key.get_secret_value(),
+            app_secret=resolved_settings.dgc_hesi_invoice_app_secret.get_secret_value(),
+            timeout=resolved_settings.dgc_timeout_seconds,
+            page_size=resolved_settings.dgc_hesi_invoice_page_size,
+            max_pages=resolved_settings.dgc_max_pages,
+            max_records=resolved_settings.dgc_max_records,
+            max_page_bytes=resolved_settings.dgc_max_page_bytes,
+            max_total_bytes=resolved_settings.dgc_max_total_bytes,
+            token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            tls_server_name=resolved_settings.dgc_tls_server_name,
+            tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+        )
+        owned_dgc_hesi_invoice_client = DgcSapProfitClient(hesi_invoice_client_config)
+        app.state.dgc_hesi_invoice_client = owned_dgc_hesi_invoice_client
+        app.router.add_event_handler(
+            "shutdown",
+            owned_dgc_hesi_invoice_client.close,
+        )
+    app.state.dgc_invoice_detail_client = dgc_invoice_detail_source
+    owned_dgc_invoice_detail_client: DgcSapProfitClient | None = None
+    if app.state.dgc_invoice_detail_client is None and resolved_settings.dgc_invoice_detail_enabled:
+        assert resolved_settings.dgc_invoice_detail_api_url is not None
+        assert resolved_settings.dgc_invoice_detail_app_key is not None
+        assert resolved_settings.dgc_invoice_detail_app_secret is not None
+        invoice_client_config = DgcClientConfig(
+            api_url=resolved_settings.dgc_invoice_detail_api_url,
+            app_key=(resolved_settings.dgc_invoice_detail_app_key.get_secret_value()),
+            app_secret=(resolved_settings.dgc_invoice_detail_app_secret.get_secret_value()),
+            timeout=resolved_settings.dgc_timeout_seconds,
+            page_size=resolved_settings.dgc_invoice_detail_page_size,
+            max_pages=resolved_settings.dgc_max_pages,
+            max_records=resolved_settings.dgc_max_records,
+            max_page_bytes=resolved_settings.dgc_max_page_bytes,
+            max_total_bytes=resolved_settings.dgc_max_total_bytes,
+            token_ttl=resolved_settings.dgc_token_ttl_seconds,
+            tls_server_name=resolved_settings.dgc_tls_server_name,
+            tls_pinned_certificate_sha256=(resolved_settings.dgc_tls_pinned_certificate_sha256),
+        )
+        owned_dgc_invoice_detail_client = DgcSapProfitClient(invoice_client_config)
+        app.state.dgc_invoice_detail_client = owned_dgc_invoice_detail_client
+        app.router.add_event_handler(
+            "shutdown",
+            owned_dgc_invoice_detail_client.close,
+        )
+    app.state.external_fetch_coordinator = None
+    if resolved_settings.external_fetch_enabled:
+        fetch_sources: dict[str, DgcFetchSource] = {}
+        if app.state.dgc_sap_profit_client is not None:
+            fetch_sources["dgc_sap_profit"] = app.state.dgc_sap_profit_client
+        if app.state.dgc_sap_trial_balance_client is not None:
+            fetch_sources["dgc_sap_trial_balance"] = app.state.dgc_sap_trial_balance_client
+        if app.state.dgc_sap_account_balance_client is not None:
+            fetch_sources["dgc_sap_account_balance"] = app.state.dgc_sap_account_balance_client
+        if app.state.dgc_sap_dividend_detail_client is not None:
+            fetch_sources["dgc_sap_dividend_detail"] = app.state.dgc_sap_dividend_detail_client
+        if app.state.dgc_hesi_reimbursement_client is not None:
+            fetch_sources["dgc_hesi_reimbursement"] = app.state.dgc_hesi_reimbursement_client
+        if app.state.dgc_hesi_invoice_client is not None:
+            fetch_sources["dgc_hesi_invoice"] = app.state.dgc_hesi_invoice_client
+        if app.state.dgc_invoice_detail_client is not None:
+            fetch_sources["dgc_invoice_detail"] = app.state.dgc_invoice_detail_client
+        if fetch_sources:
+            coordinator = build_external_fetch_coordinator(
+                resolved_settings,
+                fetch_sources,
+                cache=external_fetch_cache,
+                observer=MetricFetchObserver(app.state.metrics_registry),
+            )
+            app.state.external_fetch_coordinator = coordinator
+            if "dgc_sap_profit" in fetch_sources:
+                app.state.dgc_sap_profit_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_sap_profit",
+                )
+            if "dgc_sap_trial_balance" in fetch_sources:
+                app.state.dgc_sap_trial_balance_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_sap_trial_balance",
+                )
+            if "dgc_sap_account_balance" in fetch_sources:
+                app.state.dgc_sap_account_balance_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_sap_account_balance",
+                )
+            if "dgc_sap_dividend_detail" in fetch_sources:
+                app.state.dgc_sap_dividend_detail_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_sap_dividend_detail",
+                )
+            if "dgc_hesi_reimbursement" in fetch_sources:
+                app.state.dgc_hesi_reimbursement_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_hesi_reimbursement",
+                )
+            if "dgc_hesi_invoice" in fetch_sources:
+                app.state.dgc_hesi_invoice_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_hesi_invoice",
+                )
+            if "dgc_invoice_detail" in fetch_sources:
+                app.state.dgc_invoice_detail_client = CoordinatedDgcSource(
+                    coordinator,
+                    "dgc_invoice_detail",
+                )
+            app.router.add_event_handler("shutdown", coordinator.close)
     app.state.quarterly_batch_service_factory = lambda: QuarterlyBatchService(app.state.uow_factory)
     app.state.quarterly_dispatcher = quarterly_dispatcher or partial(
         _dispatch_quarterly_batch,
@@ -169,6 +499,7 @@ def create_app(
     app.include_router(health_router)
     app.include_router(audit_router)
     app.include_router(ingest_router)
+    app.include_router(income_tax_refunds_router)
     app.include_router(cases_router)
     app.include_router(dashboard_router)
     app.include_router(master_data_router)
@@ -356,6 +687,40 @@ def _dispatch_export_job(
     celery_app.send_task(
         RENDER_EXPORT_TASK,
         args=(str(job_id), authorization_version, scope_token),
+    )
+
+
+def _dispatch_income_tax_refund_writebacks(
+    *,
+    uow_factory: Callable[[], UnitOfWork],
+    worker_scope_secret: str,
+    max_retries: int,
+) -> tuple[str, ...]:
+    """Publish bounded, signed outbox tasks after the scan transaction commits."""
+
+    from tax_risk.application.refund_writebacks import (
+        IncomeTaxRefundWritebackService,
+    )
+    from tax_risk.workers.celery_app import celery_app
+    from tax_risk.workers.income_tax_refund_writebacks import (
+        dispatch_refund_writebacks,
+    )
+
+    class DispatchOnlySender:
+        def write_status(self, company_code: str, desired_value: str) -> object:
+            del company_code, desired_value
+            raise RuntimeError("dispatch-only service cannot deliver writebacks")
+
+    service = IncomeTaxRefundWritebackService(
+        uow_factory,
+        DispatchOnlySender(),
+        max_retries=max_retries,
+    )
+    items = service.list_dispatchable(limit=1_000)
+    return dispatch_refund_writebacks(
+        app=celery_app,
+        items=items,
+        worker_scope_secret=worker_scope_secret,
     )
 
 

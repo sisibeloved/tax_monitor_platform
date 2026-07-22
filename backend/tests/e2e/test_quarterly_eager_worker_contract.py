@@ -106,9 +106,21 @@ def _assert_standard_company_results(
     )
     assert response.status_code == 200, response.text
     cases = cast(dict[str, object], response.json())
-    assert cases["total"] == 3
+    assert cases["total"] == 4
     items = cast(list[dict[str, object]], cases["items"])
     assert {item["run_id"] for item in items} == {str(run_id)}
+    deferred_item = next(
+        item for item in items if item["monitoring_type"] == "DEFERRED_TAX_ACCURACY"
+    )
+    assert deferred_item["input_amount"] == "2000000.000000000000"
+    assert deferred_item["result_amount"] == "-1600000.000000000000"
+    assert deferred_item["difference_amount"] == "-3600000.000000000000"
+    list_formula = cast(dict[str, object], deferred_item["formula_substitution"])
+    assert list_formula["loss_carryforward"] == "2000000.000000000000"
+    assert list_formula["cumulative_profit"] == "10000000.000000000000"
+    assert list_formula["sap_cumulative_deferred_tax_expense"] == (
+        "2000000.000000000000"
+    )
 
     details: dict[str, dict[str, object]] = {}
     for item in items:
@@ -122,6 +134,7 @@ def _assert_standard_company_results(
 
     assert set(details) == {
         "ACCRUAL_ACCURACY",
+        "DEFERRED_TAX_ACCURACY",
         "TAX_BURDEN",
         "POTENTIAL_TAX_COST",
     }
@@ -130,6 +143,14 @@ def _assert_standard_company_results(
     assert accrual["result_amount"] == "725000.000000000000"
     assert accrual["difference_amount"] == "25000.000000000000"
     assert accrual["alert_code"] == "UNDER_ACCRUED"
+
+    deferred = details["DEFERRED_TAX_ACCURACY"]
+    assert deferred["input_amount"] == "2000000.000000000000"
+    assert deferred["result_amount"] == "-1600000.000000000000"
+    assert deferred["difference_amount"] == "-3600000.000000000000"
+    assert deferred["rate_value"] == "0.200000000000"
+    assert deferred["alert_code"] == "DEFERRED_TAX_TO_REVERSE"
+    assert deferred["direction"] == "REVERSE"
 
     burden = details["TAX_BURDEN"]
     assert burden["input_amount"] == "1625000.000000000000"
@@ -154,6 +175,14 @@ def _assert_standard_company_results(
         assert formula["potential_adjustment"] == "1700000.000000000000"
         assert formula["potential_tax_payable"] == "2050000.00"
         assert formula["potential_tax_cost"] == "425000.00"
+        assert formula["deferred_tax_rate"] == "0.200000000000"
+        assert formula["sap_cumulative_deferred_tax_expense"] == (
+            "2000000.000000000000"
+        )
+        assert formula["deferred_tax_base_formula"] == "LOSS_MINUS_PROFIT"
+        assert formula["deferred_tax_base"] == "-8000000.000000000000"
+        assert formula["system_cumulative_deferred_tax"] == "-1600000.00"
+        assert formula["current_year_deferred_tax_adjustment"] == "-3600000.00"
 
 
 def test_in_process_eager_worker_contract_isolates_two_bad_companies(

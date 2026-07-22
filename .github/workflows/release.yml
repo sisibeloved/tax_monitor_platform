@@ -16,15 +16,58 @@ on:
         options: [pilot, production]
 
 permissions:
+  actions: read
+  attestations: read
   contents: read
   id-token: write
+  packages: read
 
 jobs:
   replay-and-sign:
     environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     steps:
+      - name: 验证同一提交已有成功 CI
+        id: successful_ci
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "ci.yml",
+              head_sha: context.sha,
+              status: "success",
+              per_page: 100,
+            });
+            const successfulRuns = response.data.workflow_runs
+              .filter((run) =>
+                run.head_sha === context.sha &&
+                run.conclusion === "success" &&
+                run.event === "push" &&
+                run.path === ".github/workflows/ci.yml",
+              )
+              .sort((left, right) => right.id - left.id);
+            if (successfulRuns.length === 0) {
+              core.setFailed(`提交 ${context.sha} 没有成功的持续集成运行`);
+              return;
+            }
+            const run = successfulRuns[0];
+            core.setOutput("run_id", String(run.id));
+            core.setOutput("run_url", run.html_url);
+            core.notice(`发布候选绑定 CI ${run.html_url}`);
+      - name: 下载成功 CI 的镜像来源制品
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-image-provenance
+          path: ci-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.successful_ci.outputs.run_id }}
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@v6
       - name: 安装后端依赖
         run: uv venv backend/.venv && uv pip install --python backend/.venv/bin/python -e 'backend[dev]'
@@ -33,6 +76,66 @@ jobs:
           RELEASE_CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           APPLICATION_IMAGE_DIGEST: ${{ inputs.application_image_digest }}
         run: make verify-release
+      - name: 核验并记录候选来源
+        env:
+          APPLICATION_IMAGE_DIGEST: ${{ inputs.application_image_digest }}
+          SUCCESSFUL_CI_RUN_ID: ${{ steps.successful_ci.outputs.run_id }}
+          SUCCESSFUL_CI_RUN_URL: ${{ steps.successful_ci.outputs.run_url }}
+        run: |
+          backend/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          output_dir = Path("artifacts/acceptance/phase-4")
+          manifest = json.loads((output_dir / "release-manifest.json").read_text())
+          ci_provenance = json.loads(
+              Path("ci-evidence/ci-image-provenance.json").read_text()
+          )
+          checked_out_commit = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          expected_commit = os.environ["GITHUB_SHA"]
+          expected_digest = os.environ["APPLICATION_IMAGE_DIGEST"]
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_digest):
+              raise SystemExit("application_image_digest 必须是规范 sha256 摘要")
+          if checked_out_commit != expected_commit:
+              raise SystemExit("检出的提交与工作流提交不一致")
+          if ci_provenance["ci_run_id"] != os.environ["SUCCESSFUL_CI_RUN_ID"]:
+              raise SystemExit("镜像来源制品不属于选定的成功 CI")
+          if ci_provenance["source_commit"] != expected_commit:
+              raise SystemExit("CI 镜像与发布候选提交不一致")
+          if ci_provenance["application_image_digest"] != expected_digest:
+              raise SystemExit("输入镜像摘要与成功 CI 构建结果不一致")
+          if ci_provenance["workflow"] != ".github/workflows/ci.yml":
+              raise SystemExit("镜像来源制品不是由受信 CI 工作流生成")
+          if manifest["git_commit"] != expected_commit:
+              raise SystemExit("发布清单未绑定当前提交")
+          if manifest["application_image_digest"] != expected_digest:
+              raise SystemExit("发布清单未绑定输入镜像摘要")
+          provenance = {
+              "application_image_digest": expected_digest,
+              "application_image_reference": ci_provenance[
+                  "application_image_reference"
+              ],
+              "ci_run_id": os.environ["SUCCESSFUL_CI_RUN_ID"],
+              "ci_run_url": os.environ["SUCCESSFUL_CI_RUN_URL"],
+              "release_workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "source_commit": expected_commit,
+          }
+          (output_dir / "release-provenance.json").write_text(
+              json.dumps(provenance, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: 验证 GitHub 镜像构建证明
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IMAGE_REFERENCE=$(backend/.venv/bin/python -c 'import json; print(json.load(open("ci-evidence/ci-image-provenance.json"))["application_image_reference"])')
+          gh attestation verify "oci://${IMAGE_REFERENCE}" --repo "$GITHUB_REPOSITORY"
       - name: 获取 GitHub OIDC 工作负载令牌
         id: workload_identity
         uses: actions/github-script@v7

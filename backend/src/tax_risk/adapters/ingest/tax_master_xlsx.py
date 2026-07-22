@@ -26,6 +26,7 @@ REQUIRED_COLUMNS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -81,6 +82,7 @@ class TaxMasterRow:
     valid_from: date
     valid_to: date | None
     tax_rate: Rate
+    deferred_tax_rate: Rate
     loss_carryforward: Decimal
     three_year_average_tax_burden: Rate
 
@@ -225,7 +227,7 @@ class TaxMasterXlsxAdapter:
             record_count += 1
             loss_errors: list[TaxMasterRowError] = []
             control_loss = _parse_loss(
-                values[5] if len(values) > 5 else None,
+                values[6] if len(values) > 6 else None,
                 row_number,
                 self._amount_scale,
                 loss_errors,
@@ -290,14 +292,20 @@ class TaxMasterXlsxAdapter:
         valid_from = _parse_date(values[2], row_number, "valid_from", False, errors)
         valid_to = _parse_date(values[3], row_number, "valid_to", True, errors)
         tax_rate = _parse_rate(values[4], row_number, "tax_rate", errors)
-        loss = _parse_loss(
+        deferred_tax_rate = _parse_rate(
             values[5],
+            row_number,
+            "deferred_tax_rate",
+            errors,
+        )
+        loss = _parse_loss(
+            values[6],
             row_number,
             self._amount_scale,
             errors,
         )
         burden = _parse_rate(
-            values[6],
+            values[7],
             row_number,
             "three_year_average_tax_burden",
             errors,
@@ -318,6 +326,7 @@ class TaxMasterXlsxAdapter:
         assert company_name is not None
         assert valid_from is not None
         assert tax_rate is not None
+        assert deferred_tax_rate is not None
         assert loss is not None
         assert burden is not None
         return (
@@ -328,6 +337,7 @@ class TaxMasterXlsxAdapter:
                 valid_from=valid_from,
                 valid_to=valid_to,
                 tax_rate=tax_rate,
+                deferred_tax_rate=deferred_tax_rate,
                 loss_carryforward=loss,
                 three_year_average_tax_burden=burden,
             ),
@@ -369,6 +379,16 @@ def _preflight_xlsx(payload: bytes, limits: XlsxResourceLimits) -> None:
         raise _invalid_xlsx() from error
 
 
+def preflight_xlsx(payload: bytes, limits: XlsxResourceLimits) -> None:
+    """Apply the shared XLSX archive and worksheet resource budgets."""
+
+    if not isinstance(payload, bytes):
+        raise TypeError("payload must be bytes")
+    if not isinstance(limits, XlsxResourceLimits):
+        raise TypeError("limits must be XlsxResourceLimits")
+    _preflight_xlsx(payload, limits)
+
+
 def _worksheet_part_names(archive: ZipFile, member_names: set[str]) -> tuple[str, ...]:
     content_types = _read_package_xml(archive, _CONTENT_TYPES_MEMBER, "Types")
     workbook = _read_package_xml(archive, _WORKBOOK_MEMBER, "workbook")
@@ -400,7 +420,7 @@ def _worksheet_part_names(archive: ZipFile, member_names: set[str]) -> tuple[str
 
         is_worksheet = relationship_type == _WORKSHEET_RELATIONSHIP_TYPE
         is_workbook_sheet = relationship_id in sheet_relationship_ids
-        if not is_worksheet and not is_workbook_sheet:
+        if not is_workbook_sheet:
             continue
         target_mode = relationship.attrib.get("TargetMode")
         if target_mode not in (None, "Internal"):
@@ -430,7 +450,7 @@ def _worksheet_part_names(archive: ZipFile, member_names: set[str]) -> tuple[str
         if content_type == _WORKSHEET_CONTENT_TYPE:
             content_type_parts.add(normalized_part)
 
-    if not relationship_parts or relationship_parts != content_type_parts:
+    if not relationship_parts or not relationship_parts.issubset(content_type_parts):
         raise _invalid_xlsx()
     if not relationship_parts.issubset(member_names):
         raise _invalid_xlsx()
@@ -868,4 +888,5 @@ __all__ = [
     "TaxMasterWorkbookError",
     "TaxMasterXlsxAdapter",
     "XlsxResourceLimits",
+    "preflight_xlsx",
 ]

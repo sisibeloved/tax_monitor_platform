@@ -27,12 +27,17 @@ def test_company_scoped_tables_have_forced_rls(engine) -> None:
         "export_job",
         "ingest_batch",
         "ingest_error",
+        "income_tax_refund_scan_result",
+        "income_tax_refund_target",
+        "income_tax_refund_writeback",
         "monitoring_run_company",
         "risk_case",
         "review_action",
         "sap_expense_voucher_observation",
         "sap_expense_voucher_snapshot_projection",
+        "sap_gl_line_observation",
         "sap_link_coverage",
+        "sap_refund_evidence_batch",
         "semantic_model_call_audit",
         "source_record",
         "snapshot_set_member",
@@ -105,8 +110,25 @@ def test_json_company_scopes_require_every_company_to_be_authorized(
     company_b = uuid4()
     single_job = uuid4()
     mixed_job = uuid4()
+    single_refund_batch = f"refund-single-{uuid4()}"
+    mixed_refund_batch = f"refund-mixed-{uuid4()}"
     admin_engine, _ = create_session_factory(isolated_database_url)
     with admin_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO company (id, company_code, company_name, lifecycle)
+                VALUES (:company_a, :code_a, 'Refund company A', 'ACTIVE'),
+                       (:company_b, :code_b, 'Refund company B', 'ACTIVE')
+                """
+            ),
+            {
+                "company_a": company_a,
+                "company_b": company_b,
+                "code_a": f"REFUND-RLS-A-{company_a.hex[:8]}",
+                "code_b": f"REFUND-RLS-B-{company_b.hex[:8]}",
+            },
+        )
         for job_id, company_ids in (
             (single_job, f'["{company_a}"]'),
             (mixed_job, f'["{company_a}", "{company_b}"]'),
@@ -128,12 +150,39 @@ def test_json_company_scopes_require_every_company_to_be_authorized(
                 ),
                 {"id": job_id, "company_ids": company_ids},
             )
+        for source_batch_key, company_ids in (
+            (single_refund_batch, f'["{company_a}"]'),
+            (mixed_refund_batch, f'["{company_a}", "{company_b}"]'),
+        ):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO sap_refund_evidence_batch (
+                        source_batch_key, fiscal_year, through_period,
+                        company_ids, status, record_count, checksum
+                    ) VALUES (
+                        :source_batch_key, 2026, '2026-06-30',
+                        CAST(:company_ids AS jsonb), 'COMPLETE', 0, repeat('c', 64)
+                    )
+                    """
+                ),
+                {
+                    "source_batch_key": source_batch_key,
+                    "company_ids": company_ids,
+                },
+            )
     app_engine, factory = create_session_factory(rls_database_url)
     try:
         with factory() as session:
             apply_principal_context(session, _company_principal(company_a))
             visible = set(session.scalars(select(ExportJob.id)))
             assert visible == {single_job}
+            visible_refund_batches = set(
+                session.scalars(
+                    text("SELECT source_batch_key FROM sap_refund_evidence_batch")
+                )
+            )
+            assert visible_refund_batches == {single_refund_batch}
     finally:
         app_engine.dispose()
         admin_engine.dispose()

@@ -398,8 +398,10 @@ def test_case_list_applies_group_company_and_audit_scope_in_sql(
     assert item["input_amount"] == "100.000000000000"
     assert item["result_amount"] == "125.000000000000"
     assert item["difference_amount"] == "25.000000000000"
+    assert item["rate_value"] == "0.250000000000"
     assert item["tax_burden_rate"] is None
     assert item["tax_burden_deviation"] is None
+    assert item["formula_substitution"] == {"formula": "expected-actual"}
     assert item["not_calculated_reason"] is None
     assert item["alert_code"] == "UNDER_ACCRUED"
     assert finance.status_code == 200

@@ -27,6 +27,7 @@ EXPECTED_METRICS = (
     "current_quarter_current_tax",
     "other_payables_accrual",
     "hesi_no_invoice",
+    "sap_cumulative_deferred_tax_expense",
 )
 
 

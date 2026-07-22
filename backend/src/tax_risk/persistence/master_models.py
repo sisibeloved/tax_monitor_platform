@@ -40,6 +40,10 @@ class TaxMasterVersion(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         ),
         CheckConstraint("valid_to IS NULL OR valid_to >= valid_from", name="valid_period"),
         CheckConstraint("tax_rate BETWEEN 0 AND 1", name="tax_rate"),
+        CheckConstraint(
+            "deferred_tax_rate IS NULL OR deferred_tax_rate BETWEEN 0 AND 1",
+            name="deferred_tax_rate",
+        ),
         CheckConstraint("loss_carryforward >= 0", name="nonnegative_loss_carryforward"),
         CheckConstraint(
             "average_tax_burden_rate_3y BETWEEN 0 AND 1", name="average_tax_burden_rate"
@@ -72,6 +76,7 @@ class TaxMasterVersion(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
         Enum(VersionStatus, name="version_status"), nullable=False
     )
     tax_rate: Mapped[Decimal] = mapped_column(Numeric(20, 12), nullable=False)
+    deferred_tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 12))
     loss_carryforward: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
     average_tax_burden_rate_3y: Mapped[Decimal] = mapped_column(Numeric(20, 12), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)

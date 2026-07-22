@@ -104,6 +104,87 @@ function AccrualFormula({ detection }: { detection: DetectionDetail }) {
   );
 }
 
+const DEFERRED_TAX_ALERT_LABELS: Readonly<Record<string, string>> = {
+  DEFERRED_TAX_TO_ACCRUE: "应计提递延所得税",
+  DEFERRED_TAX_TO_REVERSE: "应转回递延所得税",
+};
+
+const DEFERRED_TAX_DIRECTION_LABELS: Readonly<Record<string, string>> = {
+  ACCRUE: "计提",
+  REVERSE: "转回",
+};
+
+function DeferredTaxFormula({ detection }: { detection: DetectionDetail }) {
+  const alertLabel =
+    detection.alert_code === null
+      ? "无需调整"
+      : (DEFERRED_TAX_ALERT_LABELS[detection.alert_code] ??
+        detection.alert_code);
+  const directionLabel =
+    detection.direction === null
+      ? "无"
+      : (DEFERRED_TAX_DIRECTION_LABELS[detection.direction] ??
+        detection.direction);
+  const usesLossMinusProfit =
+    formulaValue(detection, "deferred_tax_base_formula") ===
+    "LOSS_MINUS_PROFIT";
+  return (
+    <>
+      <Paragraph code>
+        递延所得税计税基础 = 可弥补以前年度亏损 {usesLossMinusProfit ? "-" : "+"}
+        损益表累计利润总额
+      </Paragraph>
+      <Paragraph code>
+        系统累计递延所得税费用 = 递延所得税计税基础 × 递延所得税税率
+      </Paragraph>
+      <Paragraph code>
+        本年应计提/转回的递延所得税费用 = 系统累计递延所得税费用 -
+        SAP累计已计提的递延所得税费用
+      </Paragraph>
+      <Descriptions bordered size="small" column={1}>
+        <Descriptions.Item label="示警结论">
+          <Tag
+            color={
+              detection.direction === "ACCRUE"
+                ? "error"
+                : detection.direction === "REVERSE"
+                  ? "warning"
+                  : "default"
+            }
+          >
+            {alertLabel}
+          </Tag>
+        </Descriptions.Item>
+        <Descriptions.Item label="调整方向">{directionLabel}</Descriptions.Item>
+        <Descriptions.Item label="可弥补以前年度亏损">
+          {moneyValue(detection, "loss_carryforward")}
+        </Descriptions.Item>
+        <Descriptions.Item label="损益表累计利润总额">
+          {moneyValue(detection, "cumulative_profit")}
+        </Descriptions.Item>
+        <Descriptions.Item label="递延所得税计税基础">
+          {moneyValue(detection, "deferred_tax_base")}
+        </Descriptions.Item>
+        <Descriptions.Item label="递延所得税税率">
+          {formatPercent(formulaValue(detection, "deferred_tax_rate"))}
+        </Descriptions.Item>
+        <Descriptions.Item label="系统累计递延所得税费用">
+          {moneyValue(detection, "system_cumulative_deferred_tax")}
+        </Descriptions.Item>
+        <Descriptions.Item label="SAP累计已计提的递延所得税费用">
+          {moneyValue(detection, "sap_cumulative_deferred_tax_expense")}
+        </Descriptions.Item>
+        <Descriptions.Item label="本年应计提/转回的递延所得税费用">
+          {moneyValue(detection, "current_year_deferred_tax_adjustment", true)}
+        </Descriptions.Item>
+        <Descriptions.Item label="舍入模式">
+          {formulaValue(detection, "rounding_mode") ?? "—"}
+        </Descriptions.Item>
+      </Descriptions>
+    </>
+  );
+}
+
 function TaxBurdenFormula({ detection }: { detection: DetectionDetail }) {
   const formulas = (
     <>
@@ -230,6 +311,9 @@ function PotentialFormula({ detection }: { detection: DetectionDetail }) {
 function formulaContent(detection: DetectionDetail): ReactNode {
   if (detection.monitoring_type === "ACCRUAL_ACCURACY") {
     return <AccrualFormula detection={detection} />;
+  }
+  if (detection.monitoring_type === "DEFERRED_TAX_ACCURACY") {
+    return <DeferredTaxFormula detection={detection} />;
   }
   if (detection.monitoring_type === "TAX_BURDEN") {
     return <TaxBurdenFormula detection={detection} />;

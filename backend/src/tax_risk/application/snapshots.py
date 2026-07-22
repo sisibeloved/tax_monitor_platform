@@ -54,6 +54,7 @@ REQUIRED_QUARTERLY_METRICS: tuple[str, ...] = (
     "current_quarter_current_tax",
     "other_payables_accrual",
     "hesi_no_invoice",
+    "sap_cumulative_deferred_tax_expense",
 )
 REQUIRED_MONTHLY_SEMANTIC_METRICS: tuple[str, ...] = (
     "WELFARE_YTD",
@@ -1297,6 +1298,17 @@ def _evaluate_quality(
                     "Approve the effective tax master before snapshot validation.",
                 )
             )
+        if profile == QUARTERLY_PROFILE and master.deferred_tax_rate is None:
+            issues.append(
+                _issue(
+                    "DEFERRED_TAX_RATE_MISSING",
+                    "tax_master",
+                    "deferred_tax_rate",
+                    company_code,
+                    period,
+                    "Publish a company deferred-tax rate before quarterly snapshot validation.",
+                )
+            )
         if (
             common_currency is not None
             and (master.currency != common_currency or master.amount_scale != common_scale)
@@ -1698,6 +1710,8 @@ def _freeze_snapshot(
         "source_file_name": master_lineage["source_file_name"],
         "imported_at": master_lineage["imported_at"],
     }
+    if "deferred_tax_rate" in master_lineage:
+        master_identity["deferred_tax_rate"] = master_lineage["deferred_tax_rate"]
     return _FrozenSnapshot(
         company=company,
         master=master,
@@ -1711,7 +1725,7 @@ def _freeze_snapshot(
 
 
 def _master_lineage(master: TaxMasterVersion) -> dict[str, Any]:
-    return {
+    lineage = {
         "id": str(master.id),
         "version": master.version,
         "source_batch_id": str(master.source_batch_id),
@@ -1729,6 +1743,9 @@ def _master_lineage(master: TaxMasterVersion) -> dict[str, Any]:
         "currency": master.currency,
         "amount_scale": master.amount_scale,
     }
+    if master.deferred_tax_rate is not None:
+        lineage["deferred_tax_rate"] = _decimal_string(master.deferred_tax_rate)
+    return lineage
 
 
 def _money_sum(amounts: Iterable[Decimal], currency: str, scale: int) -> Decimal:

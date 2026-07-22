@@ -20,8 +20,12 @@ from tax_risk.domain.cases import case_fingerprint
 from tax_risk.domain.money import Money, Rate
 from tax_risk.domain.quarterly import (
     CalculationStatus as DomainCalculationStatus,
+    DeferredTaxBaseFormula,
+    DeferredTaxInputs,
+    DeferredTaxResult,
     QuarterlyInputs,
     QuarterlyResult,
+    calculate_deferred_tax,
     calculate_quarterly,
 )
 from tax_risk.observability.metrics import DEFAULT_METRICS
@@ -49,11 +53,19 @@ from tax_risk.persistence.snapshot_models import (
 
 UowFactory = Callable[[], UnitOfWork]
 FailureInjector = Callable[[str], None]
-MONITOR_ORDER: tuple[MonitorType, ...] = (
+QUARTERLY_V1_MONITOR_ORDER: tuple[MonitorType, ...] = (
     MonitorType.ACCRUAL_ACCURACY,
     MonitorType.TAX_BURDEN,
     MonitorType.POTENTIAL_TAX_COST,
 )
+QUARTERLY_V2_MONITOR_ORDER: tuple[MonitorType, ...] = (
+    MonitorType.ACCRUAL_ACCURACY,
+    MonitorType.DEFERRED_TAX_ACCURACY,
+    MonitorType.TAX_BURDEN,
+    MonitorType.POTENTIAL_TAX_COST,
+)
+QUARTERLY_V3_MONITOR_ORDER = QUARTERLY_V2_MONITOR_ORDER
+MONITOR_ORDER = QUARTERLY_V1_MONITOR_ORDER
 APPROVED_QUARTERLY_MANIFEST: dict[str, object] = {
     "schema_version": "QUARTERLY_V1",
     "rounding_mode": "ROUND_HALF_UP",
@@ -65,7 +77,9 @@ APPROVED_QUARTERLY_MANIFEST: dict[str, object] = {
         "cumulative_tax_payable": "cumulative_base*tax_rate",
         "current_quarter_should_accrue": ("cumulative_tax_payable-prior_quarter_current_tax"),
         "current_quarter_difference": ("current_quarter_should_accrue-current_quarter_current_tax"),
-        "current_tax_burden": "cumulative_tax_payable/cumulative_revenue",
+        "current_tax_burden": (
+            "0 if cumulative_revenue<=0 else cumulative_tax_payable/cumulative_revenue"
+        ),
         "tax_burden_deviation": ("current_tax_burden-historical_average_tax_burden"),
         "potential_adjustment": "other_payables_accrual+hesi_no_invoice",
         "potential_base": "max(base_before_floor+potential_adjustment,0)",
@@ -86,6 +100,74 @@ APPROVED_QUARTERLY_MANIFEST_SHA256 = sha256(
         separators=(",", ":"),
     ).encode("utf-8")
 ).hexdigest()
+APPROVED_QUARTERLY_V2_MANIFEST: dict[str, object] = {
+    "schema_version": "QUARTERLY_V2",
+    "rounding_mode": "ROUND_HALF_UP",
+    "formulas": {
+        **cast(dict[str, object], APPROVED_QUARTERLY_MANIFEST["formulas"]),
+        "deferred_tax_base": "loss_carryforward+cumulative_profit",
+        "system_cumulative_deferred_tax": "deferred_tax_base*deferred_tax_rate",
+        "current_year_deferred_tax_adjustment": (
+            "system_cumulative_deferred_tax-sap_cumulative_deferred_tax_expense"
+        ),
+    },
+    "alert_boundaries": {
+        **cast(dict[str, object], APPROVED_QUARTERLY_MANIFEST["alert_boundaries"]),
+        "deferred_tax_accuracy": "adjustment != 0",
+    },
+}
+APPROVED_QUARTERLY_V2_MANIFEST_SHA256 = sha256(
+    json.dumps(
+        APPROVED_QUARTERLY_V2_MANIFEST,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
+APPROVED_QUARTERLY_V3_MANIFEST: dict[str, object] = {
+    "schema_version": "QUARTERLY_V3",
+    "rounding_mode": "ROUND_HALF_UP",
+    "formulas": {
+        **cast(dict[str, object], APPROVED_QUARTERLY_V2_MANIFEST["formulas"]),
+        "deferred_tax_base": "loss_carryforward-cumulative_profit",
+    },
+    "alert_boundaries": {
+        **cast(dict[str, object], APPROVED_QUARTERLY_V2_MANIFEST["alert_boundaries"]),
+    },
+}
+APPROVED_QUARTERLY_V3_MANIFEST_SHA256 = sha256(
+    json.dumps(
+        APPROVED_QUARTERLY_V3_MANIFEST,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
+APPROVED_QUARTERLY_RULES: dict[
+    str,
+    tuple[dict[str, object], str, tuple[MonitorType, ...]],
+] = {
+    "QUARTERLY_V1": (
+        APPROVED_QUARTERLY_MANIFEST,
+        APPROVED_QUARTERLY_MANIFEST_SHA256,
+        QUARTERLY_V1_MONITOR_ORDER,
+    ),
+    "QUARTERLY_V2": (
+        APPROVED_QUARTERLY_V2_MANIFEST,
+        APPROVED_QUARTERLY_V2_MANIFEST_SHA256,
+        QUARTERLY_V2_MONITOR_ORDER,
+    ),
+    "QUARTERLY_V3": (
+        APPROVED_QUARTERLY_V3_MANIFEST,
+        APPROVED_QUARTERLY_V3_MANIFEST_SHA256,
+        QUARTERLY_V3_MONITOR_ORDER,
+    ),
+}
+APPROVED_QUARTERLY_RULE_VERSIONS = {
+    "QUARTERLY_V1": "phase-1-reviewed",
+    "QUARTERLY_V2": "deferred-tax-reviewed",
+    "QUARTERLY_V3": "deferred-tax-loss-less-profit-reviewed",
+}
 
 
 class QuarterlyRunError(Exception):
@@ -110,6 +192,7 @@ class _FrozenMaster:
     tax_rate: Decimal
     loss_carryforward: Decimal
     average_tax_burden_rate_3y: Decimal
+    deferred_tax_rate: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,19 +255,23 @@ class QuarterlyRunService:
                     run_id=run_id,
                     snapshot_id=snapshot_id,
                 )
-                company_code = _assert_complete_retry(existing, replay_context)
+                company_code, monitor_order = _assert_complete_retry(
+                    existing,
+                    replay_context,
+                )
                 _assert_replayable_run_status(replay_context.run)
                 replay_case_ids = _case_ids_for_detections(
                     uow,
                     replay_context.run,
                     company_code,
                     existing,
+                    monitor_order,
                 )
                 return QuarterlyRunResult(
                     run_id=run_id,
                     snapshot_id=snapshot_id,
                     detection_ids=tuple(
-                        _by_monitor(existing)[monitor].id for monitor in MONITOR_ORDER
+                        _by_monitor(existing)[monitor].id for monitor in monitor_order
                     ),
                     case_ids=replay_case_ids,
                     replayed=True,
@@ -192,16 +279,51 @@ class QuarterlyRunService:
             context = _load_context(uow, run_id=run_id, snapshot_id=snapshot_id)
             _assert_first_execution_status(context.run)
 
-            inputs = _quarterly_inputs(context.snapshot, context.frozen_master)
+            metrics = _snapshot_metrics(context.snapshot)
+            inputs = _quarterly_inputs(
+                context.snapshot,
+                context.frozen_master,
+                metrics,
+            )
             formula_started = monotonic()
             calculation = calculate_quarterly(inputs)
+            deferred_inputs: DeferredTaxInputs | None = None
+            deferred_calculation: DeferredTaxResult | None = None
+            if context.rule.rule_code in {"QUARTERLY_V2", "QUARTERLY_V3"}:
+                deferred_inputs = _deferred_tax_inputs(
+                    context.snapshot,
+                    context.frozen_master,
+                    metrics,
+                )
+                deferred_calculation = calculate_deferred_tax(
+                    deferred_inputs,
+                    base_formula=(
+                        DeferredTaxBaseFormula.LOSS_PLUS_PROFIT
+                        if context.rule.rule_code == "QUARTERLY_V2"
+                        else DeferredTaxBaseFormula.LOSS_MINUS_PROFIT
+                    ),
+                )
             DEFAULT_METRICS.metric("tax_risk_formula_duration_seconds").observe(
                 {"formula": "QUARTERLY_ALL"},
                 monotonic() - formula_started,
             )
-            formula_substitution = _canonical_json(calculation.formula_substitution)
+            substitutions = dict(calculation.formula_substitution)
+            if deferred_calculation is not None:
+                for key, value in deferred_calculation.formula_substitution.items():
+                    if key in substitutions and substitutions[key] != value:
+                        raise QuarterlyRunError(
+                            "FORMULA_SUBSTITUTION_CONFLICT",
+                            f"deferred-tax substitution {key!r} conflicts with quarterly inputs",
+                        )
+                    substitutions[key] = value
+            formula_substitution = _canonical_json(substitutions)
             lineage = _detection_lineage(context)
-            values = _detection_values(calculation, inputs)
+            values = _detection_values(
+                calculation,
+                inputs,
+                deferred_calculation=deferred_calculation,
+                deferred_inputs=deferred_inputs,
+            )
 
             detections: list[DetectionRecord] = []
             for monitor_values in values:
@@ -399,14 +521,14 @@ def _load_context(
     )
     if (
         rule is None
-        or rule.rule_code != "QUARTERLY_V1"
+        or rule.rule_code not in APPROVED_QUARTERLY_RULES
         or rule.status != VersionStatus.PUBLISHED
         or rule.effective_from > snapshot.period
         or (rule.effective_to is not None and rule.effective_to < snapshot.period)
     ):
         raise QuarterlyRunError(
             "QUARTERLY_RULE_NOT_EFFECTIVE",
-            "the run must pin an effective published QUARTERLY_V1 rule version",
+            "the run must pin an effective published reviewed quarterly rule version",
         )
     assert_approved_quarterly_rule_manifest(rule)
 
@@ -424,6 +546,13 @@ def _load_context(
 def assert_approved_quarterly_rule_manifest(rule: RuleVersion) -> None:
     """Reject any quarterly rule outside the fixed reviewed manifest."""
 
+    approved = APPROVED_QUARTERLY_RULES.get(rule.rule_code)
+    if approved is None:
+        raise QuarterlyRunError(
+            "QUARTERLY_RULE_MANIFEST_INVALID",
+            "the pinned rule code is not an approved quarterly formula contract",
+        )
+    expected_manifest, expected_hash, _monitor_order = approved
     definition = rule.definition
     manifest = definition.get("formula_manifest")
     stored_hash = definition.get("formula_manifest_sha256")
@@ -449,12 +578,12 @@ def assert_approved_quarterly_rule_manifest(rule: RuleVersion) -> None:
     if (
         definition.get("review_status") != "REVIEWED"
         or recomputed_hash != stored_hash
-        or stored_hash != APPROVED_QUARTERLY_MANIFEST_SHA256
-        or manifest != APPROVED_QUARTERLY_MANIFEST
+        or stored_hash != expected_hash
+        or manifest != expected_manifest
     ):
         raise QuarterlyRunError(
             "QUARTERLY_RULE_MANIFEST_INVALID",
-            "the pinned rule does not match the fixed reviewed QUARTERLY_V1 manifest",
+            "the pinned rule does not match its fixed reviewed quarterly manifest",
         )
 
 
@@ -474,6 +603,11 @@ def _frozen_master(
         average_tax_burden = _lineage_decimal(
             lineage,
             "three_year_average_tax_burden",
+        )
+        deferred_tax_rate = (
+            _lineage_decimal(lineage, "deferred_tax_rate")
+            if "deferred_tax_rate" in lineage
+            else None
         )
     except (InvalidOperation, TypeError, ValueError) as error:
         raise QuarterlyRunError(
@@ -516,6 +650,7 @@ def _frozen_master(
         or tax_rate != current.tax_rate
         or loss_carryforward != current.loss_carryforward
         or average_tax_burden != current.average_tax_burden_rate_3y
+        or deferred_tax_rate != current.deferred_tax_rate
     ):
         raise QuarterlyRunError(
             "FROZEN_MASTER_MISMATCH",
@@ -525,6 +660,7 @@ def _frozen_master(
         tax_rate=tax_rate,
         loss_carryforward=loss_carryforward,
         average_tax_burden_rate_3y=average_tax_burden,
+        deferred_tax_rate=deferred_tax_rate,
     )
 
 
@@ -551,10 +687,7 @@ def _canonical_utc_lineage_timestamp(value: object) -> str:
     return value
 
 
-def _quarterly_inputs(
-    snapshot: AccountingSnapshot,
-    master: _FrozenMaster,
-) -> QuarterlyInputs:
+def _snapshot_metrics(snapshot: AccountingSnapshot) -> dict[str, Decimal]:
     raw_metrics = snapshot.lineage.get("metrics")
     if not isinstance(raw_metrics, list):
         raise QuarterlyRunError(
@@ -593,6 +726,33 @@ def _quarterly_inputs(
                 f"snapshot metric {metric_code!r} must be finite",
             )
         metrics[metric_code] = amount
+    return metrics
+
+
+def _metric_money(
+    snapshot: AccountingSnapshot,
+    metrics: Mapping[str, Decimal],
+    metric_code: str,
+) -> Money:
+    try:
+        amount = metrics[metric_code]
+    except KeyError as error:
+        raise QuarterlyRunError(
+            "SNAPSHOT_METRICS_MISSING",
+            f"frozen snapshot is missing quarterly metric: {metric_code}",
+        ) from error
+    return Money.unrounded(
+        amount,
+        currency=snapshot.currency,
+        scale=snapshot.amount_scale,
+    )
+
+
+def _quarterly_inputs(
+    snapshot: AccountingSnapshot,
+    master: _FrozenMaster,
+    metrics: Mapping[str, Decimal],
+) -> QuarterlyInputs:
 
     required = {
         "cumulative_profit",
@@ -611,35 +771,61 @@ def _quarterly_inputs(
             f"frozen snapshot is missing quarterly metrics: {', '.join(missing)}",
         )
 
-    def money(metric_code: str) -> Money:
-        return Money.unrounded(
-            metrics[metric_code],
-            currency=snapshot.currency,
-            scale=snapshot.amount_scale,
-        )
-
     return QuarterlyInputs(
-        cumulative_profit=money("cumulative_profit"),
-        received_dividends=money("received_dividends"),
-        fair_value_change=money("fair_value_change"),
+        cumulative_profit=_metric_money(snapshot, metrics, "cumulative_profit"),
+        received_dividends=_metric_money(snapshot, metrics, "received_dividends"),
+        fair_value_change=_metric_money(snapshot, metrics, "fair_value_change"),
         loss_carryforward=Money.unrounded(
             master.loss_carryforward,
             currency=snapshot.currency,
             scale=snapshot.amount_scale,
         ),
         tax_rate=Rate.from_fraction(master.tax_rate),
-        prior_quarter_current_tax=money("prior_quarter_current_tax"),
-        current_quarter_current_tax=money("current_quarter_current_tax"),
-        cumulative_revenue=money("cumulative_revenue"),
+        prior_quarter_current_tax=_metric_money(
+            snapshot, metrics, "prior_quarter_current_tax"
+        ),
+        current_quarter_current_tax=_metric_money(
+            snapshot, metrics, "current_quarter_current_tax"
+        ),
+        cumulative_revenue=_metric_money(snapshot, metrics, "cumulative_revenue"),
         historical_average_tax_burden=Rate.from_fraction(master.average_tax_burden_rate_3y),
-        other_payables_accrual=money("other_payables_accrual"),
-        hesi_no_invoice=money("hesi_no_invoice"),
+        other_payables_accrual=_metric_money(snapshot, metrics, "other_payables_accrual"),
+        hesi_no_invoice=_metric_money(snapshot, metrics, "hesi_no_invoice"),
+    )
+
+
+def _deferred_tax_inputs(
+    snapshot: AccountingSnapshot,
+    master: _FrozenMaster,
+    metrics: Mapping[str, Decimal],
+) -> DeferredTaxInputs:
+    if master.deferred_tax_rate is None:
+        raise QuarterlyRunError(
+            "DEFERRED_TAX_RATE_MISSING",
+            "the selected quarterly rule requires a frozen company deferred-tax rate",
+        )
+    return DeferredTaxInputs(
+        cumulative_profit=_metric_money(snapshot, metrics, "cumulative_profit"),
+        loss_carryforward=Money.unrounded(
+            master.loss_carryforward,
+            currency=snapshot.currency,
+            scale=snapshot.amount_scale,
+        ),
+        deferred_tax_rate=Rate.from_fraction(master.deferred_tax_rate),
+        sap_cumulative_deferred_tax_expense=_metric_money(
+            snapshot,
+            metrics,
+            "sap_cumulative_deferred_tax_expense",
+        ),
     )
 
 
 def _detection_values(
     calculation: QuarterlyResult,
     inputs: QuarterlyInputs,
+    *,
+    deferred_calculation: DeferredTaxResult | None = None,
+    deferred_inputs: DeferredTaxInputs | None = None,
 ) -> tuple[_DetectionValues, ...]:
     burden_status = calculation.tax_burden_status
     burden_reason = calculation.tax_burden_not_calculated_reason
@@ -658,7 +844,7 @@ def _detection_values(
         burden_rate = None
         burden_deviation = None
 
-    return (
+    values = (
         _DetectionValues(
             monitor_type=MonitorType.ACCRUAL_ACCURACY,
             calculation_status=calculation.accrual_status,
@@ -696,6 +882,28 @@ def _detection_values(
             direction=_potential_direction(calculation.potential_tax_cost),
         ),
     )
+    if deferred_calculation is None and deferred_inputs is None:
+        return values
+    if deferred_calculation is None or deferred_inputs is None:
+        raise QuarterlyRunError(
+            "DEFERRED_TAX_CALCULATION_INCOMPLETE",
+            "deferred-tax inputs and result must be provided together",
+        )
+    deferred_values = _DetectionValues(
+        monitor_type=MonitorType.DEFERRED_TAX_ACCURACY,
+        calculation_status=deferred_calculation.status,
+        input_amount=deferred_inputs.sap_cumulative_deferred_tax_expense.amount,
+        result_amount=_amount(deferred_calculation.system_cumulative_deferred_tax),
+        difference_amount=_amount(
+            deferred_calculation.current_year_deferred_tax_adjustment
+        ),
+        tax_burden_rate=None,
+        tax_burden_deviation=None,
+        reason=deferred_calculation.not_calculated_reason,
+        alert_code=deferred_calculation.alert_code,
+        direction=_deferred_tax_direction(deferred_calculation.alert_code),
+    )
+    return (values[0], deferred_values, *values[1:])
 
 
 def _new_detection(
@@ -718,7 +926,11 @@ def _new_detection(
         input_amount=values.input_amount,
         result_amount=values.result_amount,
         difference_amount=values.difference_amount,
-        rate_value=context.master.tax_rate,
+        rate_value=(
+            context.master.deferred_tax_rate
+            if values.monitor_type == MonitorType.DEFERRED_TAX_ACCURACY
+            else context.master.tax_rate
+        ),
         tax_burden_rate=values.tax_burden_rate,
         tax_burden_deviation=values.tax_burden_deviation,
         currency=calculation.currency,
@@ -850,13 +1062,7 @@ def _existing_detections(
 def _assert_complete_retry(
     detections: tuple[DetectionRecord, ...],
     context: _ReplayContext,
-) -> str:
-    by_monitor = _by_monitor(detections)
-    if len(detections) != len(MONITOR_ORDER) or set(by_monitor) != set(MONITOR_ORDER):
-        raise QuarterlyRunError(
-            "PARTIAL_DETECTION_SET",
-            "an idempotent retry found an incomplete quarterly detection set",
-        )
+) -> tuple[str, tuple[MonitorType, ...]]:
     if any(
         detection.run_id != context.run.id
         or detection.snapshot_id != context.snapshot.id
@@ -890,6 +1096,20 @@ def _assert_complete_retry(
     assert isinstance(snapshot, dict)
     assert isinstance(rule, dict)
     assert isinstance(master, dict)
+    rule_code = rule.get("rule_code")
+    approved = APPROVED_QUARTERLY_RULES.get(rule_code) if isinstance(rule_code, str) else None
+    if approved is None:
+        raise QuarterlyRunError(
+            "DETECTION_IDENTITY_MISMATCH",
+            "existing detections reference an unsupported quarterly rule code",
+        )
+    monitor_order = approved[2]
+    by_monitor = _by_monitor(detections)
+    if len(detections) != len(monitor_order) or set(by_monitor) != set(monitor_order):
+        raise QuarterlyRunError(
+            "PARTIAL_DETECTION_SET",
+            "an idempotent retry found an incomplete quarterly detection set",
+        )
     company_code = company.get("company_code")
     if (
         not isinstance(company_code, str)
@@ -909,7 +1129,7 @@ def _assert_complete_retry(
             "DETECTION_IDENTITY_MISMATCH",
             "existing detection lineage does not match the frozen run identity",
         )
-    return company_code
+    return company_code, monitor_order
 
 
 def _assert_replayable_run_status(run: MonitoringRun) -> None:
@@ -944,6 +1164,7 @@ def _case_ids_for_detections(
     run: MonitoringRun,
     company_code: str,
     detections: tuple[DetectionRecord, ...],
+    monitor_order: tuple[MonitorType, ...],
 ) -> tuple[UUID, ...]:
     fingerprints = tuple(
         case_fingerprint(
@@ -952,7 +1173,7 @@ def _case_ids_for_detections(
             cast(int, run.quarter),
             detection.monitor_type.value,
         )
-        for detection in (_by_monitor(detections)[monitor] for monitor in MONITOR_ORDER)
+        for detection in (_by_monitor(detections)[monitor] for monitor in monitor_order)
         if detection.alert_code is not None
     )
     if not fingerprints:
@@ -1020,6 +1241,10 @@ def _detection_lineage(context: _RunContext) -> dict[str, Any]:
         "currency": frozen_master["currency"],
         "amount_scale": frozen_master["amount_scale"],
     }
+    if "deferred_tax_rate" in frozen_master:
+        master_version_lineage["deferred_tax_rate"] = frozen_master[
+            "deferred_tax_rate"
+        ]
     for optional_field in ("source_file_name", "imported_at"):
         if optional_field in frozen_master:
             master_version_lineage[optional_field] = frozen_master[optional_field]
@@ -1174,6 +1399,15 @@ def _burden_direction(alert_code: str | None) -> str | None:
     }.get(alert_code)
 
 
+def _deferred_tax_direction(alert_code: str | None) -> str | None:
+    if alert_code is None:
+        return None
+    return {
+        "DEFERRED_TAX_TO_ACCRUE": "ACCRUE",
+        "DEFERRED_TAX_TO_REVERSE": "REVERSE",
+    }.get(alert_code)
+
+
 def _potential_direction(value: Money | None) -> str | None:
     if value is None or value.amount == 0:
         return None
@@ -1181,6 +1415,13 @@ def _potential_direction(value: Money | None) -> str | None:
 
 
 __all__ = [
+    "APPROVED_QUARTERLY_MANIFEST",
+    "APPROVED_QUARTERLY_MANIFEST_SHA256",
+    "APPROVED_QUARTERLY_V2_MANIFEST",
+    "APPROVED_QUARTERLY_V2_MANIFEST_SHA256",
+    "APPROVED_QUARTERLY_V3_MANIFEST",
+    "APPROVED_QUARTERLY_V3_MANIFEST_SHA256",
+    "APPROVED_QUARTERLY_RULE_VERSIONS",
     "QuarterlyRunError",
     "QuarterlyRunResult",
     "QuarterlyRunService",

@@ -5,6 +5,26 @@ x-backend-environment: &backend-environment
   # Local fallback only. Production deployments must override credentials via their secret store.
   DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://tax_risk_app:tax-risk-app-local-only@postgres:5432/tax_risk}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  EXTERNAL_FETCH_ENABLED: ${EXTERNAL_FETCH_ENABLED:-true}
+  EXTERNAL_FETCH_CACHE_ENABLED: ${EXTERNAL_FETCH_CACHE_ENABLED:-true}
+  EXTERNAL_FETCH_MAX_WORKERS: ${EXTERNAL_FETCH_MAX_WORKERS:-12}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_PROFIT: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_PROFIT:-4}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_TRIAL_BALANCE: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_TRIAL_BALANCE:-4}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_ACCOUNT_BALANCE: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_ACCOUNT_BALANCE:-4}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_HESI_REIMBURSEMENT: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_HESI_REIMBURSEMENT:-4}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_HESI_INVOICE: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_HESI_INVOICE:-4}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_DIVIDEND_DETAIL: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_SAP_DIVIDEND_DETAIL:-4}
+  EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_INVOICE_DETAIL: ${EXTERNAL_FETCH_SOURCE_CONCURRENCY__DGC_INVOICE_DETAIL:-4}
+  EXTERNAL_FETCH_CACHE_PREFIX: ${EXTERNAL_FETCH_CACHE_PREFIX:-tax-risk:external-fetch}
+  EXTERNAL_FETCH_CACHE_TTL_SECONDS: ${EXTERNAL_FETCH_CACHE_TTL_SECONDS:-900}
+  EXTERNAL_FETCH_EMPTY_CACHE_TTL_SECONDS: ${EXTERNAL_FETCH_EMPTY_CACHE_TTL_SECONDS:-60}
+  EXTERNAL_FETCH_LOCK_TTL_SECONDS: ${EXTERNAL_FETCH_LOCK_TTL_SECONDS:-300}
+  EXTERNAL_FETCH_LOCK_WAIT_SECONDS: ${EXTERNAL_FETCH_LOCK_WAIT_SECONDS:-305}
+  EXTERNAL_FETCH_LOCK_POLL_SECONDS: ${EXTERNAL_FETCH_LOCK_POLL_SECONDS:-0.1}
+  EXTERNAL_FETCH_RETRY_MAX_ATTEMPTS: ${EXTERNAL_FETCH_RETRY_MAX_ATTEMPTS:-3}
+  EXTERNAL_FETCH_RETRY_BASE_DELAY_SECONDS: ${EXTERNAL_FETCH_RETRY_BASE_DELAY_SECONDS:-0.25}
+  EXTERNAL_FETCH_RETRY_MAX_DELAY_SECONDS: ${EXTERNAL_FETCH_RETRY_MAX_DELAY_SECONDS:-5}
+  EXTERNAL_FETCH_RETRY_JITTER_RATIO: ${EXTERNAL_FETCH_RETRY_JITTER_RATIO:-0.2}
   ENVIRONMENT: ${ENVIRONMENT:-production}
   DEVELOPMENT_PRINCIPAL_ENABLED: ${DEVELOPMENT_PRINCIPAL_ENABLED:-false}
   DEVELOPMENT_PRINCIPAL_SECRET: ${DEVELOPMENT_PRINCIPAL_SECRET:-}
@@ -84,7 +104,72 @@ services:
     build:
       context: ../backend
     restart: unless-stopped
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      # The API may dispatch signed outbox IDs, but it never receives Lark credentials.
+      LARK_REFUND_WRITEBACK_ENABLED: ${LARK_REFUND_WRITEBACK_ENABLED:-false}
+      LARK_REFUND_BASE_URL: ${LARK_REFUND_BASE_URL:-https://hailiang.feishu.cn/base/A1Kwb4tkZaZdE2s3C2dcG49Fn2d}
+      LARK_REFUND_API_BASE_URL: ${LARK_REFUND_API_BASE_URL:-https://open.feishu.cn}
+      LARK_REFUND_BASE_TOKEN: ${LARK_REFUND_BASE_TOKEN:-A1Kwb4tkZaZdE2s3C2dcG49Fn2d}
+      LARK_REFUND_TABLE_ID: ${LARK_REFUND_TABLE_ID:-tbl4PCNdcl4BYzgZ}
+      LARK_REFUND_COMPANY_CODE_FIELD_ID: ${LARK_REFUND_COMPANY_CODE_FIELD_ID:-fld5uBjB9R}
+      LARK_REFUND_STATUS_FIELD_ID: ${LARK_REFUND_STATUS_FIELD_ID:-fld4HLnqDk}
+      LARK_REFUND_TIMEOUT_SECONDS: ${LARK_REFUND_TIMEOUT_SECONDS:-30}
+      LARK_REFUND_PAGE_SIZE: ${LARK_REFUND_PAGE_SIZE:-100}
+      LARK_REFUND_MAX_RETRIES: ${LARK_REFUND_MAX_RETRIES:-3}
+      DGC_SAP_PROFIT_ENABLED: ${DGC_SAP_PROFIT_ENABLED:-false}
+      DGC_IAM_URL: ${DGC_IAM_URL:-https://iam.cn-east-3.myhuaweicloud.com/v3/auth/tokens}
+      DGC_SAP_PROFIT_API_URL: ${DGC_SAP_PROFIT_API_URL:-https://116.63.221.181/post/sapincome}
+      DGC_APP_KEY: ${DGC_APP_KEY:-}
+      DGC_APP_SECRET: ${DGC_APP_SECRET:-}
+      DGC_IAM_USERNAME: ${DGC_IAM_USERNAME:-}
+      DGC_IAM_PASSWORD: ${DGC_IAM_PASSWORD:-}
+      DGC_IAM_DOMAIN: ${DGC_IAM_DOMAIN:-hljtzb}
+      DGC_IAM_PROJECT: ${DGC_IAM_PROJECT:-cn-east-3}
+      DGC_TIMEOUT_SECONDS: ${DGC_TIMEOUT_SECONDS:-30}
+      DGC_PAGE_SIZE: ${DGC_PAGE_SIZE:-15000}
+      DGC_MAX_PAGES: ${DGC_MAX_PAGES:-1000}
+      DGC_MAX_RECORDS: ${DGC_MAX_RECORDS:-100000}
+      DGC_MAX_PAGE_BYTES: ${DGC_MAX_PAGE_BYTES:-10485760}
+      DGC_MAX_TOTAL_BYTES: ${DGC_MAX_TOTAL_BYTES:-67108864}
+      DGC_TOKEN_TTL_SECONDS: ${DGC_TOKEN_TTL_SECONDS:-82800}
+      DGC_TLS_SERVER_NAME: ${DGC_TLS_SERVER_NAME:-dgc.huaweicloud.com}
+      DGC_TLS_PINNED_CERTIFICATE_SHA256: ${DGC_TLS_PINNED_CERTIFICATE_SHA256:-AF3850E5ACC206D12082BDD32E94AD4675F3AD7AB0AE23A247053DE9ED2883BF}
+      DGC_SAP_PROFIT_FIELD_MAP: '${DGC_SAP_PROFIT_FIELD_MAP:-{"client":"mandt","company_code":"bukrs","company_name":"companyname","fiscal_year":"gjahr","fiscal_period":"monat","ledger":"rldnr","line_number":"hs","line_item":"ztext","current_month_amount":"nmhsl","year_to_date_amount":"nyhsl"}}'
+      DGC_SAP_PROFIT_METRIC_MAP: '${DGC_SAP_PROFIT_METRIC_MAP:-{"cumulative_profit":["利润总额","四、利润总额","四、利润总额（损失以“－”号填列）"],"fair_value_change":["公允价值变动收益","公允价值变动损益"],"cumulative_revenue":["一、营业总收入","营业收入"]}}'
+      DGC_SAP_PROFIT_LEDGER: ${DGC_SAP_PROFIT_LEDGER:-0L}
+      DGC_SAP_TRIAL_BALANCE_ENABLED: ${DGC_SAP_TRIAL_BALANCE_ENABLED:-false}
+      DGC_SAP_TRIAL_BALANCE_API_URL: ${DGC_SAP_TRIAL_BALANCE_API_URL:-https://116.63.221.181/fin/trial_balance}
+      DGC_SAP_TRIAL_BALANCE_APP_KEY: ${DGC_SAP_TRIAL_BALANCE_APP_KEY:-}
+      DGC_SAP_TRIAL_BALANCE_APP_SECRET: ${DGC_SAP_TRIAL_BALANCE_APP_SECRET:-}
+      DGC_SAP_TRIAL_BALANCE_PAGE_SIZE: ${DGC_SAP_TRIAL_BALANCE_PAGE_SIZE:-1000}
+      DGC_SAP_ACCOUNT_BALANCE_ENABLED: ${DGC_SAP_ACCOUNT_BALANCE_ENABLED:-false}
+      DGC_SAP_ACCOUNT_BALANCE_API_URL: ${DGC_SAP_ACCOUNT_BALANCE_API_URL:-https://116.63.221.181/post/sapaccountbalance}
+      DGC_SAP_ACCOUNT_BALANCE_APP_KEY: ${DGC_SAP_ACCOUNT_BALANCE_APP_KEY:-}
+      DGC_SAP_ACCOUNT_BALANCE_APP_SECRET: ${DGC_SAP_ACCOUNT_BALANCE_APP_SECRET:-}
+      DGC_SAP_ACCOUNT_BALANCE_PAGE_SIZE: ${DGC_SAP_ACCOUNT_BALANCE_PAGE_SIZE:-15000}
+      DGC_HESI_REIMBURSEMENT_ENABLED: ${DGC_HESI_REIMBURSEMENT_ENABLED:-false}
+      DGC_HESI_REIMBURSEMENT_API_URL: ${DGC_HESI_REIMBURSEMENT_API_URL:-https://116.63.221.181/post/hesimingxi}
+      DGC_HESI_REIMBURSEMENT_APP_KEY: ${DGC_HESI_REIMBURSEMENT_APP_KEY:-}
+      DGC_HESI_REIMBURSEMENT_APP_SECRET: ${DGC_HESI_REIMBURSEMENT_APP_SECRET:-}
+      DGC_HESI_REIMBURSEMENT_PAGE_SIZE: ${DGC_HESI_REIMBURSEMENT_PAGE_SIZE:-15000}
+      DGC_HESI_REIMBURSEMENT_FIELD_MAP: '${DGC_HESI_REIMBURSEMENT_FIELD_MAP:-{"company_code":"company_code","approval_completed_at":"approval_completed_at","expense_type_code":"expense_type_code","expense_type_amount":"expense_type_amount"}}'
+      DGC_HESI_INVOICE_ENABLED: ${DGC_HESI_INVOICE_ENABLED:-false}
+      DGC_HESI_INVOICE_API_URL: ${DGC_HESI_INVOICE_API_URL:-https://116.63.221.181/post/hesiinvoice}
+      DGC_HESI_INVOICE_APP_KEY: ${DGC_HESI_INVOICE_APP_KEY:-}
+      DGC_HESI_INVOICE_APP_SECRET: ${DGC_HESI_INVOICE_APP_SECRET:-}
+      DGC_HESI_INVOICE_PAGE_SIZE: ${DGC_HESI_INVOICE_PAGE_SIZE:-15000}
+      DGC_HESI_INVOICE_FIELD_MAP: '${DGC_HESI_INVOICE_FIELD_MAP:-{"company_code":"company_code","approval_completed_at":"approval_completed_at","expense_type_code":"expense_type_code","invoice_approved_amount":"invoice_approved_amount"}}'
+      DGC_SAP_DIVIDEND_DETAIL_ENABLED: ${DGC_SAP_DIVIDEND_DETAIL_ENABLED:-false}
+      DGC_SAP_DIVIDEND_DETAIL_API_URL: ${DGC_SAP_DIVIDEND_DETAIL_API_URL:-https://116.63.221.181/post/settlement_adjustment}
+      DGC_SAP_DIVIDEND_DETAIL_APP_KEY: ${DGC_SAP_DIVIDEND_DETAIL_APP_KEY:-}
+      DGC_SAP_DIVIDEND_DETAIL_APP_SECRET: ${DGC_SAP_DIVIDEND_DETAIL_APP_SECRET:-}
+      DGC_SAP_DIVIDEND_DETAIL_PAGE_SIZE: ${DGC_SAP_DIVIDEND_DETAIL_PAGE_SIZE:-15000}
+      DGC_INVOICE_DETAIL_ENABLED: ${DGC_INVOICE_DETAIL_ENABLED:-false}
+      DGC_INVOICE_DETAIL_API_URL: ${DGC_INVOICE_DETAIL_API_URL:-https://116.63.221.181/post/writeoff}
+      DGC_INVOICE_DETAIL_APP_KEY: ${DGC_INVOICE_DETAIL_APP_KEY:-}
+      DGC_INVOICE_DETAIL_APP_SECRET: ${DGC_INVOICE_DETAIL_APP_SECRET:-}
+      DGC_INVOICE_DETAIL_PAGE_SIZE: ${DGC_INVOICE_DETAIL_PAGE_SIZE:-15000}
     command:
       - uvicorn
       - tax_risk.main:create_app
@@ -217,6 +302,89 @@ services:
           --destination celery@$${HOSTNAME} --timeout 5 | grep -q pong
       interval: 30s
       timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker-income-tax-refund-writeback:
+    image: *backend-image
+    restart: unless-stopped
+    environment:
+      <<: *backend-environment
+      # Credentials for the external write path are intentionally scoped to this worker.
+      LARK_REFUND_WRITEBACK_ENABLED: ${LARK_REFUND_WRITEBACK_ENABLED:-false}
+      LARK_REFUND_BASE_URL: ${LARK_REFUND_BASE_URL:-https://hailiang.feishu.cn/base/A1Kwb4tkZaZdE2s3C2dcG49Fn2d}
+      LARK_REFUND_API_BASE_URL: ${LARK_REFUND_API_BASE_URL:-https://open.feishu.cn}
+      LARK_REFUND_BASE_TOKEN: ${LARK_REFUND_BASE_TOKEN:-A1Kwb4tkZaZdE2s3C2dcG49Fn2d}
+      LARK_REFUND_TABLE_ID: ${LARK_REFUND_TABLE_ID:-tbl4PCNdcl4BYzgZ}
+      LARK_REFUND_COMPANY_CODE_FIELD_ID: ${LARK_REFUND_COMPANY_CODE_FIELD_ID:-fld5uBjB9R}
+      LARK_REFUND_STATUS_FIELD_ID: ${LARK_REFUND_STATUS_FIELD_ID:-fld4HLnqDk}
+      LARK_REFUND_APP_ID: ${LARK_REFUND_APP_ID:-}
+      LARK_REFUND_APP_SECRET: ${LARK_REFUND_APP_SECRET:-}
+      LARK_REFUND_TIMEOUT_SECONDS: ${LARK_REFUND_TIMEOUT_SECONDS:-30}
+      LARK_REFUND_PAGE_SIZE: ${LARK_REFUND_PAGE_SIZE:-100}
+      LARK_REFUND_MAX_RETRIES: ${LARK_REFUND_MAX_RETRIES:-3}
+    command:
+      - celery
+      - -A
+      - tax_risk.workers.celery_app:celery_app
+      - worker
+      - --queues=income-tax-refund-writeback
+      - --concurrency=${LARK_REFUND_WORKER_CONCURRENCY:-2}
+      - --loglevel=INFO
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          celery -A tax_risk.workers.celery_app:celery_app inspect ping
+          --destination celery@$${HOSTNAME} --timeout 5 | grep -q pong
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  beat-income-tax-refund-writeback:
+    image: *backend-image
+    restart: unless-stopped
+    environment:
+      <<: *backend-environment
+      # Beat only scans the outbox and publishes signed IDs. It must never hold
+      # credentials that can write to the external Lark Base.
+      LARK_REFUND_WRITEBACK_ENABLED: ${LARK_REFUND_WRITEBACK_ENABLED:-false}
+      LARK_REFUND_BASE_URL: ${LARK_REFUND_BASE_URL:-https://hailiang.feishu.cn/base/A1Kwb4tkZaZdE2s3C2dcG49Fn2d}
+      LARK_REFUND_API_BASE_URL: ${LARK_REFUND_API_BASE_URL:-https://open.feishu.cn}
+      LARK_REFUND_BASE_TOKEN: ${LARK_REFUND_BASE_TOKEN:-A1Kwb4tkZaZdE2s3C2dcG49Fn2d}
+      LARK_REFUND_TABLE_ID: ${LARK_REFUND_TABLE_ID:-tbl4PCNdcl4BYzgZ}
+      LARK_REFUND_COMPANY_CODE_FIELD_ID: ${LARK_REFUND_COMPANY_CODE_FIELD_ID:-fld5uBjB9R}
+      LARK_REFUND_STATUS_FIELD_ID: ${LARK_REFUND_STATUS_FIELD_ID:-fld4HLnqDk}
+      LARK_REFUND_TIMEOUT_SECONDS: ${LARK_REFUND_TIMEOUT_SECONDS:-30}
+      LARK_REFUND_PAGE_SIZE: ${LARK_REFUND_PAGE_SIZE:-100}
+      LARK_REFUND_MAX_RETRIES: ${LARK_REFUND_MAX_RETRIES:-3}
+    command:
+      - celery
+      - -A
+      - tax_risk.workers.celery_app:celery_app
+      - beat
+      - --loglevel=INFO
+      - --pidfile=/tmp/celerybeat.pid
+      - --schedule=/tmp/celerybeat-schedule
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -s /tmp/celerybeat.pid &&
+          kill -0 "$$(cat /tmp/celerybeat.pid)"
+      interval: 30s
+      timeout: 5s
       retries: 3
       start_period: 20s
     depends_on:

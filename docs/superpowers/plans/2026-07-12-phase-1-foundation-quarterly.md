@@ -455,7 +455,7 @@ def test_standard_quarterly_example() -> None:
     assert result.potential_tax_cost_alert_code == "POTENTIAL_TAX_COST"
 ~~~
 
-还需测试利润为零/负数、公允价值变动为负、亏损全额/部分抵减、红字记录、本季度应计提金额为负、营业收入≤0 时为 NOT_CALCULABLE，以及仅在最终结果舍入。`received_dividends` 是 SAP 账簿中本年累计**收到**的分红金额，不包括公司支付/分配的股利，并保留 SAP 冲销符号。`historical_average_tax_burden` 从已批准的公司主数据版本匹配，平台绝不重新计算。
+还需测试利润为零/负数、公允价值变动为负、亏损全额/部分抵减、红字记录、本季度应计提金额为负、营业收入≤0 时税负率取0并继续判断偏离，以及仅在最终结果舍入。`received_dividends` 是 SAP 账簿中本年累计**收到**的分红金额，不包括公司支付/分配的股利，并保留 SAP 冲销符号。`historical_average_tax_burden` 从已批准的公司主数据版本匹配，平台绝不重新计算。
 
 锁定以下取零下限前边界：
 
@@ -502,7 +502,7 @@ potential_tax_cost = round_half_up(potential_tax - cumulative_tax)
 
 运行：cd backend && pytest tests/unit/domain/test_quarterly_*.py -q
 
-预期：标准值及 `POTENTIAL_TAX_COST` 完全匹配；-100+60 和 -100+150 的取零下限前场景通过；计提差异为正/负/零、税负率偏离度精确等于 ±5 个百分点/位于区间内部，以及潜在税务成本非零/为零的预警边界均通过；营业收入≤0 时税负率相关值为空并具备原因代码；全部属性测试通过。
+预期：标准值及 `POTENTIAL_TAX_COST` 完全匹配；-100+60 和 -100+150 的取零下限前场景通过；计提差异为正/负/零、税负率偏离度精确等于 ±5 个百分点/位于区间内部，以及潜在税务成本非零/为零的预警边界均通过；营业收入≤0 时税负率为0并继续计算偏离度；全部属性测试通过。
 
 - [ ] **步骤 5：提交公式实现**
 
@@ -669,7 +669,7 @@ git commit -m "feat: expose scoped quarterly risk APIs"
 - 表格将数据质量阻断记录与风险记录分开；
 - 渲染风险类型、方向、实际值/应计值/差异值及状态；
 - 抽屉展示公式、每个代入值、来源、快照、主数据版本及规则版本；
-- 营业收入≤0 时展示“不可计算”及原因，绝不展示 ¥0；
+- 营业收入≤0 时展示税负率0及其与历史平均税负率的偏离结果；
 - 不出现 Agent 或语义风险导航。
 
 - [ ] **步骤 2：确认界面处于红灯状态**

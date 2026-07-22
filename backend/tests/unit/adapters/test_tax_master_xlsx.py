@@ -21,6 +21,7 @@ HEADERS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -50,6 +51,7 @@ def _valid_row(**overrides: object) -> tuple[object, ...]:
         "valid_from": date(2026, 1, 1),
         "valid_to": None,
         "tax_rate": "25%",
+        "deferred_tax_rate": "20%",
         "loss_carryforward": "100000.00",
         "three_year_average_tax_burden": "9%",
     }
@@ -65,12 +67,14 @@ def test_parses_controlled_fixture_and_normalizes_displayed_rates_exactly() -> N
     assert len(parsed) == 2
     assert parsed[0].row_number == 2
     assert parsed[0].tax_rate.value == Decimal("0.25")
+    assert parsed[0].deferred_tax_rate.value == Decimal("0.20")
     assert parsed[0].three_year_average_tax_burden.value == Decimal("0.09")
     assert parsed[0].loss_carryforward == Decimal("100000.00")
     assert parsed[0].valid_to is None
     # The Excel numeric cell is read as a float, but is normalized through str(value),
     # never passed directly into Rate or Decimal as a binary float.
     assert parsed[1].tax_rate.value == Decimal("0.25")
+    assert parsed[1].deferred_tax_rate.value == Decimal("0.20")
     assert parsed[1].three_year_average_tax_burden.value == Decimal("0.08")
     assert parsed[1].valid_to == date(2026, 12, 31)
     assert len(TaxMasterXlsxAdapter(payload, amount_scale=2).checksum) == 64
@@ -80,6 +84,11 @@ def test_parses_controlled_fixture_and_normalizes_displayed_rates_exactly() -> N
     ("headers", "expected_code"),
     [
         (HEADERS + ("unexpected",), "INVALID_HEADER"),
+        (HEADERS[:5] + HEADERS[6:], "INVALID_HEADER"),
+        (
+            HEADERS[:5] + (HEADERS[6], HEADERS[5]) + HEADERS[7:],
+            "INVALID_HEADER",
+        ),
         (HEADERS[:-1] + (None,), "INVALID_HEADER"),
         (HEADERS[:-1], "INVALID_HEADER"),
     ],
@@ -95,6 +104,22 @@ def test_rejects_missing_blank_or_extra_headers(
 
     assert caught.value.errors[0].error_code == expected_code
     assert caught.value.errors[0].row_number == 1
+
+
+@pytest.mark.parametrize(
+    ("deferred_tax_rate", "expected"),
+    [("0%", Decimal("0")), ("100%", Decimal("1"))],
+)
+def test_deferred_tax_rate_accepts_inclusive_rate_boundaries(
+    deferred_tax_rate: object,
+    expected: Decimal,
+) -> None:
+    parsed = TaxMasterXlsxAdapter(
+        _xlsx([_valid_row(deferred_tax_rate=deferred_tax_rate)]),
+        amount_scale=2,
+    ).parse()
+
+    assert parsed[0].deferred_tax_rate.value == expected
 
 
 def test_rejects_formula_without_cached_value_and_interior_blank_row() -> None:
@@ -124,6 +149,14 @@ def test_rejects_formula_without_cached_value_and_interior_blank_row() -> None:
         ({"tax_rate": "101%"}, "INVALID_RATE", "tax_rate"),
         ({"tax_rate": "-1%"}, "INVALID_RATE", "tax_rate"),
         ({"tax_rate": "0.1234567890123"}, "INVALID_RATE", "tax_rate"),
+        ({"deferred_tax_rate": None}, "INVALID_RATE", "deferred_tax_rate"),
+        ({"deferred_tax_rate": "101%"}, "INVALID_RATE", "deferred_tax_rate"),
+        ({"deferred_tax_rate": "-1%"}, "INVALID_RATE", "deferred_tax_rate"),
+        (
+            {"deferred_tax_rate": "0.1234567890123"},
+            "INVALID_RATE",
+            "deferred_tax_rate",
+        ),
         ({"three_year_average_tax_burden": "1.01"}, "INVALID_RATE", "three_year_average_tax_burden"),
         ({"loss_carryforward": "-0.01"}, "INVALID_LOSS_CARRYFORWARD", "loss_carryforward"),
         ({"loss_carryforward": "0.001"}, "INVALID_LOSS_CARRYFORWARD", "loss_carryforward"),

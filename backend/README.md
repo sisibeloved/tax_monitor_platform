@@ -71,7 +71,11 @@ cd backend
 已实现的端点如下：
 
 - `GET /health`
-- `POST /api/v1/ingest-batches`、`POST /api/v1/ingest-batches/{id}/files` 和
+- `POST /api/v1/ingest-batches`、`POST /api/v1/ingest-batches/{id}/files`、
+  `POST /api/v1/ingest-batches/dgc-sap-profit`、
+  `POST /api/v1/ingest-batches/dgc-sap-trial-balance`、
+  `POST /api/v1/ingest-batches/dgc-sap-account-balance`、
+  `POST /api/v1/ingest-batches/dgc-sap-dividend-detail` 和
   `GET /api/v1/ingest-batches/{id}`
 - `POST /api/v1/tax-master/import`、`POST /api/v1/tax-master/{id}/approve` 和
   `GET /api/v1/tax-master/{company_code}`
@@ -98,7 +102,7 @@ cd backend
 ```bash
 cd backend
 .venv/bin/celery -A tax_risk.workers.celery_app:celery_app worker \
-  --queues=quarterly,monthly-semantic,business-entertainment,exports \
+  --queues=quarterly,monthly-semantic,business-entertainment,exports,income-tax-refund-writeback \
   --concurrency=4 --loglevel=INFO
 ```
 
@@ -106,15 +110,21 @@ cd backend
 
 ```bash
 docker compose --env-file infra/.env -f infra/docker-compose.yml up -d \
-  worker-quarterly worker-business-entertainment worker-monthly-semantic worker-exports
+  worker-quarterly worker-business-entertainment worker-monthly-semantic worker-exports \
+  worker-income-tax-refund-writeback
 docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f \
-  worker-quarterly worker-business-entertainment worker-monthly-semantic worker-exports
+  worker-quarterly worker-business-entertainment worker-monthly-semantic worker-exports \
+  worker-income-tax-refund-writeback
 ```
 
 任务只携带可持久化 ID 和服务端签发的 HMAC 范围令牌。令牌精确绑定队列、运行类型、批次、公司和期间；
 生产工作进程缺少或收到篡改令牌时必须在访问数据前拒绝。工作进程以不能绕过 RLS 的应用账号重新加载冻结
 快照、tax-master 和规则/模型版本；系统采用 JSON 序列化、延迟确认、工作进程丢失时拒绝确认、有限任务
 超时，以及按公司隔离的重试机制。
+
+退税扫描命中后只把 outbox ID、公司范围和签名令牌发送到
+`income-tax-refund-writeback` 队列。专用 Worker 按公司代码唯一定位飞书多维表记录，并将
+“是否已收到退税”幂等更新为“已退税”；飞书应用凭据不得注入 API 或其他 Worker。
 
 ## 重试
 
@@ -167,7 +177,8 @@ backend/.venv/bin/pytest -q -s backend/tests/e2e/test_quarterly_api_worker_flow.
 
 ## 当前边界
 
-当前实现覆盖受控数据采集、不可变已发布快照集、三项季度确定性检查、业务招待费/福利费/公益性捐赠
+当前实现覆盖受控数据采集、不可变已发布快照集、四项季度确定性检查（新运行使用
+`QUARTERLY_V3`；`QUARTERLY_V1` 和 `QUARTERLY_V2` 仅用于历史重放）、业务招待费/福利费/公益性捐赠
 月度语义检查、统一风险事项、公司级隔离、不可变审计、安全导出、运维驾驶舱和发布/回滚门禁。
 `SnapshotSet.published_at` 是唯一的数据就绪时间戳。
 

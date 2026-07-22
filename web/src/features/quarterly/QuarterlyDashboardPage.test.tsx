@@ -20,6 +20,7 @@ const dashboardResponse = {
   amount_scale: 2,
   monitoring_type_counts: {
     ACCRUAL_ACCURACY: 3,
+    DEFERRED_TAX_ACCURACY: 2,
     TAX_BURDEN: 2,
     POTENTIAL_TAX_COST: 4,
   },
@@ -69,7 +70,7 @@ const dashboardResponse = {
 };
 
 const riskCaseResponse = {
-  total: 1,
+  total: 2,
   page: 1,
   page_size: 200,
   items: [
@@ -84,11 +85,44 @@ const riskCaseResponse = {
       input_amount: "700000.000000000000",
       result_amount: "725000.000000000000",
       difference_amount: "25000.000000000000",
+      rate_value: "0.250000000000",
       tax_burden_rate: null,
       tax_burden_deviation: null,
+      formula_substitution: {},
       not_calculated_reason: null,
       risk_direction: "UNDER",
       risk_amount: "25000.000000000000",
+      risk_rate: null,
+      currency: "CNY",
+      amount_scale: 2,
+      status: "NEW",
+      priority: 3,
+      assignee: null,
+      row_version: 1,
+    },
+    {
+      id: "30000000-0000-4000-8000-000000000002",
+      company_id: "20000000-0000-4000-8000-000000000001",
+      company_code: "1001",
+      company_name: "集团总部",
+      latest_detection_id: "40000000-0000-4000-8000-000000000002",
+      monitoring_type: "DEFERRED_TAX_ACCURACY",
+      calculation_status: "CALCULATED",
+      input_amount: "2800000.000000000000",
+      result_amount: "3000000.000000000000",
+      difference_amount: "200000.000000000000",
+      rate_value: "0.250000000000",
+      tax_burden_rate: null,
+      tax_burden_deviation: null,
+      formula_substitution: {
+        cumulative_profit: "10000000.000000000000",
+        loss_carryforward: "2000000.000000000000",
+        deferred_tax_rate: "0.250000000000",
+      },
+      not_calculated_reason: null,
+      alert_code: "DEFERRED_TAX_TO_ACCRUE",
+      risk_direction: "ACCRUE",
+      risk_amount: "200000.000000000000",
       risk_rate: null,
       currency: "CNY",
       amount_scale: 2,
@@ -279,7 +313,7 @@ describe("QuarterlyDashboardPage", () => {
     ).not.toBeInTheDocument();
 
     const riskRegion = screen.getByRole("region", { name: "风险清单" });
-    expect(within(riskRegion).getByText("集团总部")).toBeInTheDocument();
+    expect(within(riskRegion).getAllByText("集团总部")).toHaveLength(2);
     expect(
       within(riskRegion).getByText("所得税计提准确性"),
     ).toBeInTheDocument();
@@ -287,7 +321,17 @@ describe("QuarterlyDashboardPage", () => {
     expect(within(riskRegion).getByText("¥700,000.00")).toBeInTheDocument();
     expect(within(riskRegion).getByText("¥725,000.00")).toBeInTheDocument();
     expect(within(riskRegion).getByText("+¥25,000.00")).toBeInTheDocument();
-    expect(within(riskRegion).getByText("待处理")).toBeInTheDocument();
+    expect(within(riskRegion).getAllByText("待处理")).toHaveLength(2);
+    expect(
+      within(riskRegion).getByText("递延所得税计提/转回准确性"),
+    ).toBeInTheDocument();
+    expect(within(riskRegion).getByText("应计提")).toBeInTheDocument();
+    expect(within(riskRegion).getByText("¥2,800,000.00")).toBeInTheDocument();
+    expect(within(riskRegion).getByText("¥3,000,000.00")).toBeInTheDocument();
+    expect(within(riskRegion).getByText("+¥200,000.00")).toBeInTheDocument();
+    expect(within(riskRegion).getByText("¥2,000,000.00")).toBeInTheDocument();
+    expect(within(riskRegion).getByText("¥10,000,000.00")).toBeInTheDocument();
+    expect(within(riskRegion).getByText("25%")).toBeInTheDocument();
     expect(within(riskRegion).queryByText("华东A公司")).not.toBeInTheDocument();
   });
 

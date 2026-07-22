@@ -25,6 +25,7 @@ HEADERS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -43,6 +44,7 @@ def _xlsx(row_count: int = 1) -> bytes:
                 date(2026, 1, 1),
                 None,
                 "25%",
+                "20%",
                 "100.00",
                 "9%",
             )
@@ -237,7 +239,7 @@ def test_malicious_dimension_is_rejected_before_row_tuple_allocation() -> None:
     with ZipFile(BytesIO(payload)) as archive:
         worksheet_xml = archive.read("xl/worksheets/sheet1.xml")
     worksheet_xml = worksheet_xml.replace(
-        b'<dimension ref="A1:G2" />',
+        b'<dimension ref="A1:H2" />',
         b'<dimension ref="A1:XFD1048576" />',
     )
     payload = _rewrite_zip(
@@ -252,7 +254,7 @@ def test_relocated_worksheet_limit_is_rejected_before_openpyxl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = _xlsx()
-    worksheet_xml = _worksheet_xml(payload).replace(b'r="G2"', b'r="XFE2"')
+    worksheet_xml = _worksheet_xml(payload).replace(b'r="H2"', b'r="XFE2"')
     payload = _with_relocated_worksheet(payload, worksheet_xml=worksheet_xml)
 
     _assert_fast_preflight_rejection(
@@ -343,6 +345,40 @@ def test_nonworksheet_xml_is_not_subject_to_worksheet_coordinate_limits() -> Non
     assert [(row.row_number, row.company_code) for row in parsed] == [(2, "C0000")]
 
 
+def test_stale_unreferenced_worksheet_relationship_is_ignored() -> None:
+    payload = _xlsx()
+    with ZipFile(BytesIO(payload), "r") as archive:
+        relationships = archive.read("xl/_rels/workbook.xml.rels").replace(
+            b"</Relationships>",
+            (
+                b'<Relationship Id="rIdStale" '
+                b'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                b'relationships/worksheet" Target="worksheets/stale.xml"/>'
+                b"</Relationships>"
+            ),
+        )
+        content_types = archive.read("[Content_Types].xml").replace(
+            b"</Types>",
+            (
+                b'<Override PartName="/xl/worksheets/stale.xml" '
+                b'ContentType="application/vnd.openxmlformats-officedocument.'
+                b'spreadsheetml.worksheet+xml"/>'
+                b"</Types>"
+            ),
+        )
+    payload = _rewrite_zip(
+        payload,
+        replacements={
+            "xl/_rels/workbook.xml.rels": relationships,
+            "[Content_Types].xml": content_types,
+        },
+    )
+
+    parsed = TaxMasterXlsxAdapter(payload, amount_scale=2).parse()
+
+    assert [(row.row_number, row.company_code) for row in parsed] == [(2, "C0000")]
+
+
 @pytest.mark.parametrize("location", ["dimension", "cell"])
 def test_very_long_column_reference_is_rejected_in_constant_time_before_openpyxl(
     location: str,
@@ -353,11 +389,11 @@ def test_very_long_column_reference_is_rejected_in_constant_time_before_openpyxl
     long_column = b"A" * 100_000
     if location == "dimension":
         worksheet_xml = worksheet_xml.replace(
-            b'<dimension ref="A1:G2" />',
+            b'<dimension ref="A1:H2" />',
             b'<dimension ref="A1:' + long_column + b'2" />',
         )
     else:
-        worksheet_xml = worksheet_xml.replace(b'r="G2"', b'r="' + long_column + b'2"')
+        worksheet_xml = worksheet_xml.replace(b'r="H2"', b'r="' + long_column + b'2"')
     payload = _with_worksheet_xml(payload, worksheet_xml)
     limits = replace(
         DEFAULT_XLSX_RESOURCE_LIMITS,
@@ -377,13 +413,13 @@ def test_very_long_row_reference_is_rejected_before_decimal_conversion(
     long_row = b"1" * 100_000
     if location == "dimension":
         worksheet_xml = worksheet_xml.replace(
-            b'<dimension ref="A1:G2" />',
-            b'<dimension ref="A1:G' + long_row + b'" />',
+            b'<dimension ref="A1:H2" />',
+            b'<dimension ref="A1:H' + long_row + b'" />',
         )
     elif location == "row":
         worksheet_xml = worksheet_xml.replace(b'<row r="2">', b'<row r="' + long_row + b'">')
     else:
-        worksheet_xml = worksheet_xml.replace(b'r="G2"', b'r="G' + long_row + b'"')
+        worksheet_xml = worksheet_xml.replace(b'r="H2"', b'r="H' + long_row + b'"')
     payload = _with_worksheet_xml(payload, worksheet_xml)
     limits = replace(
         DEFAULT_XLSX_RESOURCE_LIMITS,
@@ -404,11 +440,11 @@ def test_column_beyond_excel_grid_is_rejected_before_openpyxl(
     worksheet_xml = _worksheet_xml(payload)
     if location == "dimension":
         worksheet_xml = worksheet_xml.replace(
-            b'<dimension ref="A1:G2" />',
+            b'<dimension ref="A1:H2" />',
             f'<dimension ref="A1:{column}2" />'.encode(),
         )
     else:
-        worksheet_xml = worksheet_xml.replace(b'r="G2"', f'r="{column}2"'.encode())
+        worksheet_xml = worksheet_xml.replace(b'r="H2"', f'r="{column}2"'.encode())
     payload = _with_worksheet_xml(payload, worksheet_xml)
 
     _assert_fast_preflight_rejection(
@@ -427,13 +463,13 @@ def test_row_beyond_excel_grid_is_rejected_even_when_configured_limit_is_higher(
     worksheet_xml = _worksheet_xml(payload)
     if location == "dimension":
         worksheet_xml = worksheet_xml.replace(
-            b'<dimension ref="A1:G2" />',
+            b'<dimension ref="A1:H2" />',
             b'<dimension ref="A1:A1048577" />',
         )
     elif location == "row":
         worksheet_xml = worksheet_xml.replace(b'<row r="2">', b'<row r="1048577">')
     else:
-        worksheet_xml = worksheet_xml.replace(b'r="G2"', b'r="G1048577"')
+        worksheet_xml = worksheet_xml.replace(b'r="H2"', b'r="H1048577"')
     payload = _with_worksheet_xml(payload, worksheet_xml)
     limits = replace(
         DEFAULT_XLSX_RESOURCE_LIMITS,
@@ -450,11 +486,11 @@ def test_xfd_excel_column_boundary_passes_preflight(location: str) -> None:
     worksheet_xml = _worksheet_xml(payload)
     if location == "dimension":
         worksheet_xml = worksheet_xml.replace(
-            b'<dimension ref="A1:G2" />',
+            b'<dimension ref="A1:H2" />',
             b'<dimension ref="A1:XFD2" />',
         )
     else:
-        worksheet_xml = worksheet_xml.replace(b'r="G2"', b'r="XFD2"')
+        worksheet_xml = worksheet_xml.replace(b'r="H2"', b'r="XFD2"')
     payload = _with_worksheet_xml(payload, worksheet_xml)
     limits = replace(
         DEFAULT_XLSX_RESOURCE_LIMITS,
@@ -471,11 +507,11 @@ def test_actual_sparse_coordinate_rectangle_cannot_hide_behind_low_dimension(
 ) -> None:
     payload = _xlsx()
     worksheet_xml = _worksheet_xml(payload).replace(
-        b'<dimension ref="A1:G2" />',
+        b'<dimension ref="A1:H2" />',
         b'<dimension ref="A1:A1" />',
     )
     if variant == "sparse_far_column":
-        worksheet_xml = worksheet_xml.replace(b'r="G2"', b'r="ZZ1"')
+        worksheet_xml = worksheet_xml.replace(b'r="H2"', b'r="ZZ1"')
     else:
         worksheet_xml = worksheet_xml.replace(b'<row r="2">', b'<row r="10">')
         for column in b"ABCDEFG":
@@ -512,14 +548,14 @@ def test_noncanonical_row_reference_is_rejected_during_preflight(
 def test_low_reported_dimension_with_actual_coordinates_in_budget_is_parsed() -> None:
     payload = _xlsx()
     worksheet_xml = _worksheet_xml(payload).replace(
-        b'<dimension ref="A1:G2" />',
+        b'<dimension ref="A1:H2" />',
         b'<dimension ref="A1:A1" />',
     )
     payload = _with_worksheet_xml(payload, worksheet_xml)
     limits = replace(
         DEFAULT_XLSX_RESOURCE_LIMITS,
         max_worksheet_rows=2,
-        max_worksheet_cells=14,
+        max_worksheet_cells=16,
     )
 
     assert len(TaxMasterXlsxAdapter(payload, amount_scale=2, limits=limits).parse()) == 1
@@ -538,7 +574,7 @@ def test_package_at_all_configured_boundaries_is_accepted() -> None:
             max_member_uncompressed_bytes=max(info.file_size for info in infos),
             max_compression_ratio=maximum_ratio,
             max_worksheet_rows=2,
-            max_worksheet_cells=14,
+            max_worksheet_cells=16,
         )
 
     assert len(TaxMasterXlsxAdapter(payload, amount_scale=2, limits=limits).parse()) == 1

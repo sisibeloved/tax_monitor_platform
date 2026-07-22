@@ -34,6 +34,7 @@ METRICS = (
     "other_payables_accrual",
     "hesi_no_invoice",
 )
+DEFERRED_TAX_METRIC = "sap_cumulative_deferred_tax_expense"
 DEFAULT_VALUES = {
     "cumulative_profit": Decimal("1000"),
     "received_dividends": Decimal("0"),
@@ -99,6 +100,12 @@ def resources(
                     "AND version <> 'phase-1-reviewed'"
                 )
             )
+            connection.execute(
+                text(
+                    "DELETE FROM rule_version WHERE rule_code = 'QUARTERLY_V2' "
+                    "AND version <> 'deferred-tax-reviewed'"
+                )
+            )
         database_engine.dispose()
 
 
@@ -118,6 +125,7 @@ def _lineage(
     tax_rate: Decimal,
     loss_carryforward: Decimal,
     average_tax_burden: Decimal,
+    deferred_tax_rate: Decimal | None,
     include_source_metadata: bool = False,
     imported_at: str = "2026-07-01T09:45:00Z",
     extraction_time: str = "2026-07-01T08:15:30Z",
@@ -136,6 +144,8 @@ def _lineage(
         "currency": "CNY",
         "amount_scale": 2,
     }
+    if deferred_tax_rate is not None:
+        tax_master["deferred_tax_rate"] = format(deferred_tax_rate, "f")
     sources: list[dict[str, object]] = [{"source": "SAP", "version": token}]
     if include_source_metadata:
         tax_master |= {
@@ -170,7 +180,7 @@ def _lineage(
                     "lineage": {"row_number": index + 2, "worksheet": "Q2"},
                 },
             }
-            for index, metric in enumerate(METRICS)
+            for index, metric in enumerate(values)
         ],
         "sources": sources,
         "tax_master": tax_master,
@@ -184,19 +194,28 @@ def _seed_quarterly_case(
     tax_rate: Decimal = Decimal("0.25"),
     loss_carryforward: Decimal = Decimal("0"),
     average_tax_burden: Decimal = Decimal("0.08"),
+    deferred_tax_rate: Decimal | None = Decimal("0.20"),
+    rule_code: str = "QUARTERLY_V1",
+    include_deferred_tax_metric: bool | None = None,
     include_source_metadata: bool = False,
     lineage_imported_at: str = "2026-07-01T09:45:00Z",
     lineage_extraction_time: str = "2026-07-01T08:15:30Z",
 ) -> QuarterlySeed:
     token = uuid4().hex
     target_values = DEFAULT_VALUES | dict(values or {})
+    if include_deferred_tax_metric is None:
+        include_deferred_tax_metric = rule_code in {"QUARTERLY_V2", "QUARTERLY_V3"}
+    if include_deferred_tax_metric:
+        target_values.setdefault(DEFERRED_TAX_METRIC, Decimal("0"))
+    else:
+        target_values.pop(DEFERRED_TAX_METRIC, None)
     with engine.begin() as connection:
         rule_version_id = connection.execute(
             text(
                 """
                 SELECT id
                 FROM rule_version
-                WHERE rule_code = 'QUARTERLY_V1'
+                WHERE rule_code = :rule_code
                   AND status = 'PUBLISHED'
                   AND effective_from <= :period
                   AND (effective_to IS NULL OR effective_to >= :period)
@@ -204,7 +223,7 @@ def _seed_quarterly_case(
                 LIMIT 1
                 """
             ),
-            {"period": PERIOD},
+            {"period": PERIOD, "rule_code": rule_code},
         ).scalar_one()
         master_batch_id = connection.execute(
             text(
@@ -261,13 +280,15 @@ def _seed_quarterly_case(
                     INSERT INTO tax_master_version (
                         company_id, source_batch_id, valid_from, version, status,
                         tax_rate, loss_carryforward, average_tax_burden_rate_3y,
-                        currency, amount_scale, source_file_name, source_checksum,
+                        deferred_tax_rate, currency, amount_scale,
+                        source_file_name, source_checksum,
                         source_row_number, uploaded_by, data, published_at, approved_by,
                         created_at
                     )
                     VALUES (
                         :company_id, :source_batch_id, '2026-01-01', :version,
-                        'PUBLISHED', :tax_rate, :loss, :average, 'CNY', 2,
+                        'PUBLISHED', :tax_rate, :loss, :average, :deferred_tax_rate,
+                        'CNY', 2,
                         'tax-master.xlsx', :checksum, :row_number, 'maker',
                         '{}'::jsonb, now(), 'reviewer',
                         TIMESTAMPTZ '2026-07-01 09:45:00+00'
@@ -282,6 +303,7 @@ def _seed_quarterly_case(
                     "tax_rate": tax_rate,
                     "loss": loss_carryforward,
                     "average": average_tax_burden,
+                    "deferred_tax_rate": deferred_tax_rate,
                     "checksum": master_checksum,
                     "row_number": source_row_number,
                 },
@@ -298,6 +320,7 @@ def _seed_quarterly_case(
                     tax_rate=tax_rate,
                     loss_carryforward=loss_carryforward,
                     average_tax_burden=average_tax_burden,
+                    deferred_tax_rate=deferred_tax_rate,
                     include_source_metadata=include_source_metadata,
                     imported_at=lineage_imported_at,
                     extraction_time=lineage_extraction_time,
@@ -326,7 +349,7 @@ def _seed_quarterly_case(
                     "master_id": master_id,
                     "period": PERIOD,
                     "source_hash": _digest(f"snapshot-sources:{token}:{index}"),
-                    "record_count": len(METRICS) if index < 2 else 0,
+                    "record_count": len(target_values) if index < 2 else 0,
                     "control_total": (
                         sum(target_values.values(), Decimal("0")) if index < 2 else 0
                     ),
@@ -424,13 +447,17 @@ def _new_snapshot_run(
     values: Mapping[str, Decimal],
 ) -> tuple[UUID, UUID]:
     token = uuid4().hex
-    target_values = DEFAULT_VALUES | dict(values)
     with engine.begin() as connection:
         frozen = connection.execute(
             text("SELECT lineage FROM accounting_snapshot WHERE id = :snapshot_id"),
             {"snapshot_id": seed.snapshot_id},
         ).scalar_one()
         amounts = {metric["metric_code"]: metric for metric in frozen["metrics"]}
+        target_values = {
+            metric_code: Decimal(str(metric["amount"]))
+            for metric_code, metric in amounts.items()
+        }
+        target_values.update(values)
         for metric_code, amount in target_values.items():
             amounts[metric_code]["amount"] = format(amount, "f")
         frozen["sources"] = [{"source": "SAP", "version": token}]
@@ -455,7 +482,7 @@ def _new_snapshot_run(
                 "master_id": seed.tax_master_version_id,
                 "period": PERIOD,
                 "source_hash": _digest(f"snapshot-sources:{token}"),
-                "record_count": len(METRICS),
+                "record_count": len(target_values),
                 "control_total": sum(target_values.values(), Decimal("0")),
                 "checksum": _digest(f"snapshot:{token}"),
                 "lineage": json.dumps(frozen),
@@ -582,6 +609,195 @@ def test_all_alerts_persist_three_exact_detections_and_isolated_cases(
         if row["monitor_type"] != "TAX_BURDEN":
             assert row["risk_amount"] is not None
             assert row["risk_rate"] is None
+
+
+def test_quarterly_v1_historical_replay_remains_exactly_three_monitors(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(
+        engine,
+        rule_code="QUARTERLY_V1",
+        deferred_tax_rate=None,
+        include_deferred_tax_metric=False,
+    )
+    service = QuarterlyRunService(uow_factory)
+
+    first = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE monitoring_run SET status = 'SUCCEEDED' WHERE id = :run_id"),
+            {"run_id": seed.run_id},
+        )
+    replay = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+
+    assert replay.replayed is True
+    assert replay.detection_ids == first.detection_ids
+    assert len(replay.detection_ids) == 3
+    assert {
+        row["monitor_type"] for row in _rows(engine, "detection_record", seed.run_id)
+    } == {"ACCRUAL_ACCURACY", "TAX_BURDEN", "POTENTIAL_TAX_COST"}
+
+
+def test_quarterly_v2_persists_accrual_reversal_and_quantized_zero_contract(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(
+        engine,
+        rule_code="QUARTERLY_V2",
+        deferred_tax_rate=Decimal("0.25"),
+        loss_carryforward=Decimal("40"),
+        values={
+            "cumulative_profit": Decimal("60"),
+            DEFERRED_TAX_METRIC: Decimal("20"),
+        },
+    )
+    service = QuarterlyRunService(uow_factory)
+
+    accrued = service.execute(run_id=seed.run_id, snapshot_id=seed.snapshot_id)
+    accrued_rows = _rows(engine, "detection_record", seed.run_id)
+    accrued_deferred = next(
+        row for row in accrued_rows if row["monitor_type"] == "DEFERRED_TAX_ACCURACY"
+    )
+
+    assert len(accrued.detection_ids) == 4
+    assert {row["monitor_type"] for row in accrued_rows} == {
+        "ACCRUAL_ACCURACY",
+        "DEFERRED_TAX_ACCURACY",
+        "TAX_BURDEN",
+        "POTENTIAL_TAX_COST",
+    }
+    assert accrued_deferred["input_amount"] == Decimal("20.000000000000")
+    assert accrued_deferred["result_amount"] == Decimal("25.000000000000")
+    assert accrued_deferred["difference_amount"] == Decimal("5.000000000000")
+    assert accrued_deferred["rate_value"] == Decimal("0.250000000000")
+    assert accrued_deferred["alert_code"] == "DEFERRED_TAX_TO_ACCRUE"
+    assert accrued_deferred["direction"] == "ACCRUE"
+    formula_substitution = accrued_deferred["formula_substitution"]
+    assert isinstance(formula_substitution, dict)
+    expected_substitution = {
+        "cumulative_profit": "60",
+        "loss_carryforward": "40",
+        "deferred_tax_rate": "0.25",
+        "sap_cumulative_deferred_tax_expense": "20",
+        "deferred_tax_base": "100",
+        "system_cumulative_deferred_tax": "25.00",
+        "current_year_deferred_tax_adjustment": "5.00",
+    }
+    assert formula_substitution.items() >= expected_substitution.items()
+
+    reverse_run_id, reverse_snapshot_id = _new_snapshot_run(
+        engine,
+        seed,
+        values={DEFERRED_TAX_METRIC: Decimal("30")},
+    )
+    reversed_result = service.execute(
+        run_id=reverse_run_id,
+        snapshot_id=reverse_snapshot_id,
+    )
+    reversed_deferred = next(
+        row
+        for row in _rows(engine, "detection_record", reverse_run_id)
+        if row["monitor_type"] == "DEFERRED_TAX_ACCURACY"
+    )
+
+    assert len(reversed_result.detection_ids) == 4
+    assert reversed_deferred["difference_amount"] == Decimal("-5.000000000000")
+    assert reversed_deferred["alert_code"] == "DEFERRED_TAX_TO_REVERSE"
+    assert reversed_deferred["direction"] == "REVERSE"
+
+    zero_run_id, zero_snapshot_id = _new_snapshot_run(
+        engine,
+        seed,
+        values={DEFERRED_TAX_METRIC: Decimal("25.004")},
+    )
+    zero_result = service.execute(
+        run_id=zero_run_id,
+        snapshot_id=zero_snapshot_id,
+    )
+    zero_deferred = next(
+        row
+        for row in _rows(engine, "detection_record", zero_run_id)
+        if row["monitor_type"] == "DEFERRED_TAX_ACCURACY"
+    )
+
+    assert len(zero_result.detection_ids) == 4
+    assert zero_deferred["difference_amount"] == Decimal("0")
+    assert zero_deferred["alert_code"] is None
+    assert zero_deferred["direction"] is None
+
+
+def test_quarterly_v3_uses_loss_less_profit_and_preserves_negative_base(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(
+        engine,
+        rule_code="QUARTERLY_V3",
+        deferred_tax_rate=Decimal("0.25"),
+        loss_carryforward=Decimal("40"),
+        values={
+            "cumulative_profit": Decimal("60"),
+            DEFERRED_TAX_METRIC: Decimal("20"),
+        },
+    )
+
+    result = QuarterlyRunService(uow_factory).execute(
+        run_id=seed.run_id,
+        snapshot_id=seed.snapshot_id,
+    )
+    deferred = next(
+        row
+        for row in _rows(engine, "detection_record", seed.run_id)
+        if row["monitor_type"] == "DEFERRED_TAX_ACCURACY"
+    )
+
+    assert len(result.detection_ids) == 4
+    assert deferred["result_amount"] == Decimal("-5.000000000000")
+    assert deferred["difference_amount"] == Decimal("-25.000000000000")
+    assert deferred["alert_code"] == "DEFERRED_TAX_TO_REVERSE"
+    assert deferred["direction"] == "REVERSE"
+    formula_substitution = deferred["formula_substitution"]
+    assert isinstance(formula_substitution, dict)
+    assert formula_substitution.items() >= {
+        "deferred_tax_base_formula": "LOSS_MINUS_PROFIT",
+        "deferred_tax_base": "-20",
+        "system_cumulative_deferred_tax": "-5.00",
+        "current_year_deferred_tax_adjustment": "-25.00",
+    }.items()
+
+
+@pytest.mark.parametrize(
+    ("missing_input", "expected_code"),
+    [
+        ("deferred_tax_rate", "DEFERRED_TAX_RATE_MISSING"),
+        (DEFERRED_TAX_METRIC, "SNAPSHOT_METRICS_MISSING"),
+    ],
+)
+def test_quarterly_v2_missing_deferred_input_blocks_without_partial_persistence(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+    missing_input: str,
+    expected_code: str,
+) -> None:
+    uow_factory, engine = resources
+    seed = _seed_quarterly_case(
+        engine,
+        rule_code="QUARTERLY_V2",
+        deferred_tax_rate=(
+            None if missing_input == "deferred_tax_rate" else Decimal("0.20")
+        ),
+        include_deferred_tax_metric=missing_input != DEFERRED_TAX_METRIC,
+    )
+
+    with pytest.raises(QuarterlyRunError) as caught:
+        QuarterlyRunService(uow_factory).execute(
+            run_id=seed.run_id,
+            snapshot_id=seed.snapshot_id,
+        )
+
+    assert caught.value.error_code == expected_code
+    assert _rows(engine, "detection_record", seed.run_id) == []
 
 
 def test_detection_lineage_uses_new_metadata_from_frozen_snapshot(
@@ -755,7 +971,7 @@ def test_run_rejects_naive_frozen_source_extraction_timestamp(
                 "other_payables_accrual": Decimal("0"),
             },
             Decimal("0.08"),
-            set(),
+            {"TAX_BURDEN_LOW"},
         ),
     ],
     ids=(
@@ -764,7 +980,7 @@ def test_run_rejects_naive_frozen_source_extraction_timestamp(
         "exact-high",
         "accrual-only",
         "potential-only",
-        "burden-uncalculable",
+        "nonpositive-revenue-burden-low",
     ),
 )
 def test_monitor_alerts_create_only_their_own_cases(
@@ -786,8 +1002,10 @@ def test_monitor_alerts_create_only_their_own_cases(
     assert {row["alert_code"] for row in detections if row["alert_code"]} == expected
     if values.get("cumulative_revenue") == 0:
         burden = next(row for row in detections if row["monitor_type"] == "TAX_BURDEN")
-        assert burden["calculation_status"] == "NOT_CALCULABLE"
-        assert burden["not_calculated_reason"] == "REVENUE_NON_POSITIVE"
+        assert burden["calculation_status"] == "CALCULATED"
+        assert burden["tax_burden_rate"] == Decimal("0")
+        assert burden["tax_burden_deviation"] == Decimal("-0.08")
+        assert burden["not_calculated_reason"] is None
     with engine.connect() as connection:
         actual_cases = set(
             connection.execute(
@@ -1308,6 +1526,70 @@ def test_migration_seeds_reviewed_formula_manifest_with_valid_sha256(
     )
 
 
+def test_migration_seeds_reviewed_quarterly_v2_manifest_with_valid_sha256(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    _, engine = resources
+    with engine.connect() as connection:
+        definition = connection.execute(
+            text(
+                """
+                SELECT definition FROM rule_version
+                WHERE rule_code = 'QUARTERLY_V2'
+                  AND version = 'deferred-tax-reviewed'
+                  AND status = 'PUBLISHED'
+                """
+            )
+        ).scalar_one()
+
+    manifest = definition["formula_manifest"]
+    canonical = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    assert definition["formula_manifest_sha256"] == sha256(canonical).hexdigest()
+    assert definition["review_status"] == "REVIEWED"
+    assert manifest == quarterly_runs_application.APPROVED_QUARTERLY_V2_MANIFEST
+    assert (
+        definition["formula_manifest_sha256"]
+        == quarterly_runs_application.APPROVED_QUARTERLY_V2_MANIFEST_SHA256
+    )
+
+
+def test_migration_seeds_reviewed_quarterly_v3_manifest_with_valid_sha256(
+    resources: tuple[Callable[[], UnitOfWork], Engine],
+) -> None:
+    _, engine = resources
+    with engine.connect() as connection:
+        definition = connection.execute(
+            text(
+                """
+                SELECT definition FROM rule_version
+                WHERE rule_code = 'QUARTERLY_V3'
+                  AND version = 'deferred-tax-loss-less-profit-reviewed'
+                  AND status = 'PUBLISHED'
+                """
+            )
+        ).scalar_one()
+
+    manifest = definition["formula_manifest"]
+    canonical = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    assert definition["formula_manifest_sha256"] == sha256(canonical).hexdigest()
+    assert definition["review_status"] == "REVIEWED"
+    assert manifest == quarterly_runs_application.APPROVED_QUARTERLY_V3_MANIFEST
+    assert (
+        definition["formula_manifest_sha256"]
+        == quarterly_runs_application.APPROVED_QUARTERLY_V3_MANIFEST_SHA256
+    )
+
+
 @pytest.mark.parametrize("recompute_hash", [False, True], ids=("stale-hash", "forged-hash"))
 def test_run_rejects_any_rule_manifest_outside_the_fixed_reviewed_definition(
     resources: tuple[Callable[[], UnitOfWork], Engine],
@@ -1369,6 +1651,7 @@ def test_run_rejects_any_rule_manifest_outside_the_fixed_reviewed_definition(
         ("tax_rate", Decimal("0.20")),
         ("loss_carryforward", Decimal("1")),
         ("average_tax_burden_rate_3y", Decimal("0.09")),
+        ("deferred_tax_rate", Decimal("0.21")),
     ],
 )
 def test_run_rejects_current_master_drift_from_frozen_snapshot_lineage(

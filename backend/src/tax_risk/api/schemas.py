@@ -63,6 +63,261 @@ class IngestBatchCreate(BaseModel):
         return value
 
 
+class DgcSapProfitImportRequest(BaseModel):
+    source_batch_key: str = Field(min_length=1, max_length=256)
+    extraction_time: datetime
+    gjahr: str
+    monat: str
+    bukrs: str | None = Field(default=None, max_length=64)
+    mode: IngestMode = IngestMode.FULL
+    schema_version: str = Field(default="1", min_length=1, max_length=64)
+    currency: str = Field(default="CNY", min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    amount_scale: int = Field(default=2, ge=0, le=12)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_batch_key", "schema_version")
+    @classmethod
+    def strip_import_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+    @field_validator("extraction_time")
+    @classmethod
+    def require_import_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("extraction_time must include a UTC offset")
+        return value
+
+    @field_validator("gjahr", mode="before")
+    @classmethod
+    def normalize_gjahr(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("gjahr must be a string")
+        normalized = value.strip()
+        if (
+            len(normalized) != 4
+            or not normalized.isascii()
+            or not normalized.isdigit()
+            or int(normalized) < 2000
+        ):
+            raise ValueError("gjahr must be a four-digit year between 2000 and 9999")
+        return normalized
+
+    @field_validator("monat", mode="before")
+    @classmethod
+    def normalize_monat(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("monat must be a string")
+        normalized = value.strip()
+        if (
+            not normalized.isascii()
+            or not normalized.isdigit()
+            or len(normalized) > 2
+            or not 1 <= int(normalized) <= 12
+        ):
+            raise ValueError("monat must be a month from 01 to 12")
+        return f"{int(normalized):02d}"
+
+    @field_validator("bukrs", mode="before")
+    @classmethod
+    def normalize_bukrs(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("bukrs must be a string")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("bukrs must not be blank")
+        return normalized
+
+
+class DgcSapTrialBalanceImportRequest(BaseModel):
+    source_batch_key: str = Field(min_length=1, max_length=256)
+    extraction_time: datetime
+    company_code: str = Field(min_length=1, max_length=64)
+    fiscal_year: str
+    through_period: int
+    mode: IngestMode = IngestMode.FULL
+    schema_version: str = Field(default="1", min_length=1, max_length=64)
+    currency: str = Field(default="CNY", min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    amount_scale: int = Field(default=2, ge=0, le=12)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_batch_key", "company_code", "schema_version")
+    @classmethod
+    def strip_trial_balance_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+    @field_validator("extraction_time")
+    @classmethod
+    def require_trial_balance_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("extraction_time must include a UTC offset")
+        return value
+
+    @field_validator("fiscal_year", mode="before")
+    @classmethod
+    def normalize_trial_balance_fiscal_year(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("fiscal_year must be a string")
+        normalized = value.strip()
+        if (
+            len(normalized) != 4
+            or not normalized.isascii()
+            or not normalized.isdecimal()
+            or not 2000 <= int(normalized) <= 9999
+        ):
+            raise ValueError("fiscal_year must be a four-digit year from 2000 to 9999")
+        return normalized
+
+    @field_validator("through_period", mode="before")
+    @classmethod
+    def normalize_trial_balance_through_period(cls, value: object) -> int:
+        if type(value) is int:
+            normalized = value
+        elif isinstance(value, str):
+            stripped = value.strip()
+            if not stripped.isascii() or not stripped.isdecimal():
+                raise ValueError("through_period must be a quarter-end month")
+            normalized = int(stripped)
+        else:
+            raise ValueError("through_period must be a quarter-end month")
+        if normalized not in {3, 6, 9, 12}:
+            raise ValueError("through_period must be one of 3, 6, 9, or 12")
+        return normalized
+
+
+class DgcSapAccountBalanceImportRequest(BaseModel):
+    source_batch_key: str = Field(min_length=1, max_length=256)
+    extraction_time: datetime
+    company_code: str = Field(min_length=1, max_length=64)
+    fiscal_year: str
+    fiscal_period: int
+    mode: IngestMode = IngestMode.FULL
+    schema_version: str = Field(default="1", min_length=1, max_length=64)
+    currency: str = Field(default="CNY", min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    amount_scale: int = Field(default=2, ge=0, le=12)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_batch_key", "company_code", "schema_version")
+    @classmethod
+    def strip_account_balance_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+    @field_validator("extraction_time")
+    @classmethod
+    def require_account_balance_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("extraction_time must include a UTC offset")
+        return value
+
+    @field_validator("fiscal_year", mode="before")
+    @classmethod
+    def normalize_account_balance_fiscal_year(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("fiscal_year must be a string")
+        normalized = value.strip()
+        if (
+            len(normalized) != 4
+            or not normalized.isascii()
+            or not normalized.isdecimal()
+            or not 2000 <= int(normalized) <= 9999
+        ):
+            raise ValueError("fiscal_year must be a four-digit year from 2000 to 9999")
+        return normalized
+
+    @field_validator("fiscal_period", mode="before")
+    @classmethod
+    def normalize_account_balance_fiscal_period(cls, value: object) -> int:
+        if type(value) is int:
+            normalized = value
+        elif isinstance(value, str):
+            stripped = value.strip()
+            if not stripped.isascii() or not stripped.isdecimal():
+                raise ValueError("fiscal_period must be a quarter-end month")
+            normalized = int(stripped)
+        else:
+            raise ValueError("fiscal_period must be a quarter-end month")
+        if normalized not in {3, 6, 9, 12}:
+            raise ValueError("fiscal_period must be one of 3, 6, 9, or 12")
+        return normalized
+
+
+class DgcHesiNoInvoiceImportRequest(DgcSapAccountBalanceImportRequest):
+    """Quarterly scope for deriving the Hesi no-invoice metric."""
+
+
+class DgcSapDividendDetailImportRequest(BaseModel):
+    source_batch_key: str = Field(min_length=1, max_length=256)
+    extraction_time: datetime
+    company: str = Field(min_length=1, max_length=64)
+    fiscal_year: str
+    through_period: int
+    mode: IngestMode = IngestMode.FULL
+    schema_version: str = Field(default="1", min_length=1, max_length=64)
+    currency: str = Field(default="CNY", min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    amount_scale: int = Field(default=2, ge=0, le=12)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_batch_key", "company", "schema_version")
+    @classmethod
+    def strip_dividend_import_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+    @field_validator("extraction_time")
+    @classmethod
+    def require_dividend_import_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("extraction_time must include a UTC offset")
+        return value
+
+    @field_validator("fiscal_year", mode="before")
+    @classmethod
+    def normalize_dividend_fiscal_year(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("fiscal_year must be a string")
+        normalized = value.strip()
+        if (
+            len(normalized) != 4
+            or not normalized.isascii()
+            or not normalized.isdecimal()
+            or not 2000 <= int(normalized) <= 9999
+        ):
+            raise ValueError("fiscal_year must be a four-digit year from 2000 to 9999")
+        return normalized
+
+    @field_validator("through_period", mode="before")
+    @classmethod
+    def normalize_dividend_through_period(cls, value: object) -> int:
+        if type(value) is int:
+            normalized = value
+        elif isinstance(value, str):
+            stripped = value.strip()
+            if not stripped.isascii() or not stripped.isdecimal():
+                raise ValueError("through_period must be a quarter-end month")
+            normalized = int(stripped)
+        else:
+            raise ValueError("through_period must be a quarter-end month")
+        if normalized not in {3, 6, 9, 12}:
+            raise ValueError("through_period must be one of 3, 6, 9, or 12")
+        return normalized
+
+
 class IngestErrorResponse(BaseModel):
     row_number: int
     error_code: str
@@ -224,6 +479,7 @@ class TaxMasterResponse(BaseModel):
     version: str
     status: VersionStatus
     tax_rate: Decimal
+    deferred_tax_rate: Decimal | None
     loss_carryforward: Decimal
     three_year_average_tax_burden: Decimal
     currency: str
@@ -363,8 +619,10 @@ class RiskCaseItemResponse(BaseModel):
     input_amount: Decimal | None
     result_amount: Decimal | None
     difference_amount: Decimal | None
+    rate_value: Decimal | None
     tax_burden_rate: Decimal | None
     tax_burden_deviation: Decimal | None
+    formula_substitution: dict[str, Any] | None
     not_calculated_reason: str | None
     alert_code: str | None
     risk_direction: str
@@ -390,6 +648,7 @@ class RiskCaseItemResponse(BaseModel):
         "input_amount",
         "result_amount",
         "difference_amount",
+        "rate_value",
         "tax_burden_rate",
         "tax_burden_deviation",
         "risk_amount",
@@ -629,6 +888,9 @@ class DetectionDetailResponse(BaseModel):
 
 
 __all__ = [
+    "DgcSapDividendDetailImportRequest",
+    "DgcSapProfitImportRequest",
+    "DgcSapTrialBalanceImportRequest",
     "IngestBatchCreate",
     "IngestBatchResponse",
     "IngestErrorResponse",

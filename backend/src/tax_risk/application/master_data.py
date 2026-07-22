@@ -72,6 +72,7 @@ class TaxMasterView:
     version: str
     status: VersionStatus
     tax_rate: Decimal
+    deferred_tax_rate: Decimal | None
     loss_carryforward: Decimal
     three_year_average_tax_burden: Decimal
     currency: str
@@ -495,7 +496,7 @@ def _new_ingest_batch(
         extraction_time=imported_at,
         period=period,
         mode=IngestMode.FULL,
-        schema_version="tax-master-xlsx-v1",
+        schema_version="tax-master-xlsx-v2",
         payload_ref=filename,
         source_primary_key_definition={
             "fields": ["company_code", "valid_from", "source_row_number"],
@@ -576,6 +577,7 @@ def _new_version(
         version=f"{batch.id.hex[:20]}-r{row.row_number}",
         status=VersionStatus.DRAFT,
         tax_rate=row.tax_rate.value,
+        deferred_tax_rate=row.deferred_tax_rate.value,
         loss_carryforward=row.loss_carryforward,
         average_tax_burden_rate_3y=row.three_year_average_tax_burden.value,
         currency=currency,
@@ -590,6 +592,7 @@ def _new_version(
             "valid_from": row.valid_from.isoformat(),
             "valid_to": row.valid_to.isoformat() if row.valid_to else None,
             "tax_rate": str(row.tax_rate.value),
+            "deferred_tax_rate": str(row.deferred_tax_rate.value),
             "loss_carryforward": str(row.loss_carryforward),
             "three_year_average_tax_burden": str(
                 row.three_year_average_tax_burden.value
@@ -673,6 +676,7 @@ def _view(version: TaxMasterVersion, company: Company) -> TaxMasterView:
         version=version.version,
         status=version.status,
         tax_rate=version.tax_rate,
+        deferred_tax_rate=version.deferred_tax_rate,
         loss_carryforward=version.loss_carryforward,
         three_year_average_tax_burden=version.average_tax_burden_rate_3y,
         currency=version.currency,

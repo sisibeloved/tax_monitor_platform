@@ -27,6 +27,7 @@ HEADERS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -80,6 +81,7 @@ def _xlsx(
             valid_from,
             valid_to,
             "25%",
+            "20%",
             "123.45",
             "9%",
         )
@@ -196,6 +198,7 @@ def test_import_approve_and_quarter_lookup_contract(
     assert resolved.json()["id"] == version_id
     assert resolved.json()["company_code"] == company_code
     assert resolved.json()["tax_rate"] == "0.250000000000"
+    assert resolved.json()["deferred_tax_rate"] == "0.200000000000"
     assert resolved.json()["three_year_average_tax_burden"] == "0.090000000000"
 
 
@@ -247,6 +250,7 @@ def test_invalid_workbook_and_import_options_return_stable_422_without_partial_v
             date(2026, 1, 1),
             None,
             "25%",
+            "20%",
             "0.00",
             "9%",
             "unexpected",

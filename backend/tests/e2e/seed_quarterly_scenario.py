@@ -25,6 +25,7 @@ METRICS = (
     ("current_quarter_current_tax", "700000"),
     ("other_payables_accrual", "1400000"),
     ("hesi_no_invoice", "300000"),
+    ("sap_cumulative_deferred_tax_expense", "2000000"),
 )
 TAX_MASTER_HEADERS = (
     "company_code",
@@ -32,6 +33,7 @@ TAX_MASTER_HEADERS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -242,8 +244,8 @@ def seed_quarterly_scenario(
                 """
                 SELECT id
                 FROM rule_version
-                WHERE rule_code = 'QUARTERLY_V1'
-                  AND version = 'phase-1-reviewed'
+                WHERE rule_code = 'QUARTERLY_V3'
+                  AND version = 'deferred-tax-loss-less-profit-reviewed'
                   AND status = 'PUBLISHED'
                 """
             )
@@ -391,6 +393,7 @@ def _tax_master_workbook(
                 date(2026, 1, 1),
                 None,
                 "25%",
+                "20%",
                 "2000000",
                 "9%",
             )

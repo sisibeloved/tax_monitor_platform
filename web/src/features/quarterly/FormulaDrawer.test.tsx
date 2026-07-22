@@ -371,6 +371,109 @@ describe("FormulaDrawer", () => {
     }
   });
 
+  it("shows the loss-less-profit deferred-tax formula and requested outputs", async () => {
+    const deferredDetection = {
+      ...calculatedDetection,
+      id: "40000000-0000-4000-8000-000000000006",
+      monitoring_type: "DEFERRED_TAX_ACCURACY",
+      input_amount: "2800000.000000000000",
+      result_amount: "-2000000.000000000000",
+      difference_amount: "-4800000.000000000000",
+      rate_value: "0.250000000000",
+      formula_substitution: {
+        ...calculatedDetection.formula_substitution,
+        deferred_tax_rate: "0.250000000000",
+        deferred_tax_base_formula: "LOSS_MINUS_PROFIT",
+        sap_cumulative_deferred_tax_expense: "2800000.000000000000",
+        deferred_tax_base: "-8000000.000000000000",
+        system_cumulative_deferred_tax: "-2000000.000000000000",
+        current_year_deferred_tax_adjustment: "-4800000.000000000000",
+      },
+      structured_output: {
+        monitor_type: "DEFERRED_TAX_ACCURACY",
+        calculation_status: "CALCULATED",
+        alert: true,
+        alert_code: "DEFERRED_TAX_TO_REVERSE",
+        direction: "REVERSE",
+      },
+      alert_code: "DEFERRED_TAX_TO_REVERSE",
+      direction: "REVERSE",
+    };
+    installDetectionFetch(deferredDetection);
+    renderDrawer(deferredDetection.id);
+
+    const drawer = await screen.findByRole("dialog", {
+      name: "公式与数据血缘",
+    });
+    expect(
+      await within(drawer).findByText(
+        /递延所得税计税基础\s*=\s*可弥补以前年度亏损\s*-\s*损益表累计利润总额/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(
+        /系统累计递延所得税费用\s*=\s*递延所得税计税基础\s*×\s*递延所得税税率/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(
+        /本年应计提\/转回的递延所得税费用\s*=\s*系统累计递延所得税费用\s*-\s*SAP累计已计提的递延所得税费用/,
+      ),
+    ).toBeInTheDocument();
+    expectDescriptionValue(drawer, "示警结论", "应转回递延所得税");
+    expectDescriptionValue(drawer, "调整方向", "转回");
+    expectDescriptionValue(drawer, "可弥补以前年度亏损", "¥2,000,000.00");
+    expectDescriptionValue(drawer, "损益表累计利润总额", "¥10,000,000.00");
+    expectDescriptionValue(drawer, "递延所得税计税基础", "-¥8,000,000.00");
+    expectDescriptionValue(drawer, "递延所得税税率", "25%");
+    expectDescriptionValue(drawer, "系统累计递延所得税费用", "-¥2,000,000.00");
+    expectDescriptionValue(
+      drawer,
+      "SAP累计已计提的递延所得税费用",
+      "¥2,800,000.00",
+    );
+    expectDescriptionValue(
+      drawer,
+      "本年应计提/转回的递延所得税费用",
+      "-¥4,800,000.00",
+    );
+  });
+
+  it("labels a negative deferred-tax adjustment as a reversal", async () => {
+    const reverseDetection = {
+      ...calculatedDetection,
+      id: "40000000-0000-4000-8000-000000000007",
+      monitoring_type: "DEFERRED_TAX_ACCURACY",
+      input_amount: "3200000.000000000000",
+      result_amount: "3000000.000000000000",
+      difference_amount: "-200000.000000000000",
+      formula_substitution: {
+        ...calculatedDetection.formula_substitution,
+        deferred_tax_rate: "0.250000000000",
+        sap_cumulative_deferred_tax_expense: "3200000.000000000000",
+        deferred_tax_base: "12000000.000000000000",
+        system_cumulative_deferred_tax: "3000000.000000000000",
+        current_year_deferred_tax_adjustment: "-200000.000000000000",
+      },
+      alert_code: "DEFERRED_TAX_TO_REVERSE",
+      direction: "REVERSE",
+    };
+    installDetectionFetch(reverseDetection);
+    renderDrawer(reverseDetection.id);
+
+    const drawer = await screen.findByRole("dialog", {
+      name: "公式与数据血缘",
+    });
+    await within(drawer).findByText("示警结论");
+    expectDescriptionValue(drawer, "示警结论", "应转回递延所得税");
+    expectDescriptionValue(drawer, "调整方向", "转回");
+    expectDescriptionValue(
+      drawer,
+      "本年应计提/转回的递延所得税费用",
+      "-¥200,000.00",
+    );
+  });
+
   it("shows both frozen tax-burden formulas and every substituted input", async () => {
     const burdenDetection = {
       ...calculatedDetection,

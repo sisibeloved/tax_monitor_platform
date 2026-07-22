@@ -15,6 +15,7 @@ def register_models() -> None:
     from tax_risk.persistence import (
         business_entertainment_models,
         export_models,
+        income_tax_refund_models,
         ingest_models,
         master_models,
         risk_models,
@@ -25,6 +26,7 @@ def register_models() -> None:
     _ = (
         business_entertainment_models,
         export_models,
+        income_tax_refund_models,
         ingest_models,
         master_models,
         risk_models,

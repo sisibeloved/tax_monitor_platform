@@ -36,6 +36,7 @@ HEADERS = (
     "valid_from",
     "valid_to",
     "tax_rate",
+    "deferred_tax_rate",
     "loss_carryforward",
     "three_year_average_tax_burden",
 )
@@ -61,10 +62,20 @@ def _row(
     valid_from: date = date(2026, 1, 1),
     valid_to: date | None = None,
     tax_rate: object = "25%",
+    deferred_tax_rate: object = "20%",
     loss: object = "100.00",
     burden: object = "9%",
 ) -> tuple[object, ...]:
-    return company_code, company_name, valid_from, valid_to, tax_rate, loss, burden
+    return (
+        company_code,
+        company_name,
+        valid_from,
+        valid_to,
+        tax_rate,
+        deferred_tax_rate,
+        loss,
+        burden,
+    )
 
 
 def _seed_company(
@@ -151,7 +162,8 @@ def test_import_creates_audited_drafts_with_real_ingest_lineage_and_is_idempoten
             text(
                 """
                 SELECT status, uploaded_by, source_row_number, source_file_name,
-                       source_checksum, currency, amount_scale, loss_carryforward,
+                       source_checksum, currency, amount_scale, deferred_tax_rate,
+                       loss_carryforward,
                        created_at
                 FROM tax_master_version
                 WHERE id = :version_id
@@ -181,6 +193,7 @@ def test_import_creates_audited_drafts_with_real_ingest_lineage_and_is_idempoten
     assert version["source_row_number"] == 2
     assert version["source_file_name"] == "master.xlsx"
     assert version["source_checksum"] == imported.checksum
+    assert version["deferred_tax_rate"] == Decimal("0.200000000000")
     assert version["loss_carryforward"] == Decimal("123.450000000000")
     assert version["created_at"].tzinfo is not None
     assert batch["dataset_code"] == "tax_master"
@@ -188,7 +201,7 @@ def test_import_creates_audited_drafts_with_real_ingest_lineage_and_is_idempoten
     assert (batch["record_count"], batch["accepted_count"], batch["rejected_count"]) == (1, 1, 0)
     assert batch["control_total"] == Decimal("123.450000000000")
     assert batch["checksum"] == imported.checksum
-    assert batch["schema_version"] == "tax-master-xlsx-v1"
+    assert batch["schema_version"] == "tax-master-xlsx-v2"
     assert batch["source_primary_key_definition"]["uploaded_by"] == "maker@example.com"
     assert fake_source_records == 0
 
@@ -772,7 +785,16 @@ def test_approval_enforces_maker_reviewer_separation_and_lookup_is_point_in_time
     _seed_company(engine, company_code, "Approval Company")
     imported = service.import_xlsx(
         filename="approval.xlsx",
-        payload=_xlsx([_row(company_code, "Approval Company", burden="11%")]),
+        payload=_xlsx(
+            [
+                _row(
+                    company_code,
+                    "Approval Company",
+                    deferred_tax_rate="18%",
+                    burden="11%",
+                )
+            ]
+        ),
         uploaded_by="maker@example.com",
         currency="CNY",
         amount_scale=2,
@@ -792,6 +814,7 @@ def test_approval_enforces_maker_reviewer_separation_and_lookup_is_point_in_time
     assert published.published_at is not None
     assert published.published_at.tzinfo is not None
     assert resolved.id == published.id
+    assert str(resolved.deferred_tax_rate) == "0.180000000000"
     assert str(resolved.three_year_average_tax_burden) == "0.110000000000"
     with pytest.raises(MasterDataNotFoundError) as missing:
         service.lookup(company_code, effective_on=date(2025, 12, 31))

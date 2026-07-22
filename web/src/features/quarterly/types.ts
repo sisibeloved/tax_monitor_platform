@@ -1,5 +1,8 @@
 export type MonitoringType =
-  "ACCRUAL_ACCURACY" | "TAX_BURDEN" | "POTENTIAL_TAX_COST";
+  | "ACCRUAL_ACCURACY"
+  | "DEFERRED_TAX_ACCURACY"
+  | "TAX_BURDEN"
+  | "POTENTIAL_TAX_COST";
 
 export type CalculationStatus = "CALCULATED" | "NOT_CALCULABLE" | "FAILED";
 
@@ -58,8 +61,10 @@ export interface RiskCaseItem {
   input_amount: string | null;
   result_amount: string | null;
   difference_amount: string | null;
+  rate_value: string | null;
   tax_burden_rate: string | null;
   tax_burden_deviation: string | null;
+  formula_substitution: Record<string, string | number | null> | null;
   not_calculated_reason: string | null;
   alert_code: string | null;
   risk_direction: string;
