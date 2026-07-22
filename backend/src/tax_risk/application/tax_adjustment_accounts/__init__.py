@@ -13,6 +13,25 @@ from tax_risk.application.tax_adjustment_accounts.adjustment import (
     profit_total_label_matches,
     salary_account_is_in_scope,
 )
+from tax_risk.application.tax_adjustment_accounts.business_entertainment import (
+    BUSINESS_ENTERTAINMENT_ACCOUNT,
+    BusinessEntertainmentAccountCheckService,
+    BusinessEntertainmentCheckedDetail,
+    BusinessEntertainmentCheckRequest,
+    BusinessEntertainmentCheckResult,
+    BusinessEntertainmentEvidenceSource,
+    BusinessEntertainmentLabel,
+    BusinessEntertainmentRuleDecision,
+    HesiApplicationRow,
+    HesiDetailRow,
+    HesiInvoiceRow,
+    business_entertainment_account_is_in_scope,
+    classify_business_entertainment_text,
+    extract_hesi_document_code,
+)
+from tax_risk.application.tax_adjustment_accounts.business_entertainment_export import (
+    render_business_entertainment_check_xlsx,
+)
 from tax_risk.application.tax_adjustment_accounts.contracts import (
     AccountCheckRequest,
     AccountCheckResult,
@@ -47,6 +66,21 @@ from tax_risk.application.tax_adjustment_accounts.welfare import (
 )
 
 __all__ = [
+    "BUSINESS_ENTERTAINMENT_ACCOUNT",
+    "BusinessEntertainmentAccountCheckService",
+    "BusinessEntertainmentCheckedDetail",
+    "BusinessEntertainmentCheckRequest",
+    "BusinessEntertainmentCheckResult",
+    "BusinessEntertainmentEvidenceSource",
+    "BusinessEntertainmentLabel",
+    "BusinessEntertainmentRuleDecision",
+    "HesiApplicationRow",
+    "HesiDetailRow",
+    "HesiInvoiceRow",
+    "business_entertainment_account_is_in_scope",
+    "classify_business_entertainment_text",
+    "extract_hesi_document_code",
+    "render_business_entertainment_check_xlsx",
     "AccountCheckRequest",
     "AccountCheckResult",
     "AdjustmentLabel",
