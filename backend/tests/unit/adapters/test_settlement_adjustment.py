@@ -73,6 +73,8 @@ def test_client_paginates_scoped_thirteen_field_response() -> None:
         assert request.url.path == "/post/settlement_adjustment"
         assert request.headers["authorization"] == request.headers["x-authorization"]
         rows = [_raw_row("1"), _raw_row("2")] if body["offsetValue"] == 0 else [_raw_row("3")]
+        if body["offsetValue"] == 0:
+            rows[0]["original_system_doc_no"] = None
         return httpx.Response(
             200,
             headers={"x-request-id": "request-1"},
@@ -97,6 +99,7 @@ def test_client_paginates_scoped_thirteen_field_response() -> None:
 
     assert offsets == [0, 2]
     assert [row.voucher_no for row in rows] == ["1", "2", "3"]
+    assert rows[0].original_system_doc_no == ""
     assert all(row.company == "3320" for row in rows)
 
 

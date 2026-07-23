@@ -195,13 +195,17 @@ class _CompanyDataClient(Generic[RowT]):
 
         rows: list[RowT] = []
         offset = 0
+        effective_page_size = self._configuration.page_size
         for _ in range(self._configuration.max_pages):
             page_rows = self._fetch_page(company_code=company, offset=offset)
+            if not page_rows:
+                return tuple(rows)
             rows.extend(page_rows)
             if len(rows) > self._configuration.max_records:
                 self._raise("DGC_RECORD_LIMIT_EXCEEDED")
-            if len(page_rows) < self._configuration.page_size:
+            if offset > 0 and len(page_rows) < effective_page_size:
                 return tuple(rows)
+            effective_page_size = min(effective_page_size, len(page_rows))
             offset += len(page_rows)
         self._raise("DGC_PAGE_LIMIT_EXCEEDED")
 

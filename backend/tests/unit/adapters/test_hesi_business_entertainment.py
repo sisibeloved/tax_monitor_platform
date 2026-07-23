@@ -98,7 +98,10 @@ def test_hesi_detail_uses_post_json_paginates_and_accepts_expense_code() -> None
 
 
 def test_hesi_detail_accepts_compatible_code_field() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["offsetValue"] > 0:
+            return _response(HESI_DETAIL_CODE_FIELDS, [])
         return _response(
             HESI_DETAIL_CODE_FIELDS,
             [
@@ -123,12 +126,17 @@ def test_hesi_detail_accepts_compatible_code_field() -> None:
 
 
 def test_hesi_invoice_uses_get_with_query_parameters() -> None:
+    offsets: list[int] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.content == b""
         assert request.url.params["company_code"] == "3HD0"
         assert request.url.params["limitValue"] == "15000"
-        assert request.url.params["offsetValue"] == "0"
+        offset = int(request.url.params["offsetValue"])
+        offsets.append(offset)
+        if offset >= 2:
+            return _response(HESI_INVOICE_FIELDS, [])
         return _response(
             HESI_INVOICE_FIELDS,
             [
@@ -155,13 +163,21 @@ def test_hesi_invoice_uses_get_with_query_parameters() -> None:
         rows = client.fetch_rows(company_code="3HD0")
 
     assert rows[0].reception_apply_code == "A1"
+    assert offsets == [0, 1, 2]
+    assert len(rows) == 2
 
 
 def test_application_uses_post_with_query_and_empty_body() -> None:
+    offsets: list[int] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.content == b""
         assert request.url.params["company_code"] == "3HD0"
+        offset = int(request.url.params["offsetValue"])
+        offsets.append(offset)
+        if offset > 0:
+            return _response(HESI_APPLICATION_FIELDS, [])
         return _response(
             HESI_APPLICATION_FIELDS,
             [
@@ -187,6 +203,7 @@ def test_application_uses_post_with_query_and_empty_body() -> None:
         rows = client.fetch_rows(company_code="3HD0")
 
     assert rows[0].description == "会议通知"
+    assert offsets == [0, 1]
 
 
 def test_client_rejects_company_scope_mismatch_and_schema_drift() -> None:
