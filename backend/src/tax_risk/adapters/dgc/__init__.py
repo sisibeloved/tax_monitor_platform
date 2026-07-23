@@ -1,5 +1,15 @@
 """Huawei DGC data-service adapters."""
 
+from tax_risk.adapters.dgc.hesi_business_entertainment import (
+    HesiApplicationClient,
+    HesiApplicationClientConfiguration,
+    HesiBusinessDataClientError,
+    HesiDetailClient,
+    HesiDetailClientConfiguration,
+    HesiInvoiceClient,
+    HesiInvoiceClientConfiguration,
+)
+
 from tax_risk.adapters.dgc.sap_income import (
     SapIncomeClient,
     SapIncomeClientConfiguration,
@@ -18,6 +28,13 @@ from tax_risk.adapters.dgc.trial_balance import (
 )
 
 __all__ = [
+    "HesiApplicationClient",
+    "HesiApplicationClientConfiguration",
+    "HesiBusinessDataClientError",
+    "HesiDetailClient",
+    "HesiDetailClientConfiguration",
+    "HesiInvoiceClient",
+    "HesiInvoiceClientConfiguration",
     "SapIncomeClient",
     "SapIncomeClientConfiguration",
     "SapIncomeClientError",

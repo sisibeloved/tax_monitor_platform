@@ -58,6 +58,20 @@ class SettlementAdjustmentRow(BaseModel):
     group_currency: str = Field(min_length=1, max_length=16)
     original_system_doc_no: str = Field(default="", max_length=128)
 
+    @field_validator(
+        "header_text",
+        "detail_text",
+        "account_name",
+        "project_code",
+        "project_name",
+        "debit_credit_flag",
+        "original_system_doc_no",
+        mode="before",
+    )
+    @classmethod
+    def blank_settlement_text_is_empty(cls, value: object) -> object:
+        return "" if value is None else value
+
     @field_validator("amount_ksl")
     @classmethod
     def amount_must_be_finite(cls, value: Decimal) -> Decimal:
