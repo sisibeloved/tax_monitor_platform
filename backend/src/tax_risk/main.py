@@ -329,6 +329,7 @@ def create_app(
         assert resolved_settings.dgc_hesi_invoice_app_secret is not None
         hesi_invoice_client_config = DgcClientConfig(
             api_url=resolved_settings.dgc_hesi_invoice_api_url,
+            request_method="GET",
             app_key=resolved_settings.dgc_hesi_invoice_app_key.get_secret_value(),
             app_secret=resolved_settings.dgc_hesi_invoice_app_secret.get_secret_value(),
             timeout=resolved_settings.dgc_timeout_seconds,

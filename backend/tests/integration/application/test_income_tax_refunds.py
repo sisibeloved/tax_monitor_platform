@@ -283,6 +283,7 @@ def test_scan_classifies_all_outcomes_stops_received_and_enqueues_writebacks_and
         assert wrong.writeback_status == "PENDING"
         assert march.not_received[0].company_code == seeded["MISSING"][0]
         assert march.ambiguous[0].company_code == seeded["AMBIGUOUS"][0]
+        assert march.ambiguous[0].alert_code == "AMBIGUOUS_REFUND_MATCH"
 
         service.import_sap_evidence(april_batch)
         april = service.scan(
@@ -338,7 +339,19 @@ def test_scan_classifies_all_outcomes_stops_received_and_enqueues_writebacks_and
                 .mappings()
                 .one()
             )
-        assert counts == (6, 2, 1)
+            ambiguous_case = (
+                connection.execute(
+                    text(
+                        "SELECT risk_amount, currency, risk_direction, fingerprint, lineage "
+                        "FROM risk_case WHERE company_id = :company_id "
+                        "AND monitor_type = 'INCOME_TAX_REFUND_ACCOUNT_ACCURACY'"
+                    ),
+                    {"company_id": seeded["AMBIGUOUS"][1]},
+                )
+                .mappings()
+                .one()
+            )
+        assert counts == (6, 2, 2)
         assert writebacks == [("已退税", "PENDING"), ("已退税", "PENDING")]
         assert risk_case["risk_amount"] == Decimal("200.000000000000")
         assert risk_case["currency"] == "CNY"
@@ -349,6 +362,12 @@ def test_scan_classifies_all_outcomes_stops_received_and_enqueues_writebacks_and
         assert risk_case["lineage"]["source_batch_key"] == march_batch.source_batch_key
         for key in ("target_id", "scan_result_id", "matched_line_id"):
             assert UUID(risk_case["lineage"][key])
+        assert ambiguous_case["risk_amount"] == Decimal("400.000000000000")
+        assert ambiguous_case["currency"] == "CNY"
+        assert ambiguous_case["risk_direction"] == "AMBIGUOUS_REFUND_MATCH"
+        assert len(ambiguous_case["fingerprint"]) == 64
+        assert len(ambiguous_case["lineage"]["matched_candidates"]) == 2
+        assert "matched_line_id" not in ambiguous_case["lineage"]
     finally:
         engine.dispose()
 

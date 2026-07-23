@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const entryUrl = process.env.PLAYWRIGHT_ENTRY_URL ?? ".";
+
 const refundResults = {
   refund_tax_year: 2025,
   scan_period: "2026-03",
@@ -141,14 +143,16 @@ const refundResults = {
       document_number: null,
       line_item: null,
       posting_date: null,
-      alert_code: null,
-      writeback_status: "FAILED",
+      alert_code: "AMBIGUOUS_REFUND_MATCH",
+      writeback_status: null,
     },
   ],
 };
 
 async function openRefundPage(page: Page) {
-  await page.goto("/?refund_tax_year=2025&scan_year=2026&scan_month=3");
+  await page.goto(
+    `${entryUrl}?refund_tax_year=2025&scan_year=2026&scan_month=3`,
+  );
   await page
     .getByRole("tab", {
       name: "所得税退税进度监控及入账科目准确性检查",
@@ -199,12 +203,11 @@ test("展示退税清单、入账详情和飞书回写状态", async ({ page }) 
   await expect(page.getByText("尚未退税公司")).toBeVisible();
   await expect(page.getByText("CNY 50,000.00")).toBeVisible();
 
-  await page.getByRole("tab", { name: "待人工确认 (1)" }).click();
+  await page.getByRole("tab", { name: "多个等额候选示警 (1)" }).click();
   const ambiguousRow = page
     .getByRole("row")
     .filter({ hasText: "待人工确认公司" });
-  await expect(ambiguousRow).toContainText("待人工确认");
-  await expect(ambiguousRow).toContainText("回写失败");
+  await expect(ambiguousRow).toContainText("存在多个等额候选，需人工确认");
 });
 
 test("接口失败时显示受控错误并允许重新加载", async ({ page }) => {

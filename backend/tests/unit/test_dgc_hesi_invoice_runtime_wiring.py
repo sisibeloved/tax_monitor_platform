@@ -45,6 +45,7 @@ def test_create_app_owns_and_closes_enabled_hesi_invoice_client(
     owned = _OwnedClient.instances[0]
     assert app.state.dgc_hesi_invoice_client is owned
     assert owned.config.api_url == "https://dgc.example.test/hesi-invoice"
+    assert owned.config.request_method == "GET"
     assert owned.config.app_key == "hesi-invoice-key"
     assert owned.config.app_secret == "hesi-invoice-secret"
     assert owned.config.page_size == 876

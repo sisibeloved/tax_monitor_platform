@@ -56,8 +56,17 @@ export interface FullValidationReport {
     external_fetch_seconds: number;
     request_count: number;
     request_error_count: number;
+    tax_adjustment_account_accuracy?: {
+      status: "DATA" | "MISSING";
+      company_count: number;
+      source_error_count: number;
+      candidate_company_count: number;
+      candidate_detail_count: number;
+      formula_evaluated_company_count: number;
+    };
   };
   refund_evidence_notice: string;
+  tax_adjustment_account_accuracy_notice?: string;
   monitor_summary: Record<string, MonitorSummary>;
   companies: ValidationCompany[];
 }

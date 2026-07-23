@@ -593,8 +593,13 @@ class IncomeTaxRefundService:
                 )
                 uow.session.add(scan_result)
                 target.latest_scan_period = scan_date
-                if result.booking_status is RefundBookingStatus.WRONG_ACCOUNT:
-                    if matched_line is None:
+                if result.risk_case_required:
+                    if result.alert_code is None:
+                        raise RuntimeError("risk-case result must have an alert code")
+                    if (
+                        result.booking_status is RefundBookingStatus.WRONG_ACCOUNT
+                        and matched_line is None
+                    ):
                         raise RuntimeError("wrong-account result must have one matched SAP line")
                     uow.session.flush()
                     company = companies[target.company_id]
@@ -603,6 +608,30 @@ class IncomeTaxRefundService:
                         target.refund_tax_year,
                     )
                     if uow.risks.get_case_by_fingerprint(fingerprint) is None:
+                        lineage: dict[str, object] = {
+                            "refund_tax_year": target.refund_tax_year,
+                            "scan_year": scan_year,
+                            "scan_month": scan_month,
+                            "scan_period": f"{scan_year:04d}-{scan_month:02d}",
+                            "target_id": str(target.id),
+                            "scan_result_id": str(scan_result.id),
+                            "source_batch_key": source_batch_key.strip(),
+                            "matched_candidates": [
+                                _candidate_evidence(candidate)
+                                for candidate in result.matched_candidates
+                            ],
+                        }
+                        if matched_line is not None:
+                            lineage.update(
+                                {
+                                    "matched_line_id": str(matched_line.id),
+                                    "document_number": matched_line.document_number,
+                                    "line_item": matched_line.line_item,
+                                    "gl_account_code": matched_line.gl_account_code,
+                                    "gl_account_name": matched_line.gl_account_name,
+                                    "account_category": matched_line.account_category,
+                                }
+                            )
                         uow.risks.add_case(
                             RiskCase(
                                 fingerprint=fingerprint,
@@ -614,25 +643,11 @@ class IncomeTaxRefundService:
                                 risk_rate=None,
                                 currency=target.currency,
                                 amount_scale=target.amount_scale,
-                                risk_direction="REFUND_BOOKED_TO_WRONG_ACCOUNT",
+                                risk_direction=result.alert_code,
                                 priority=2,
                                 assignee=None,
                                 merged_into_case_id=None,
-                                lineage={
-                                    "refund_tax_year": target.refund_tax_year,
-                                    "scan_year": scan_year,
-                                    "scan_month": scan_month,
-                                    "scan_period": f"{scan_year:04d}-{scan_month:02d}",
-                                    "target_id": str(target.id),
-                                    "scan_result_id": str(scan_result.id),
-                                    "matched_line_id": str(matched_line.id),
-                                    "source_batch_key": source_batch_key.strip(),
-                                    "document_number": matched_line.document_number,
-                                    "line_item": matched_line.line_item,
-                                    "gl_account_code": matched_line.gl_account_code,
-                                    "gl_account_name": matched_line.gl_account_name,
-                                    "account_category": matched_line.account_category,
-                                },
+                                lineage=lineage,
                                 row_version=1,
                             )
                         )

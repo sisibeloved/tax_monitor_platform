@@ -107,6 +107,9 @@ class TieredDgcConfig:
         if app_configured:
             return DgcClientConfig(
                 api_url=self.api_url,
+                request_method=(
+                    "GET" if self.interface is DgcInterface.HESI_INVOICE else "POST"
+                ),
                 app_key=self.app_key,
                 app_secret=self.app_secret,
                 timeout=self.timeout,
@@ -121,6 +124,7 @@ class TieredDgcConfig:
             )
         return DgcClientConfig(
             api_url=self.api_url,
+            request_method=("GET" if self.interface is DgcInterface.HESI_INVOICE else "POST"),
             iam_url=self.iam_url,
             username=self.iam_username,
             password=self.iam_password,

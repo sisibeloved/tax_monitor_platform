@@ -94,10 +94,12 @@ def test_deferred_tax_uses_account_1811030000_closing_balance_without_sign_chang
     assert result.sap_cumulative_deferred_tax_expense == Decimal("100.00")
 
 
-def test_missing_deferred_tax_account_becomes_evidenced_positive_zero() -> None:
+def test_missing_target_accounts_become_evidenced_positive_zero() -> None:
     result = _adapt(_row("1001000000", "1"))
 
-    assert result.other_payables_accrual is None
+    assert result.other_payables_records == ()
+    assert result.other_payables_accrual == Decimal(0)
+    assert result.other_payables_accrual.as_tuple().sign == 0
     assert result.deferred_tax_records == ()
     assert result.sap_cumulative_deferred_tax_expense == Decimal(0)
     assert result.sap_cumulative_deferred_tax_expense.as_tuple().sign == 0
@@ -107,6 +109,7 @@ def test_empty_valid_response_also_evidences_no_deferred_tax_accrual() -> None:
     result = _adapt()
 
     assert result.records == ()
+    assert result.other_payables_accrual == Decimal(0)
     assert result.sap_cumulative_deferred_tax_expense == Decimal(0)
     assert result.source_checksum == "a" * 64
 
@@ -183,6 +186,29 @@ def test_metric_adapter_emits_zero_deferred_tax_when_account_is_absent() -> None
         and row.value.period.isoformat() == "2026-06-30"
         for row in rows
     )
+
+
+def test_metric_adapter_emits_zero_other_payables_when_accounts_are_absent() -> None:
+    result = _adapt(_row("1001000000", "1"))
+    adapter = DgcSapAccountBalanceMetricAdapter(
+        result,
+        company_code="3000",
+        fiscal_year=2026,
+        fiscal_period=6,
+        currency="CNY",
+        amount_scale=2,
+        extracted_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+
+    metrics = {
+        row.value.metric_code: row.value.amount
+        for row in adapter.iter_rows()
+        if isinstance(row.value, CanonicalFinancialRow)
+    }
+    assert metrics == {
+        "other_payables_accrual": Decimal(0),
+        "sap_cumulative_deferred_tax_expense": Decimal(0),
+    }
 
 
 def test_metric_adapter_emits_both_quarterly_metrics_when_present() -> None:

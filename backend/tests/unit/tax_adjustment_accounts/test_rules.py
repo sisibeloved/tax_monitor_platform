@@ -8,6 +8,7 @@ from tax_risk.application.tax_adjustment_accounts.contracts import (
 from tax_risk.application.tax_adjustment_accounts.rules import (
     account_is_in_scope,
     classify_detail,
+    recommended_accounts,
 )
 
 
@@ -69,6 +70,28 @@ def test_employee_gift_remains_reasonable_welfare() -> None:
     assert result.labels == (AdjustmentLabel.WELFARE_REASONABLE,)
 
 
+def test_customer_success_center_department_name_is_not_a_customer_hit() -> None:
+    result = classify_detail(
+        AdjustmentSubject.WELFARE,
+        "吕佳楠报销客户成功中心何炜淼生日采购",
+    )
+
+    assert result.status is CheckStatus.NORMAL
+    assert result.labels == (AdjustmentLabel.WELFARE_REASONABLE,)
+    assert result.matched_keywords == ()
+
+
+def test_customer_outside_customer_success_center_still_hits() -> None:
+    result = classify_detail(
+        AdjustmentSubject.WELFARE,
+        "客户成功中心拜访客户",
+    )
+
+    assert result.status is CheckStatus.ABNORMAL
+    assert result.labels == (AdjustmentLabel.WELFARE_BUSINESS_ENTERTAINMENT,)
+    assert result.matched_keywords == ("客户",)
+
+
 @pytest.mark.parametrize(
     ("text", "labels"),
     [
@@ -98,3 +121,33 @@ def test_unmatched_donation_is_retained_as_reasonable() -> None:
 
     assert result.status is CheckStatus.NORMAL
     assert result.labels == (AdjustmentLabel.DONATION_REASONABLE,)
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        (AdjustmentLabel.WELFARE_BUSINESS_ENTERTAINMENT, "业务招待费"),
+        (AdjustmentLabel.WELFARE_EMPLOYEE_EDUCATION, "职工教育经费"),
+        (AdjustmentLabel.WELFARE_ADVERTISING_PROMOTION, "广告宣传费"),
+        (
+            AdjustmentLabel.WELFARE_CUSTOMER_GIFT_REVIEW,
+            "广告宣传费或业务招待费（需结合赠送对象和业务目的复核）",
+        ),
+        (AdjustmentLabel.DONATION_SPONSORSHIP, "赞助支出"),
+        (AdjustmentLabel.DONATION_ADVERTISING_PROMOTION, "广告宣传费"),
+    ],
+)
+def test_abnormal_label_has_recommended_account(
+    label: AdjustmentLabel,
+    expected: str,
+) -> None:
+    assert recommended_accounts((label,)) == (expected,)
+
+
+def test_recommended_accounts_remove_duplicate_names() -> None:
+    assert recommended_accounts(
+        (
+            AdjustmentLabel.WELFARE_ADVERTISING_PROMOTION,
+            AdjustmentLabel.DONATION_ADVERTISING_PROMOTION,
+        )
+    ) == ("广告宣传费",)

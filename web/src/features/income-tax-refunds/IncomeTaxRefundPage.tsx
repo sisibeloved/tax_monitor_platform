@@ -34,7 +34,7 @@ const receiptLabels: Record<
 > = {
   RECEIVED: { label: "已退税", color: "success" },
   NOT_RECEIVED: { label: "尚未收到", color: "default" },
-  AMBIGUOUS: { label: "待人工确认", color: "warning" },
+  AMBIGUOUS: { label: "多个等额候选示警", color: "error" },
 };
 
 const writebackLabels: Record<
@@ -113,7 +113,7 @@ function conclusionTag(item: IncomeTaxRefundItem) {
     return <Tag>未取得退税</Tag>;
   }
   if (item.receipt_status === "AMBIGUOUS") {
-    return <Tag color="warning">待人工确认</Tag>;
+    return <Tag color="error">存在多个等额候选，需人工确认</Tag>;
   }
   if (item.account_family === "INCOME_TAX_EXPENSE") {
     return <Tag color="success">已退税且入账至所得税费用</Tag>;
@@ -238,7 +238,8 @@ function RefundTable(props: {
       scroll={{ x: 1560 }}
       locale={{ emptyText: props.emptyText }}
       onRow={(item) =>
-        item.booking_status === "WRONG_ACCOUNT"
+        item.booking_status === "WRONG_ACCOUNT" ||
+        item.booking_status === "AMBIGUOUS"
           ? { style: { backgroundColor: "#fff1f0" } }
           : {}
       }
@@ -358,7 +359,7 @@ export function IncomeTaxRefundPage() {
             </Col>
             <Col xs={12} lg={6} style={{ paddingInline: 20 }}>
               <Statistic
-                title="待人工确认"
+                title="多个等额候选示警"
                 value={data.ambiguous_count}
                 valueStyle={{ color: "#d46b08" }}
               />
@@ -389,11 +390,11 @@ export function IncomeTaxRefundPage() {
               },
               {
                 key: "ambiguous",
-                label: `待人工确认 (${data.ambiguous_count})`,
+                label: `多个等额候选示警 (${data.ambiguous_count})`,
                 children: (
                   <RefundTable
                     items={data.ambiguous}
-                    emptyText="当前期间无待人工确认公司"
+                    emptyText="当前期间无多个等额候选示警"
                   />
                 ),
               },

@@ -39,10 +39,22 @@ export const VALUE_LABELS: Record<string, string> = {
   cumulative_tax_payable: "原累计应纳税额",
   potential_tax_payable: "潜在应纳税额",
   potential_tax_cost: "潜在税务成本",
+  welfare_cumulative: "福利费累计金额",
+  salary_cumulative: "工资薪金累计金额",
+  welfare_deduction_limit: "福利费税前扣除限额",
+  welfare_adjustment: "福利费纳税调增额",
+  welfare_detail_selected: "是否进入福利费明细检查",
+  welfare_abnormal_candidate_count: "福利费疑似错入候选数",
+  welfare_alert_count: "福利费示警明细数",
+  welfare_alert_amount: "福利费示警金额",
+  donation_cumulative: "公益性捐赠累计金额",
+  donation_abnormal_candidate_count: "捐赠疑似错入候选数",
+  donation_alert_count: "捐赠示警明细数",
 };
 
 export const VALUE_ORDER: Partial<Record<CapabilityCode, string[]>> = {
   current_tax_accrual: [
+    "tax_rate",
     "current_quarter_should_accrue",
     "current_quarter_current_tax",
     "difference",
@@ -71,6 +83,19 @@ export const VALUE_ORDER: Partial<Record<CapabilityCode, string[]>> = {
     "potential_adjustment",
     "potential_tax_payable",
     "potential_tax_cost",
+  ],
+  tax_adjustment_account_accuracy: [
+    "welfare_cumulative",
+    "salary_cumulative",
+    "welfare_deduction_limit",
+    "welfare_adjustment",
+    "welfare_detail_selected",
+    "welfare_abnormal_candidate_count",
+    "welfare_alert_count",
+    "welfare_alert_amount",
+    "donation_cumulative",
+    "donation_abnormal_candidate_count",
+    "donation_alert_count",
   ],
 };
 

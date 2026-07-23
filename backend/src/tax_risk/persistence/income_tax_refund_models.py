@@ -238,7 +238,8 @@ class IncomeTaxRefundScanResult(UUIDPrimaryKeyMixin, AuditTimestampMixin, Base):
             "AND alert_code = 'REFUND_BOOKED_TO_WRONG_ACCOUNT') OR "
             "(receipt_status = 'AMBIGUOUS' AND account_status = 'AMBIGUOUS' "
             "AND matched_line_id IS NULL AND matched_amount IS NULL "
-            "AND gl_account_code IS NULL AND gl_account_name IS NULL AND alert_code IS NULL)",
+            "AND gl_account_code IS NULL AND gl_account_name IS NULL "
+            "AND alert_code = 'AMBIGUOUS_REFUND_MATCH')",
             name="classification_state",
         ),
         ForeignKeyConstraint(

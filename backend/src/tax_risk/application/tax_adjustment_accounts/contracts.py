@@ -69,7 +69,7 @@ class SettlementAdjustmentRow(BaseModel):
         mode="before",
     )
     @classmethod
-    def blank_settlement_text_is_empty(cls, value: object) -> object:
+    def nullable_optional_text_is_blank(cls, value: object) -> object:
         return "" if value is None else value
 
     @field_validator("amount_ksl")

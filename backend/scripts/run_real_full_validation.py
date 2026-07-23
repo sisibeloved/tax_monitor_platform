@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 from time import monotonic
-from typing import Final
+from typing import Final, Literal
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +54,9 @@ from tax_risk.application.external_fetch import (  # noqa: E402
     FetchOutcome,
     FetchRequest,
     ParallelFetchCoordinator,
+)
+from tax_risk.application.tax_adjustment_accounts.web_report import (  # noqa: E402
+    merge_tax_adjustment_report,
 )
 from tax_risk.config import Settings  # noqa: E402
 from tax_risk.domain.money import Money, Rate  # noqa: E402
@@ -276,12 +279,14 @@ def _client_config(
     key_name: str,
     secret_name: str,
     page_size: int,
+    request_method: Literal["GET", "POST"] = "POST",
 ) -> DgcClientConfig:
     api_url = getattr(settings, url_name)
     if not isinstance(api_url, str) or not api_url.strip():
         raise RuntimeError(f"{url_name} is not configured")
     return DgcClientConfig(
         api_url=api_url,
+        request_method=request_method,
         app_key=_required_secret(settings, key_name),
         app_secret=_required_secret(settings, secret_name),
         timeout=settings.dgc_timeout_seconds,
@@ -350,6 +355,7 @@ def _build_sources(settings: Settings) -> dict[str, DgcSapProfitClient]:
                 key_name="dgc_hesi_invoice_app_key",
                 secret_name="dgc_hesi_invoice_app_secret",
                 page_size=settings.dgc_hesi_invoice_page_size,
+                request_method="GET",
             )
         ),
     }
@@ -919,9 +925,9 @@ def _evaluate_company(
         else:
             candidates = []
             match_stage = "应交税费"
-            for line in taxes_payable.lines:
-                record = line.source_record
-                amount = _money(line.taxes_payable_amount).quantized().amount
+            for tax_line in taxes_payable.lines:
+                record = tax_line.source_record
+                amount = _money(tax_line.taxes_payable_amount).quantized().amount
                 if record.group_currency == CURRENCY and amount == expected:
                     candidates.append(
                         {
@@ -937,7 +943,7 @@ def _evaluate_company(
             outcome_text = "未取得退税"
             alert_code = None
         elif len(candidates) > 1:
-            status = "BLOCKED"
+            status = "ALERT"
             outcome_text = "存在多个等额候选"
             alert_code = "AMBIGUOUS_REFUND_MATCH"
         elif candidates[0]["family"] == "所得税费用":
@@ -1028,6 +1034,16 @@ def main() -> int:
         type=Path,
         default=REPO_ROOT / "web" / "public" / "real-validation-latest.json",
     )
+    parser.add_argument(
+        "--tax-adjustment-results",
+        type=Path,
+        help="full tax-adjustment account check JSON; defaults to the acceptance artifact",
+    )
+    parser.add_argument(
+        "--tax-adjustment-candidates",
+        type=Path,
+        help="tax-adjustment candidate detail JSON; defaults to the acceptance artifact",
+    )
     args = parser.parse_args()
     period = args.quarter * 3
     generated_at = datetime.now(UTC)
@@ -1087,6 +1103,23 @@ def main() -> int:
         "monitor_summary": _summary(evaluated),
         "companies": evaluated,
     }
+    tax_adjustment_results = args.tax_adjustment_results or (
+        REPO_ROOT
+        / "artifacts"
+        / "acceptance"
+        / f"tax_adjustment_accounts_full_{args.fiscal_year}_{period:02d}.json"
+    )
+    tax_adjustment_candidates = args.tax_adjustment_candidates or (
+        REPO_ROOT
+        / "artifacts"
+        / "acceptance"
+        / f"tax_adjustment_accounts_candidates_{args.fiscal_year}_{period:02d}.json"
+    )
+    payload = merge_tax_adjustment_report(
+        payload,
+        result_path=tax_adjustment_results.resolve(),
+        candidate_path=tax_adjustment_candidates.resolve(),
+    )
     _write_json(args.output.resolve(), payload)
     print(f"result written: {args.output.resolve()}", flush=True)
     return 0

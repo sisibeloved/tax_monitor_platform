@@ -103,6 +103,36 @@ def test_client_paginates_scoped_thirteen_field_response() -> None:
     assert all(row.company == "3320" for row in rows)
 
 
+def test_client_normalizes_nullable_optional_text_fields() -> None:
+    raw = _raw_row("1")
+    raw["project_code"] = None
+    raw["project_name"] = None
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "errCode": "DLM.0",
+                "data": {
+                    "success": True,
+                    "totalSize": 1,
+                    "rowSize": 1,
+                    "columnNames": list(SCOPED_FIELDS),
+                    "data": [raw],
+                },
+            },
+        )
+
+    with SettlementAdjustmentClient(
+        _configuration(),
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        rows = client.fetch_rows(company="3320", fiscal_year="2025")
+
+    assert rows[0].project_code == ""
+    assert rows[0].project_name == ""
+
+
 def test_client_rejects_schema_drift_without_leaking_secret() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(

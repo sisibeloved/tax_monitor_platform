@@ -529,7 +529,7 @@ len(matches) == 1 and account_family == TAXES_PAYABLE
   -> RECEIVED / WRONG_ACCOUNT / stop / writeback
      / alert REFUND_BOOKED_TO_WRONG_ACCOUNT
 len(matches) > 1
-  -> AMBIGUOUS / AMBIGUOUS / continue / no writeback / no wrong-account case
+  -> AMBIGUOUS / AMBIGUOUS / alert / continue / no writeback / risk case
 ```
 
 “完全等额”只比较量化后的单条明细，不使用容差、不把多条求和、不按科目名称模糊分类。第一阶段存在候选时不再考虑第二阶段；选中阶段内多个候选保持歧义。唯一候选必须保留来源行 ID、科目代码/名称、凭证号、行项目和过账日。
@@ -544,7 +544,7 @@ len(matches) > 1
 
 - 1-2月、扫描年不是 N+1、应退金额量化后不大于0：拒绝运行或阻断公司。
 - 币种/scale 不一致、候选缺少借贷/冲销/行身份：数据质量失败，不猜测或补默认值。
-- 多条等额候选：保存 `AMBIGUOUS`，继续次月扫描，不自动回写或建科目错误案。
+- 多条等额候选：保存 `AMBIGUOUS` 并列为示警，生成风险案例，继续次月扫描且不自动回写。
 - 飞书不可用：本地检测和 `RECEIVED` 主事实不回滚，outbox 保持待重试。
 - SAP 或飞书源对象合同不满足启用门禁：能力保持默认关闭。
 
@@ -811,7 +811,7 @@ ExportRisks(user_context, filters) -> export_job_id
 | 错误入账 | 唯一等额其他收益贷方未冲销行 | `RECEIVED + WRONG_ACCOUNT`，示警`REFUND_BOOKED_TO_WRONG_ACCOUNT` |
 | 应交税费兜底 | 第一阶段零命中，唯一等额应交税费贷方未冲销行 | `RECEIVED + WRONG_ACCOUNT`，网页标记“已退税但入账至应交税费” |
 | 第一阶段优先 | 其他收益与应交税费均唯一等额 | 只采用其他收益候选，网页标记“已退税但入账至其他收益” |
-| 多候选 | 两条贷方未冲销等额行 | `AMBIGUOUS`，不回写、不建科目错误案、次月继续 |
+| 多候选 | 两条贷方未冲销等额行 | `AMBIGUOUS`并示警，生成风险案例、不回写、次月继续 |
 | 舍入边界 | 应退31.4375、SAP 31.44、scale=2 | `ROUND_HALF_UP`后完全等额 |
 | 非容差 | 应退10.004、SAP 10.005、scale=2 | 分别量化为10.00和10.01，不匹配 |
 | 非候选行 | 借方或已冲销等额行 | 排除，不确认到账 |

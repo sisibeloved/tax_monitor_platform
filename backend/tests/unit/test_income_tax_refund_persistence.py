@@ -55,6 +55,7 @@ def test_refund_models_register_stable_keys_and_company_safe_foreign_keys() -> N
     }
     checks = _check_sql(scan.constraints)
     assert "REFUND_BOOKED_TO_WRONG_ACCOUNT" in checks
+    assert "AMBIGUOUS_REFUND_MATCH" in checks
     assert "structured_output -> 'completeness' = 'true'::jsonb" in checks
     assert "structured_output -> 'source_batch_key'" in checks
 
@@ -83,6 +84,23 @@ def test_refund_migration_renders_enum_tables_and_forced_rls_offline() -> None:
         assert f'CREATE POLICY "{table_name}_company_scope"' in sql
 
 
+def test_ambiguous_match_alert_migration_updates_the_classification_constraint() -> None:
+    module = _alert_migration_module()
+    output = io.StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    with Operations.context(context):
+        cast(Callable[[], None], module.upgrade)()
+
+    sql = output.getvalue()
+    assert module.revision == "0023_refund_ambiguous_match_alert"
+    assert module.down_revision == "0022_refund_taxes_payable_priority"
+    assert "DROP CONSTRAINT ck_income_tax_refund_scan_result_classification_state" in sql
+    assert "AMBIGUOUS_REFUND_MATCH" in sql
+
+
 def _migration_module() -> ModuleType:
     migration_path = (
         Path(__file__).resolve().parents[2]
@@ -91,6 +109,23 @@ def _migration_module() -> ModuleType:
         / "0020_income_tax_refund_accuracy.py"
     )
     spec = importlib.util.spec_from_file_location("income_tax_refund_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _alert_migration_module() -> ModuleType:
+    migration_path = (
+        Path(__file__).resolve().parents[2]
+        / "migrations"
+        / "versions"
+        / "0023_refund_ambiguous_match_alert.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "refund_ambiguous_match_alert_migration",
+        migration_path,
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

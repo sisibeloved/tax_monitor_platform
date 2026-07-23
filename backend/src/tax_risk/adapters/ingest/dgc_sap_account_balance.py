@@ -142,7 +142,7 @@ class DgcSapAccountBalanceAdapter:
                 )
             )
             if other_payables_records
-            else None
+            else Decimal(0)
         )
         deferred_tax_expense = _exact_sum(
             tuple(record.closing_balance for record in deferred_tax_records)

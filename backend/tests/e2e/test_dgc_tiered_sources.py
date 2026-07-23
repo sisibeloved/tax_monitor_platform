@@ -29,6 +29,10 @@ from tax_risk.application.dgc_hesi_invoice import (
     DgcHesiInvoiceQuery,
     DgcHesiInvoiceQueryService,
 )
+from tax_risk.application.dgc_hesi_reimbursement import (
+    DgcHesiReimbursementQuery,
+    DgcHesiReimbursementQueryService,
+)
 from tests.support.tiered_dgc import (
     DgcInterface,
     SourceMode,
@@ -241,6 +245,36 @@ def test_account_balance_transport_uses_real_or_deterministic_mock(
         ).adapt()
         if source.mode is SourceMode.MOCK:
             assert result.other_payables_accrual == Decimal("100")
+
+
+@pytest.mark.tiered_interface
+def test_hesi_reimbursement_transport_uses_real_or_deterministic_mock(
+    request: pytest.FixtureRequest,
+    tiered_settings: Settings,
+) -> None:
+    mock = DgcFetchResult(
+        records=(
+            {
+                "company_code": COMPANY,
+                "expense_code": "C-MOCK-001",
+                "flow_end_date": "2026-06-30",
+                "fee_type_code": "F1000",
+                "fee_type_amount": Decimal("100"),
+            },
+        ),
+        checksum="5" * 64,
+    )
+    with build_tiered_source(
+        tiered_config(tiered_settings, DgcInterface.HESI_REIMBURSEMENT),
+        mock,
+    ) as source:
+        fetched = DgcHesiReimbursementQueryService(source).query(
+            DgcHesiReimbursementQuery(company_code=COMPANY)
+        )
+        _record_source(request, source, fetched)
+
+        if source.mode is SourceMode.MOCK:
+            assert fetched.records == mock.records
 
 
 @pytest.mark.tiered_interface

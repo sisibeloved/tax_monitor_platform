@@ -139,16 +139,18 @@ def test_request_normalizes_company_year_and_quarter_end() -> None:
 def _reimbursement(amount: str) -> dict[str, object]:
     return {
         "company_code": "3000",
-        "approval_completed_at": "2026-06-30",
-        "expense_type_code": "F1000",
-        "expense_type_amount": amount,
+        "flow_end_date": "2026-06-30",
+        "expense_code": "C-1",
+        "fee_type_code": "F1000",
+        "fee_type_amount": amount,
     }
 
 
 def _invoice(amount: str) -> dict[str, object]:
     return {
         "company_code": "3000",
-        "approval_completed_at": "2026-06-30",
-        "expense_type_code": "F1000",
-        "invoice_approved_amount": amount,
+        "code": "C-1",
+        "feetypeid": "TYPE-F1000",
+        "amount_standard_dec": "100",
+        "approve_amount_dec": amount,
     }

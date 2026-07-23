@@ -11,6 +11,7 @@ from tax_risk.domain.money import Money
 
 
 WRONG_ACCOUNT_ALERT_CODE = "REFUND_BOOKED_TO_WRONG_ACCOUNT"
+AMBIGUOUS_MATCH_ALERT_CODE = "AMBIGUOUS_REFUND_MATCH"
 
 
 class RefundAccountFamily(StrEnum):
@@ -222,9 +223,9 @@ def _resolve_matches(
             match_stage=match_stage,
             continue_scanning=True,
             requires_writeback=False,
-            alert_flag=False,
-            alert_code=None,
-            risk_case_required=False,
+            alert_flag=True,
+            alert_code=AMBIGUOUS_MATCH_ALERT_CODE,
+            risk_case_required=True,
         )
     candidate = matched[0]
     wrong_account = candidate.account_family is not RefundAccountFamily.INCOME_TAX_EXPENSE
@@ -271,6 +272,7 @@ def _require_money(value: object, field_name: str) -> Money:
 
 
 __all__ = [
+    "AMBIGUOUS_MATCH_ALERT_CODE",
     "IncomeTaxRefundCandidate",
     "IncomeTaxRefundInputs",
     "IncomeTaxRefundResult",

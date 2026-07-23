@@ -159,7 +159,10 @@ class IncomeTaxRefundScanItemResponse(BaseModel):
     document_number: str | None
     line_item: str | None
     posting_date: date | None
-    alert_code: Literal["REFUND_BOOKED_TO_WRONG_ACCOUNT"] | None
+    alert_code: Literal[
+        "REFUND_BOOKED_TO_WRONG_ACCOUNT",
+        "AMBIGUOUS_REFUND_MATCH",
+    ] | None
     writeback_status: Literal["PENDING", "PROCESSING", "SUCCEEDED", "FAILED"] | None
 
     @field_serializer("expected_refund_amount", "matched_amount")

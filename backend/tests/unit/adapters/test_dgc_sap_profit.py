@@ -189,6 +189,60 @@ def test_app_secret_auth_uses_stable_apig_signature_without_iam_request() -> Non
     assert "test-app-secret" not in rendered
 
 
+def test_app_secret_get_mode_signs_paginated_query_without_a_request_body() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"errCode": "DLM.0", "data": {"data": []}})
+
+    client = DgcSapProfitClient(
+        DgcClientConfig(
+            api_url="https://dgc.example.test/post/hesiinvoice",
+            request_method="GET",
+            app_key="test-app-key",
+            app_secret="test-app-secret",
+            page_size=15_000,
+        ),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        signing_clock=lambda: datetime(2026, 7, 15, 1, 2, 3, tzinfo=timezone.utc),
+    )
+
+    result = client.fetch({"company_code": "3000"})
+
+    assert result.records == ()
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "GET"
+    assert request.content == b""
+    assert dict(request.url.params) == {
+        "company_code": "3000",
+        "limitValue": "15000",
+        "offsetValue": "0",
+    }
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Authorization"].startswith(
+        "SDK-HMAC-SHA256 Access=test-app-key,"
+    )
+
+
+def test_get_mode_rejects_null_or_structured_query_parameters() -> None:
+    client = DgcSapProfitClient(
+        DgcClientConfig(
+            api_url="https://dgc.example.test/post/hesiinvoice",
+            request_method="GET",
+            app_key="test-app-key",
+            app_secret="test-app-secret",
+        ),
+        httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200))),
+    )
+
+    with pytest.raises(DgcSchemaError, match="non-null scalar"):
+        client.fetch({"company_code": None})
+    with pytest.raises(DgcSchemaError, match="non-null scalar"):
+        client.fetch({"company_code": ["3000"]})
+
+
 def test_client_authenticates_paginates_and_preserves_json_decimal_precision() -> None:
     iam_bodies: list[object] = []
     api_bodies: list[dict[str, object]] = []

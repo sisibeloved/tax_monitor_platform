@@ -147,7 +147,7 @@ const results: IncomeTaxRefundResults = {
       document_number: null,
       line_item: null,
       posting_date: null,
-      alert_code: null,
+      alert_code: "AMBIGUOUS_REFUND_MATCH",
       writeback_status: null,
     },
   ],
@@ -213,8 +213,13 @@ describe("IncomeTaxRefundPage", () => {
     await userEvent.click(screen.getByRole("tab", { name: "未退税 (1)" }));
     expect(await screen.findByText("尚未退税公司")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("tab", { name: "待人工确认 (1)" }));
+    await userEvent.click(
+      screen.getByRole("tab", { name: "多个等额候选示警 (1)" }),
+    );
     expect(await screen.findByText("待人工确认公司")).toBeInTheDocument();
+    expect(
+      screen.getByText("存在多个等额候选，需人工确认"),
+    ).toBeInTheDocument();
   }, 10_000);
 });
 

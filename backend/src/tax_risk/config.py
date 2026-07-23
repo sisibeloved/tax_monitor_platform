@@ -25,13 +25,15 @@ _DGC_SAP_PROFIT_METRIC_NAMES = (
 _DGC_HESI_REIMBURSEMENT_FIELD_NAMES = (
     "company_code",
     "approval_completed_at",
+    "expense_claim_code",
     "expense_type_code",
     "expense_type_amount",
 )
 _DGC_HESI_INVOICE_FIELD_NAMES = (
     "company_code",
-    "approval_completed_at",
-    "expense_type_code",
+    "expense_claim_code",
+    "expense_type_id",
+    "expense_line_amount",
     "invoice_approved_amount",
 )
 
@@ -70,11 +72,23 @@ def _default_dgc_sap_profit_metric_map() -> dict[str, tuple[str, ...]]:
 
 
 def _default_dgc_hesi_reimbursement_field_map() -> dict[str, str]:
-    return {name: name for name in _DGC_HESI_REIMBURSEMENT_FIELD_NAMES}
+    return {
+        "company_code": "company_code",
+        "approval_completed_at": "flow_end_date",
+        "expense_claim_code": "expense_code",
+        "expense_type_code": "fee_type_code",
+        "expense_type_amount": "fee_type_amount",
+    }
 
 
 def _default_dgc_hesi_invoice_field_map() -> dict[str, str]:
-    return {name: name for name in _DGC_HESI_INVOICE_FIELD_NAMES}
+    return {
+        "company_code": "company_code",
+        "expense_claim_code": "code",
+        "expense_type_id": "feetypeid",
+        "expense_line_amount": "amount_standard_dec",
+        "invoice_approved_amount": "approve_amount_dec",
+    }
 
 
 def _is_https_url(value: str) -> bool:
@@ -232,7 +246,7 @@ class Settings(BaseSettings):
     dgc_hesi_reimbursement_api_url: str | None = "https://116.63.221.181/post/hesimingxi"
     dgc_hesi_reimbursement_app_key: SecretStr | None = None
     dgc_hesi_reimbursement_app_secret: SecretStr | None = None
-    dgc_hesi_reimbursement_page_size: int = Field(default=15_000, gt=0, le=50_000)
+    dgc_hesi_reimbursement_page_size: int = Field(default=5_000, gt=0, le=50_000)
     dgc_hesi_reimbursement_field_map: dict[str, str] = Field(
         default_factory=_default_dgc_hesi_reimbursement_field_map
     )
@@ -273,7 +287,7 @@ class Settings(BaseSettings):
     export_download_ttl_seconds: int = Field(default=300, gt=0, le=3_600)
     export_download_secret: str = "development-export-download-secret"
     worker_scope_secret: str = "development-worker-scope-secret-change-me"
-    expected_migration_head: str = "0022_refund_taxes_payable_priority"
+    expected_migration_head: str = "0023_refund_ambiguous_match_alert"
 
     @model_validator(mode="after")
     def validate_dgc_sap_profit(self) -> Self:

@@ -35,7 +35,7 @@ export const CAPABILITIES: readonly CapabilityDefinition[] = [
     frequency: "每季度",
     stage: "LIVE",
     description: "核对系统测算应计提额与 SAP 实际计提额。",
-    output: "差异公司、应计提额、实际计提额、计提差异",
+    output: "差异公司、所得税税率、应计提额、实际计提额、计提差异",
   },
   {
     code: "deferred_tax",
@@ -69,38 +69,10 @@ export const CAPABILITIES: readonly CapabilityDefinition[] = [
     name: "纳税调增科目准确性检查",
     shortName: "调增科目准确性",
     frequency: "每月",
-    stage: "IN_PROGRESS",
-    description: "识别业务招待费、福利费及公益性捐赠疑似错入明细。",
-    output: "疑似错入明细、证据、置信度、改账建议、复核任务",
-    unavailableReason:
-      "语义规则和离线流程已具备，但真实 SAP、合思与 OA 明细尚未形成统一全量批次，当前不输出集团级风险数量。",
-    readiness: [
-      {
-        item: "业务招待费语义规则",
-        status: "READY",
-        detail: "判断标签、证据引用和改账建议流程已完成离线验证。",
-      },
-      {
-        item: "福利费及捐赠规则",
-        status: "READY",
-        detail: "比例门禁和专业语义策略已实现。",
-      },
-      {
-        item: "合思报销明细",
-        status: "PARTIAL",
-        detail: "接口已配置，待完成月度全量字段映射及公司范围验收。",
-      },
-      {
-        item: "SAP 与 OA 证据链",
-        status: "MISSING",
-        detail: "待接入真实凭证行及 OA 申请、自采报销和物料领用明细。",
-      },
-      {
-        item: "集团级真实批次",
-        status: "MISSING",
-        detail: "待完成真实数据端到端运行、抽样复核和误报率验收。",
-      },
-    ],
+    stage: "LIVE",
+    description:
+      "检查福利费及公益性捐赠疑似错入，保留未达到调增门槛的候选明细。",
+    output: "公司结论、扣除限额、纳税调增额及疑似错入凭证明细",
   },
   {
     code: "refund",

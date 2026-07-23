@@ -264,12 +264,13 @@ def test_dgc_sap_profit_defaults_are_disabled_and_safe() -> None:
     assert settings.dgc_hesi_reimbursement_api_url == ("https://116.63.221.181/post/hesimingxi")
     assert settings.dgc_hesi_reimbursement_app_key is None
     assert settings.dgc_hesi_reimbursement_app_secret is None
-    assert settings.dgc_hesi_reimbursement_page_size == 15_000
+    assert settings.dgc_hesi_reimbursement_page_size == 5_000
     assert settings.dgc_hesi_reimbursement_field_map == {
         "company_code": "company_code",
-        "approval_completed_at": "approval_completed_at",
-        "expense_type_code": "expense_type_code",
-        "expense_type_amount": "expense_type_amount",
+        "approval_completed_at": "flow_end_date",
+        "expense_claim_code": "expense_code",
+        "expense_type_code": "fee_type_code",
+        "expense_type_amount": "fee_type_amount",
     }
     assert settings.dgc_hesi_invoice_enabled is False
     assert settings.dgc_hesi_invoice_api_url == "https://116.63.221.181/post/hesiinvoice"
@@ -278,9 +279,10 @@ def test_dgc_sap_profit_defaults_are_disabled_and_safe() -> None:
     assert settings.dgc_hesi_invoice_page_size == 15_000
     assert settings.dgc_hesi_invoice_field_map == {
         "company_code": "company_code",
-        "approval_completed_at": "approval_completed_at",
-        "expense_type_code": "expense_type_code",
-        "invoice_approved_amount": "invoice_approved_amount",
+        "expense_claim_code": "code",
+        "expense_type_id": "feetypeid",
+        "expense_line_amount": "amount_standard_dec",
+        "invoice_approved_amount": "approve_amount_dec",
     }
     assert settings.dgc_sap_dividend_detail_enabled is False
     assert settings.dgc_sap_dividend_detail_api_url == (
@@ -294,7 +296,7 @@ def test_dgc_sap_profit_defaults_are_disabled_and_safe() -> None:
     assert settings.dgc_invoice_detail_app_key is None
     assert settings.dgc_invoice_detail_app_secret is None
     assert settings.dgc_invoice_detail_page_size == 15_000
-    assert settings.expected_migration_head == "0022_refund_taxes_payable_priority"
+    assert settings.expected_migration_head == "0023_refund_ambiguous_match_alert"
 
 
 def test_lark_refund_writeback_defaults_are_disabled_and_safe() -> None:
@@ -714,8 +716,9 @@ def test_dgc_field_map_rejects_invalid_contracts(
             "dgc_hesi_invoice_field_map",
             {
                 "company_code": "same",
-                "approval_completed_at": "same",
-                "expense_type_code": "expense_type_code",
+                "expense_claim_code": "same",
+                "expense_type_id": "feetypeid",
+                "expense_line_amount": "amount_standard_dec",
                 "invoice_approved_amount": "invoice_approved_amount",
             },
         ),

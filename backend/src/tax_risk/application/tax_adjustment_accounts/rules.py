@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 from tax_risk.application.tax_adjustment_accounts.contracts import (
     AdjustmentLabel,
@@ -12,6 +14,17 @@ from tax_risk.application.tax_adjustment_accounts.contracts import (
 WELFARE_ACCOUNT_MIN = 6_600_080_000
 WELFARE_ACCOUNT_MAX = 6_600_089_900
 DONATION_ACCOUNT = "6711060000"
+
+RECOMMENDED_ACCOUNT_NAMES: Final[Mapping[AdjustmentLabel, str]] = {
+    AdjustmentLabel.WELFARE_BUSINESS_ENTERTAINMENT: "业务招待费",
+    AdjustmentLabel.WELFARE_EMPLOYEE_EDUCATION: "职工教育经费",
+    AdjustmentLabel.WELFARE_ADVERTISING_PROMOTION: "广告宣传费",
+    AdjustmentLabel.WELFARE_CUSTOMER_GIFT_REVIEW: (
+        "广告宣传费或业务招待费（需结合赠送对象和业务目的复核）"
+    ),
+    AdjustmentLabel.DONATION_SPONSORSHIP: "赞助支出",
+    AdjustmentLabel.DONATION_ADVERTISING_PROMOTION: "广告宣传费",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +47,15 @@ def classify_detail(subject: AdjustmentSubject, detail_text: str) -> RuleDecisio
     return _classify_welfare(detail_text)
 
 
+def recommended_accounts(labels: Iterable[AdjustmentLabel]) -> tuple[str, ...]:
+    recommendations: list[str] = []
+    for label in labels:
+        account_name = RECOMMENDED_ACCOUNT_NAMES.get(label)
+        if account_name is not None and account_name not in recommendations:
+            recommendations.append(account_name)
+    return tuple(recommendations)
+
+
 def _classify_welfare(detail_text: str) -> RuleDecision:
     labels: list[AdjustmentLabel] = []
     keywords: list[str] = []
@@ -45,7 +67,8 @@ def _classify_welfare(detail_text: str) -> RuleDecision:
     entertainment_hits = [
         keyword for keyword in ("供应商", "政府接待", "商务宴请") if keyword in detail_text
     ]
-    if "客户" in detail_text and "客户礼品" not in detail_text:
+    customer_context_text = detail_text.replace("客户成功中心", "")
+    if "客户" in customer_context_text and "客户礼品" not in detail_text:
         entertainment_hits.append("客户")
     if entertainment_hits:
         labels.append(AdjustmentLabel.WELFARE_BUSINESS_ENTERTAINMENT)
@@ -104,9 +127,11 @@ def _classify_donation(detail_text: str) -> RuleDecision:
 
 __all__ = [
     "DONATION_ACCOUNT",
+    "RECOMMENDED_ACCOUNT_NAMES",
     "RuleDecision",
     "WELFARE_ACCOUNT_MAX",
     "WELFARE_ACCOUNT_MIN",
     "account_is_in_scope",
     "classify_detail",
+    "recommended_accounts",
 ]

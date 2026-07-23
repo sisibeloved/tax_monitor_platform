@@ -6,6 +6,7 @@ import pytest
 
 from tax_risk.domain.cases import MonitorType
 from tax_risk.domain.income_tax_refund import (
+    AMBIGUOUS_MATCH_ALERT_CODE,
     IncomeTaxRefundCandidate,
     IncomeTaxRefundInputs,
     RefundAccountFamily,
@@ -191,9 +192,9 @@ def test_multiple_equal_eligible_candidates_are_ambiguous() -> None:
     assert result.match_stage is RefundMatchStage.PRIMARY_ACCOUNTS
     assert result.continue_scanning is True
     assert result.requires_writeback is False
-    assert result.alert_flag is False
-    assert result.alert_code is None
-    assert result.risk_case_required is False
+    assert result.alert_flag is True
+    assert result.alert_code == AMBIGUOUS_MATCH_ALERT_CODE
+    assert result.risk_case_required is True
 
 
 def test_multiple_taxes_payable_matches_are_ambiguous_only_after_primary_miss() -> None:
@@ -209,6 +210,10 @@ def test_multiple_taxes_payable_matches_are_ambiguous_only_after_primary_miss() 
     assert result.matched_candidates == candidates
     assert result.match_stage is RefundMatchStage.TAXES_PAYABLE
     assert result.continue_scanning is True
+    assert result.requires_writeback is False
+    assert result.alert_flag is True
+    assert result.alert_code == AMBIGUOUS_MATCH_ALERT_CODE
+    assert result.risk_case_required is True
 
 
 def test_money_is_quantized_half_up_before_exact_matching() -> None:

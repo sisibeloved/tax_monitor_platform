@@ -9,13 +9,14 @@ from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import hmac
 import json
+from math import isfinite
 import re
 import ssl
 from threading import Lock
 from time import monotonic
 from types import MappingProxyType
-from typing import Never
-from urllib.parse import parse_qsl, quote, unquote, urlsplit
+from typing import Literal, Never
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -102,6 +103,7 @@ class DgcResourceLimitError(DgcSapProfitError):
 @dataclass(frozen=True, slots=True)
 class DgcClientConfig:
     api_url: str
+    request_method: Literal["GET", "POST"] = "POST"
     iam_url: str | None = None
     username: str | None = None
     password: str | None = field(default=None, repr=False)
@@ -131,6 +133,8 @@ class DgcClientConfig:
             or parsed_api_url.fragment
         ):
             raise ValueError("api_url must be an HTTPS URL without credentials or a fragment")
+        if self.request_method not in {"GET", "POST"}:
+            raise ValueError("request_method must be GET or POST")
 
         app_values = (self.app_key, self.app_secret)
         iam_values = (self.iam_url, self.username, self.password, self.domain, self.project)
@@ -365,7 +369,7 @@ class DgcSapProfitClient:
         attempts = 1 if self._config.app_key is not None else 2
         for attempt in range(attempts):
             token = None if self._config.app_key is not None else self._get_token()
-            response = self._post_data(body, token)
+            response = self._request_data(body, token)
             response_bytes += len(response.content)
             if response.status_code in {401, 403}:
                 if token is not None and attempt == 0:
@@ -451,16 +455,22 @@ class DgcSapProfitClient:
         self._token_expires_at = self._clock() + self._config.token_ttl
         return self._token
 
-    def _post_data(self, body: Mapping[str, object], token: str | None) -> httpx.Response:
-        try:
-            encoded_body = json.dumps(
-                dict(body),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
-        except (TypeError, ValueError) as error:
-            raise DgcSchemaError("DGC data request could not be encoded as JSON") from error
+    def _request_data(self, body: Mapping[str, object], token: str | None) -> httpx.Response:
+        method = self._config.request_method
+        if method == "POST":
+            try:
+                encoded_body = json.dumps(
+                    dict(body),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            except (TypeError, ValueError) as error:
+                raise DgcSchemaError("DGC data request could not be encoded as JSON") from error
+            request_url = self._config.api_url
+        else:
+            encoded_body = b""
+            request_url = _query_request_url(self._config.api_url, body)
 
         headers = {
             "Accept-Encoding": "identity",
@@ -470,8 +480,8 @@ class DgcSapProfitClient:
             assert self._config.app_secret is not None
             headers.update(
                 _app_secret_headers(
-                    method="POST",
-                    url=self._config.api_url,
+                    method=method,
+                    url=request_url,
                     body=encoded_body,
                     app_key=self._config.app_key,
                     app_secret=self._config.app_secret,
@@ -483,8 +493,8 @@ class DgcSapProfitClient:
             headers["X-Auth-Token"] = token
         try:
             with self._client.stream(
-                "POST",
-                self._config.api_url,
+                method,
+                request_url,
                 content=encoded_body,
                 headers=headers,
                 timeout=self._config.timeout,
@@ -519,6 +529,32 @@ class DgcSapProfitClient:
             if self._token == rejected_token:
                 self._token = None
                 self._token_expires_at = 0.0
+
+
+def _query_request_url(url: str, parameters: Mapping[str, object]) -> str:
+    parsed = urlsplit(url)
+    query_items: list[tuple[str, str]] = list(parse_qsl(parsed.query, keep_blank_values=True))
+    for name, value in parameters.items():
+        if value is None or isinstance(value, (dict, list, tuple, set)):
+            raise DgcSchemaError("DGC GET query parameters must be non-null scalar values")
+        if isinstance(value, float) and not isfinite(value):
+            raise DgcSchemaError("DGC GET query parameters must be finite")
+        if isinstance(value, bool):
+            normalized = "true" if value else "false"
+        elif isinstance(value, (str, int, float)):
+            normalized = str(value)
+        else:
+            raise DgcSchemaError("DGC GET query parameters must be scalar JSON values")
+        query_items.append((name, normalized))
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query_items),
+            "",
+        )
+    )
 
 
 def _utc_now() -> datetime:

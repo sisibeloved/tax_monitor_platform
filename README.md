@@ -107,7 +107,7 @@ SAP凭证及OA/合思业务证据
 - 没有等额候选时为 `NOT_RECEIVED`，不示警且次月继续扫描；
 - 唯一命中所得税费用时为 `RECEIVED + CORRECT`，停止后续扫描并安排回写“已退税”；
 - 唯一命中其他收益时为 `RECEIVED + WRONG_ACCOUNT`，停止后续扫描、安排回写并生成 `REFUND_BOOKED_TO_WRONG_ACCOUNT` 风险；
-- 多个等额候选时为 `AMBIGUOUS`，不自动回写、不生成科目错误案且次月继续扫描。
+- 多个等额候选时为 `AMBIGUOUS` 并示警，生成风险案例但不自动回写，次月继续扫描。
 
 下月是否跳过以平台数据库中“公司 + 退税所属年”的本地 `RECEIVED` 状态为准，飞书状态只是异步同步结果，不能替代平台主事实。
 
@@ -239,14 +239,14 @@ DGC_HESI_REIMBURSEMENT_ENABLED=false
 DGC_HESI_REIMBURSEMENT_API_URL=https://116.63.221.181/post/hesimingxi
 DGC_HESI_REIMBURSEMENT_APP_KEY=<secret-store-injected-app-key>
 DGC_HESI_REIMBURSEMENT_APP_SECRET=<secret-store-injected-app-secret>
-DGC_HESI_REIMBURSEMENT_PAGE_SIZE=15000
-DGC_HESI_REIMBURSEMENT_FIELD_MAP={"company_code":"company_code","approval_completed_at":"approval_completed_at","expense_type_code":"expense_type_code","expense_type_amount":"expense_type_amount"}
+DGC_HESI_REIMBURSEMENT_PAGE_SIZE=5000
+DGC_HESI_REIMBURSEMENT_FIELD_MAP={"company_code":"company_code","approval_completed_at":"flow_end_date","expense_claim_code":"expense_code","expense_type_code":"fee_type_code","expense_type_amount":"fee_type_amount"}
 DGC_HESI_INVOICE_ENABLED=false
 DGC_HESI_INVOICE_API_URL=https://116.63.221.181/post/hesiinvoice
 DGC_HESI_INVOICE_APP_KEY=<secret-store-injected-app-key>
 DGC_HESI_INVOICE_APP_SECRET=<secret-store-injected-app-secret>
 DGC_HESI_INVOICE_PAGE_SIZE=15000
-DGC_HESI_INVOICE_FIELD_MAP={"company_code":"company_code","approval_completed_at":"approval_completed_at","expense_type_code":"expense_type_code","invoice_approved_amount":"invoice_approved_amount"}
+DGC_HESI_INVOICE_FIELD_MAP={"company_code":"company_code","expense_claim_code":"code","expense_type_id":"feetypeid","expense_line_amount":"amount_standard_dec","invoice_approved_amount":"approve_amount_dec"}
 DGC_SAP_DIVIDEND_DETAIL_ENABLED=false
 DGC_SAP_DIVIDEND_DETAIL_API_URL=https://116.63.221.181/post/settlement_adjustment
 DGC_SAP_DIVIDEND_DETAIL_APP_KEY=<secret-store-injected-app-key>
@@ -277,13 +277,13 @@ LARK_REFUND_WORKER_CONCURRENCY=2
 
 科目发生额表使用独立 AppKey/AppSecret。本地配置时在受 Git 忽略的 `infra/.env` 中填写密钥，在入库连接器完成前保持启用开关为 `false`，不要把密钥写入 `infra/env.example`。接口分页大小按合同默认值配置为 `1000`，`offsetValue` 从 `0` 开始并由后续连接器管理。
 
-科目余额表接口地址为 `https://116.63.221.181/post/sapaccountbalance`，使用独立 AppKey/AppSecret。Body 参数为可选字符串 `company_code`、必填字符串 `fiscal_year/fiscal_period` 以及分页参数 `limitValue/offsetValue`；季度导入将月份规范为三位（如 `006`）。真实响应合同固定为 `account_code/account_name/closing_balance/company_code/company_name/credit_amount/debit_amount/fiscal_period/fiscal_year/input_tax_process_method/net_amount/opening_balance/sfkf` 共13个字段，并严格校验公司、年度和期间作用域。其他应付款暂估只取工作簿列示的十个 `224105` 科目：逐行期末余额大于等于0时取0，小于0时乘以-1，再精确求和；目标科目完全缺失时仍保持缺数据。SAP累计已计提递延所得税费用只取 `1811030000` 的期末余额原值；查询成功但未找到该科目时生成有来源校验和的正零指标。受控导入端点为 `POST /api/v1/ingest-batches/dgc-sap-account-balance`。
+科目余额表接口地址为 `https://116.63.221.181/post/sapaccountbalance`，使用独立 AppKey/AppSecret。Body 参数为可选字符串 `company_code`、必填字符串 `fiscal_year/fiscal_period` 以及分页参数 `limitValue/offsetValue`；季度导入将月份规范为三位（如 `006`）。真实响应合同固定为 `account_code/account_name/closing_balance/company_code/company_name/credit_amount/debit_amount/fiscal_period/fiscal_year/input_tax_process_method/net_amount/opening_balance/sfkf` 共13个字段，并严格校验公司、年度和期间作用域。其他应付款暂估只取工作簿列示的十个 `224105` 科目：逐行期末余额大于等于0时取0，小于0时乘以-1，再精确求和；科目余额表查询成功但未返回任一目标科目时，生成有来源校验和的正零指标。SAP累计已计提递延所得税费用只取 `1811030000` 的期末余额原值；查询成功但未找到该科目时同样生成有来源校验和的正零指标。整个接口调用失败、响应不合法或未导入时仍按缺数据阻断。受控导入端点为 `POST /api/v1/ingest-batches/dgc-sap-account-balance`。
 
-合思报销单明细接口地址为 `https://116.63.221.181/post/hesimingxi`，使用独立 AppKey/AppSecret。Body 参数 `company_code`（公司代码编码）和 `submit_date`（提交时间）可选，提供时不可为空；`limitValue` 和 `offsetValue` 必填并由连接器按 `15000` 的默认页大小自动管理。当前按原始明细接入，字段合同通过真实查询验证后再完成业务映射。
+合思报销单明细接口地址为 `https://116.63.221.181/post/hesimingxi`，使用独立 AppKey/AppSecret。Body 参数 `company_code`（公司代码编码）和 `submit_date`（提交时间）可选，提供时不可为空；`limitValue` 和 `offsetValue` 必填并由连接器按 `5000` 的页大小自动管理，避免大公司单页响应超过10 MB安全上限。真实字段合同使用 `expense_code`、`flow_end_date`、`fee_type_code` 和 `fee_type_amount`。
 
-“合思报销单发票查询”接口地址为 `https://116.63.221.181/post/hesiinvoice`，使用独立 AppKey/AppSecret。Body 参数 `company_code`（公司代码编码）可选，提供时不可为空；`limitValue` 和 `offsetValue` 必填并由连接器按 `15000` 的默认页大小自动管理。当前按原始发票数据接入，字段合同通过真实查询验证后再完成业务映射。
+“合思报销单发票查询”接口地址为 `https://116.63.221.181/post/hesiinvoice`，使用独立 AppKey/AppSecret。该网关实际要求签名 GET 请求，`company_code`、`limitValue` 和 `offsetValue` 放入 Query；POST 会返回 `DLM.4313`。真实字段合同使用 `code`、`feetypeid`、`amount_standard_dec` 和 `approve_amount_dec`。
 
-合思无票报销金额按公司、本年1月1日至季度末的审批完成时间聚合。合思报销单与合思发票均排除以下费用类型编码：`CLF0101`、`CLF0102`、`CLF0103`、`CLF0117`、`CLF0118`、`CLF0119`、`CLF0120`、`CLF0126`、`CLF0130`、`CLF0131`、`F0507`、`F0508`、`F0605`、`F5409`、`F5724`、`F5725`、`F5809`、`F5811`、`F6309`。计算公式为 `max(符合条件的费用类型金额合计 - 符合条件的发票核准金额合计, 0)`，金额使用精确十进制；跨公司、日期或金额字段不合法时阻断，不补造指标。受控导入端点为 `POST /api/v1/ingest-batches/dgc-hesi-no-invoice`。两张表的真实返回字段合同尚未验证，默认字段映射只是逻辑占位，启用生产导入前必须按真实字段更新并通过接口验收。
+合思无票报销金额按公司、本年1月1日至季度末的审批完成时间聚合。合思报销单与合思发票均排除以下费用类型编码：`CLF0101`、`CLF0102`、`CLF0103`、`CLF0117`、`CLF0118`、`CLF0119`、`CLF0120`、`CLF0126`、`CLF0130`、`CLF0131`、`F0507`、`F0508`、`F0605`、`F5409`、`F5724`、`F5725`、`F5809`、`F5811`、`F6309`。发票通过 `code = expense_code` 关联报销单，再根据 `amount_standard_dec = fee_type_amount` 及稳定的 `feetypeid` 识别费用类型，审批日期继承报销单的 `flow_end_date`；未审批单据不计入，无法唯一关联时阻断。计算公式为 `max(符合条件的费用类型金额合计 - 符合条件的发票核准金额合计, 0)`，其中发票核准金额取 `approve_amount_dec`，金额使用精确十进制。受控导入端点为 `POST /api/v1/ingest-batches/dgc-hesi-no-invoice`。
 
 “发票明细”接口地址为 `https://116.63.221.181/post/writeoff`，使用独立 AppKey/AppSecret。Body 参数 `accounting_date`（入账日期）和 `comp`（公司代码）可选，提供时不可为空；`limitValue`和 `offsetValue` 必填并由连接器按 `15000` 的默认页大小自动管理。当前已完成独立配置、HTTPS 校验、签名分页和原始请求接线；因尚未提供返回字段合同，默认保持禁用，不做业务字段映射或入库。
 

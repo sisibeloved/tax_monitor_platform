@@ -120,7 +120,7 @@ def test_import_uses_three_digit_period_and_persists_supported_metrics() -> None
     }
 
 
-def test_import_materializes_zero_when_deferred_tax_account_is_absent() -> None:
+def test_import_materializes_zero_when_target_accounts_are_absent() -> None:
     source = _Source(
         DgcFetchResult(records=(_row("1001000000", "1"),), checksum="b" * 64)
     )
@@ -136,7 +136,10 @@ def test_import_materializes_zero_when_deferred_tax_account_is_absent() -> None:
         for row in adapter.iter_rows()
         if isinstance(row.value, CanonicalFinancialRow)
     }
-    assert metrics == {"sap_cumulative_deferred_tax_expense": Decimal(0)}
+    assert metrics == {
+        "other_payables_accrual": Decimal(0),
+        "sap_cumulative_deferred_tax_expense": Decimal(0),
+    }
 
 
 def test_request_normalizes_company_year_and_quarter_end() -> None:

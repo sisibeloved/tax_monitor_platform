@@ -15,7 +15,7 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   CAPABILITIES,
@@ -44,6 +44,13 @@ const STATUS_META: Record<ValidationStatus, { label: string; color: string }> =
     BLOCKED: { label: "阻断", color: "warning" },
     NOT_APPLICABLE: { label: "不适用", color: "default" },
   };
+
+const STATUS_ORDER: ValidationStatus[] = [
+  "ALERT",
+  "CLEAR",
+  "BLOCKED",
+  "NOT_APPLICABLE",
+];
 
 const READINESS_META: Record<
   ReadinessStatus,
@@ -94,9 +101,16 @@ function formatValue(
       "booking_account_family",
       "match_stage",
       "receipt_source",
+      "welfare_abnormal_candidate_count",
+      "welfare_alert_count",
+      "donation_abnormal_candidate_count",
+      "donation_alert_count",
     ].includes(key)
   ) {
     return value;
+  }
+  if (key === "welfare_detail_selected") {
+    return value === "true" ? "是" : "否";
   }
   const numeric = Number(value);
   return Number.isFinite(numeric)
@@ -108,6 +122,86 @@ function formatValue(
       }).format(numeric)
     : value;
 }
+
+const CANDIDATE_COLUMNS: ColumnsType<Record<string, string>> = [
+  {
+    title: "分类",
+    width: 110,
+    render: (_, candidate) => candidate.subject ?? candidate.family ?? "-",
+  },
+  {
+    title: "期间 / 凭证号",
+    width: 180,
+    render: (_, candidate) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text>{candidate.fiscal_period ?? "-"}</Typography.Text>
+        <Typography.Text code>{candidate.voucher_no ?? "-"}</Typography.Text>
+      </Space>
+    ),
+  },
+  {
+    title: "当前入账科目",
+    width: 240,
+    render: (_, candidate) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text code>
+          {candidate.gl_account ?? candidate.account_code ?? "-"}
+        </Typography.Text>
+        <Typography.Text>
+          {candidate.account_name ?? candidate.family ?? "-"}
+        </Typography.Text>
+      </Space>
+    ),
+  },
+  {
+    title: "建议入账科目",
+    width: 260,
+    render: (_, candidate) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text strong>
+          {candidate.recommended_account ?? "-"}
+        </Typography.Text>
+        <Typography.Text type="secondary">
+          具体SAP科目编码按公司科目表确认
+        </Typography.Text>
+      </Space>
+    ),
+  },
+  {
+    title: "摘要",
+    width: 360,
+    render: (_, candidate) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text>抬头：{candidate.header_text || "-"}</Typography.Text>
+        <Typography.Text>
+          行项目：{candidate.detail_text || "-"}
+        </Typography.Text>
+      </Space>
+    ),
+  },
+  {
+    title: "金额",
+    width: 110,
+    render: (_, candidate) => candidate.amount ?? "-",
+  },
+  {
+    title: "识别结果 / 判断依据",
+    width: 280,
+    render: (_, candidate) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text>{candidate.classification ?? "-"}</Typography.Text>
+        {candidate.matched_keywords ? (
+          <Typography.Text type="secondary">
+            关键词：{candidate.matched_keywords}
+          </Typography.Text>
+        ) : null}
+        <Typography.Text type="secondary">
+          {candidate.recommendation_basis ?? "-"}
+        </Typography.Text>
+      </Space>
+    ),
+  },
+];
 
 function CapabilityCard({
   capability,
@@ -231,12 +325,53 @@ export function FullValidationPage() {
   });
   const [monitor, setMonitor] = useState<CapabilityCode>("current_tax_accrual");
   const [status, setStatus] = useState<ValidationStatus | "ALL">("ALL");
+  const [outcome, setOutcome] = useState("ALL");
   const [keyword, setKeyword] = useState("");
   const report = query.data;
   const selectedCapability =
     CAPABILITIES.find((capability) => capability.code === monitor) ??
     CAPABILITIES[0];
   const monitorIsLive = selectedCapability.stage === "LIVE";
+
+  const statusOptions = useMemo(() => {
+    if (!report || !monitorIsLive) return [];
+    const available = new Set(
+      report.companies
+        .map((company) => company.monitor_results[monitor]?.status)
+        .filter((value): value is ValidationStatus => value !== undefined),
+    );
+    return STATUS_ORDER.filter((value) => available.has(value));
+  }, [monitor, monitorIsLive, report]);
+
+  const outcomeOptions = useMemo(() => {
+    if (!report || !monitorIsLive) return [];
+    return Array.from(
+      new Set(
+        report.companies
+          .map((company) => company.monitor_results[monitor])
+          .filter(
+            (result): result is MonitorResult =>
+              result !== undefined &&
+              (status === "ALL" || result.status === status),
+          )
+          .map((result) => result.outcome.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+  }, [monitor, monitorIsLive, report, status]);
+
+  useEffect(() => {
+    if (status !== "ALL" && !statusOptions.includes(status)) {
+      setStatus("ALL");
+      setOutcome("ALL");
+    }
+  }, [status, statusOptions]);
+
+  useEffect(() => {
+    if (outcome !== "ALL" && !outcomeOptions.includes(outcome)) {
+      setOutcome("ALL");
+    }
+  }, [outcome, outcomeOptions]);
 
   const rows = useMemo(() => {
     if (!report || !monitorIsLive) return [];
@@ -246,12 +381,13 @@ export function FullValidationPage() {
       return (
         result !== undefined &&
         (status === "ALL" || result.status === status) &&
+        (outcome === "ALL" || result.outcome.trim() === outcome) &&
         (!normalized ||
           company.company_code.toLowerCase().includes(normalized) ||
           company.company_name.toLowerCase().includes(normalized))
       );
     });
-  }, [keyword, monitor, monitorIsLive, report, status]);
+  }, [keyword, monitor, monitorIsLive, outcome, report, status]);
 
   const portfolio = useMemo(() => {
     if (!report) return { alertCompanies: 0, blockedCompanies: 0, alerts: 0 };
@@ -275,12 +411,18 @@ export function FullValidationPage() {
   const selectCapability = (code: CapabilityCode) => {
     setMonitor(code);
     setStatus("ALL");
+    setOutcome("ALL");
     setKeyword("");
     requestAnimationFrame(() =>
       document
         .getElementById("capability-detail")
         ?.scrollIntoView({ behavior: "smooth", block: "start" }),
     );
+  };
+
+  const selectStatus = (value: ValidationStatus | "ALL") => {
+    setStatus(value);
+    setOutcome("ALL");
   };
 
   const columns: ColumnsType<ValidationCompany> = [
@@ -336,6 +478,15 @@ export function FullValidationPage() {
       key: "reason",
       width: 360,
       render: (_, company) => company.monitor_results[monitor]?.reason ?? "-",
+    },
+    {
+      title: "候选明细",
+      key: "candidates",
+      width: 110,
+      render: (_, company) => {
+        const count = company.monitor_results[monitor]?.candidates?.length ?? 0;
+        return count > 0 ? <Tag color="warning">{count} 条</Tag> : "-";
+      },
     },
   ];
 
@@ -508,6 +659,14 @@ export function FullValidationPage() {
               message={report.refund_evidence_notice}
             />
           ) : null}
+          {selectedCapability.code === "tax_adjustment_account_accuracy" &&
+          report.tax_adjustment_account_accuracy_notice ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={report.tax_adjustment_account_accuracy_notice}
+            />
+          ) : null}
 
           <section
             id="capability-detail"
@@ -541,13 +700,26 @@ export function FullValidationPage() {
                     aria-label="结果状态"
                     value={status}
                     style={{ width: 130 }}
-                    onChange={setStatus}
+                    onChange={selectStatus}
                     options={[
                       { value: "ALL", label: "全部状态" },
-                      { value: "ALERT", label: "示警" },
-                      { value: "CLEAR", label: "正常" },
-                      { value: "BLOCKED", label: "阻断" },
-                      { value: "NOT_APPLICABLE", label: "不适用" },
+                      ...statusOptions.map((value) => ({
+                        value,
+                        label: STATUS_META[value].label,
+                      })),
+                    ]}
+                  />
+                  <Select
+                    aria-label="检查结论"
+                    value={outcome}
+                    style={{ width: 220 }}
+                    onChange={setOutcome}
+                    options={[
+                      { value: "ALL", label: "全部结论" },
+                      ...outcomeOptions.map((value) => ({
+                        value,
+                        label: value,
+                      })),
                     ]}
                   />
                   <Input.Search
@@ -590,7 +762,27 @@ export function FullValidationPage() {
                   showSizeChanger: false,
                   showTotal: (total) => `共 ${total} 家`,
                 }}
-                scroll={{ x: 1340 }}
+                expandable={{
+                  expandedRowRender: (company) => (
+                    <Table<Record<string, string>>
+                      rowKey={(candidate) =>
+                        candidate.candidate_no ??
+                        `${candidate.voucher_no ?? "candidate"}-${candidate.amount ?? "0"}`
+                      }
+                      columns={CANDIDATE_COLUMNS}
+                      dataSource={
+                        company.monitor_results[monitor]?.candidates ?? []
+                      }
+                      pagination={false}
+                      scroll={{ x: 1540 }}
+                      size="small"
+                    />
+                  ),
+                  rowExpandable: (company) =>
+                    (company.monitor_results[monitor]?.candidates?.length ??
+                      0) > 0,
+                }}
+                scroll={{ x: 1450 }}
                 size="middle"
               />
             ) : (
