@@ -173,6 +173,7 @@ def test_application_uses_post_with_query_and_empty_body() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.content == b""
+        assert request.extensions["sni_hostname"] == "dgc.huaweicloud.com"
         assert request.url.params["company_code"] == "3HD0"
         offset = int(request.url.params["offsetValue"])
         offsets.append(offset)
@@ -194,6 +195,7 @@ def test_application_uses_post_with_query_and_empty_body() -> None:
         endpoint="https://116.63.221.181/post/apply",
         app_key=SecretStr("key"),
         app_secret=SecretStr("secret"),
+        tls_server_name="DGC.HuaweiCloud.com",
     )
     with HesiApplicationClient(
         configuration,

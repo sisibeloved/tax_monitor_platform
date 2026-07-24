@@ -12,6 +12,7 @@ __pycache__/
 *.egg-info/
 .coverage
 build/
+.tax-risk-archive-*.json
 
 # Frontend
 node_modules/
@@ -27,6 +28,14 @@ artifacts/acceptance/five-monitor-*.png
 artifacts/acceptance/five-monitor-smoke.json
 artifacts/acceptance/publish-size-check.tar.gz
 artifacts/legal_entity_metrics_latest.xlsx
+artifacts/acceptance/hesi-reason-*.png
+artifacts/acceptance/refund-monitor-*.png
+artifacts/acceptance/tax-adjustment-*.png
+artifacts/acceptance/tax_adjustment_accounts_*.csv
+artifacts/acceptance/tax_adjustment_accounts_*.json
+artifacts/acceptance/*vite*.log
+artifacts/acceptance/tax-monitor-dist-measure.tar.gz
+artifacts/notifications/
 web/artifacts/
 web/test-results-external/
 

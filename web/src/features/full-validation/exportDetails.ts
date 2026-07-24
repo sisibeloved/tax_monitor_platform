@@ -50,6 +50,14 @@ export const VALUE_LABELS: Record<string, string> = {
   donation_cumulative: "公益性捐赠累计金额",
   donation_abnormal_candidate_count: "捐赠疑似错入候选数",
   donation_alert_count: "捐赠示警明细数",
+  business_entertainment_cumulative: "业务招待费累计金额",
+  business_entertainment_detail_count: "业务招待费明细数",
+  business_entertainment_alert_count: "业务招待费示警明细数",
+  business_entertainment_alert_amount: "业务招待费示警金额",
+  business_entertainment_hesi_detail_count: "合思报销明细取证数",
+  business_entertainment_hesi_invoice_count: "合思发票取证数",
+  business_entertainment_hesi_application_count: "业务招待申请单取证数",
+  business_entertainment_evidence_status: "业务招待费证据链状态",
 };
 
 export const VALUE_ORDER: Partial<Record<CapabilityCode, string[]>> = {
@@ -85,6 +93,14 @@ export const VALUE_ORDER: Partial<Record<CapabilityCode, string[]>> = {
     "potential_tax_cost",
   ],
   tax_adjustment_account_accuracy: [
+    "business_entertainment_cumulative",
+    "business_entertainment_detail_count",
+    "business_entertainment_alert_count",
+    "business_entertainment_alert_amount",
+    "business_entertainment_hesi_detail_count",
+    "business_entertainment_hesi_invoice_count",
+    "business_entertainment_hesi_application_count",
+    "business_entertainment_evidence_status",
     "welfare_cumulative",
     "salary_cumulative",
     "welfare_deduction_limit",

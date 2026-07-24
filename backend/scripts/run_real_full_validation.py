@@ -18,10 +18,14 @@ from typing import Final, Literal
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = REPO_ROOT / "backend"
 BACKEND_SRC = REPO_ROOT / "backend" / "src"
-if str(BACKEND_SRC) not in sys.path:
-    sys.path.insert(0, str(BACKEND_SRC))
+BACKEND_SCRIPTS = REPO_ROOT / "backend" / "scripts"
+for import_path in (BACKEND_ROOT, BACKEND_SRC, BACKEND_SCRIPTS):
+    if str(import_path) not in sys.path:
+        sys.path.insert(0, str(import_path))
 
+from scripts.archive_feishu_alert_results import archive_report  # noqa: E402
 from tax_risk.adapters.cache.memory_fetch_cache import MemoryFetchCache  # noqa: E402
 from tax_risk.adapters.ingest.base import CanonicalFinancialRow  # noqa: E402
 from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (  # noqa: E402
@@ -1044,6 +1048,9 @@ def main() -> int:
         type=Path,
         help="tax-adjustment candidate detail JSON; defaults to the acceptance artifact",
     )
+    parser.add_argument("--skip-alert-archive", action="store_true")
+    parser.add_argument("--archive-base-as", choices=("user", "bot"), default="user")
+    parser.add_argument("--archive-base-profile", default="tax-risk-notifier")
     args = parser.parse_args()
     period = args.quarter * 3
     generated_at = datetime.now(UTC)
@@ -1122,6 +1129,24 @@ def main() -> int:
     )
     _write_json(args.output.resolve(), payload)
     print(f"result written: {args.output.resolve()}", flush=True)
+    if args.max_companies is not None:
+        print("alert archive skipped: partial --max-companies run", flush=True)
+    elif args.skip_alert_archive:
+        print("alert archive skipped by explicit option", flush=True)
+    else:
+        _, archive_results = archive_report(
+            payload,
+            base_identity=args.archive_base_as,
+            base_profile=args.archive_base_profile,
+        )
+        for archive_result in archive_results:
+            print(
+                f"alert archive {archive_result.table_name}: "
+                f"created={archive_result.created_rows}, "
+                f"restored={archive_result.restored_rows}, "
+                f"retired={archive_result.retired_rows}",
+                flush=True,
+            )
     return 0
 
 

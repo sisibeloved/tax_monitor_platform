@@ -37,12 +37,22 @@ def _result_payload() -> dict[str, object]:
         "through_month": 6,
         "welfare_status": "CLEAR",
         "donation_status": "CLEAR",
+        "business_entertainment_status": "CLEAR",
         "welfare_error": "",
         "donation_error": "",
+        "business_entertainment_error": "",
         "welfare_alert_count": 0,
         "donation_alert_count": 0,
         "donation_abnormal_candidate_count": 0,
         "donation_cumulative": "0",
+        "business_entertainment_cumulative": "0",
+        "business_entertainment_detail_count": 0,
+        "business_entertainment_alert_count": 0,
+        "business_entertainment_alert_amount": "0",
+        "business_entertainment_hesi_detail_count": 0,
+        "business_entertainment_hesi_invoice_count": 0,
+        "business_entertainment_hesi_application_count": 0,
+        "business_entertainment_evidence_status": "NOT_REQUIRED",
     }
     return {
         "scope": {"fiscal_year": "2026", "through_month": 6},
@@ -101,8 +111,13 @@ def _candidate_payload() -> dict[str, object]:
                     ],
                     "DONATION": [],
                 },
+                "business_entertainment_candidates": [],
             },
-            {"company_code": "3000", "rows": {"WELFARE": [], "DONATION": []}},
+            {
+                "company_code": "3000",
+                "rows": {"WELFARE": [], "DONATION": []},
+                "business_entertainment_candidates": [],
+            },
         ],
     }
 
@@ -138,6 +153,14 @@ def test_merge_publishes_company_results_summary_and_candidate_evidence(
     result = company["monitor_results"][MONITOR_CODE]
     assert result["outcome"] == "存在候选但未达到调增门槛"
     assert result["values"]["welfare_adjustment"] == "0"
+    assert result["subject_results"]["business_entertainment"]["status"] == "CLEAR"
+    assert result["subject_results"]["business_entertainment"]["candidates"] == []
+    assert result["subject_results"]["welfare"]["status"] == "CLEAR"
+    assert (
+        result["subject_results"]["welfare"]["outcome"]
+        == "存在候选但未达到调增门槛"
+    )
+    assert result["subject_results"]["donation"]["status"] == "CLEAR"
     assert result["candidates"] == [
         {
             "candidate_no": "1",
@@ -196,6 +219,83 @@ def test_merge_reclassifies_customer_success_center_with_current_rules(
     runtime = merged["runtime"][MONITOR_CODE]
     assert runtime["candidate_company_count"] == 0
     assert runtime["candidate_detail_count"] == 0
+
+
+def test_merge_includes_business_entertainment_evidence_and_alert(tmp_path: Path) -> None:
+    result_payload = _result_payload()
+    result_rows = result_payload["rows"]
+    assert isinstance(result_rows, list)
+    first_result = result_rows[0]
+    assert isinstance(first_result, dict)
+    first_result.update(
+        {
+            "business_entertainment_status": "ALERT",
+            "business_entertainment_cumulative": "1200.00",
+            "business_entertainment_detail_count": 1,
+            "business_entertainment_alert_count": 1,
+            "business_entertainment_alert_amount": "1200.00",
+            "business_entertainment_hesi_detail_count": 3,
+            "business_entertainment_hesi_invoice_count": 2,
+            "business_entertainment_hesi_application_count": 1,
+            "business_entertainment_evidence_status": "COMPLETE",
+        }
+    )
+    candidate_payload = _candidate_payload()
+    candidate_companies = candidate_payload["companies"]
+    assert isinstance(candidate_companies, list)
+    first_company = candidate_companies[0]
+    assert isinstance(first_company, dict)
+    first_company["business_entertainment_candidates"] = [
+        {
+            "candidate_no": "1",
+            "company_code": "3CC0",
+            "subject": "业务招待费",
+            "fiscal_period": "006",
+            "voucher_no": "4900000010",
+            "original_system_doc_no": "HSB26000001",
+            "gl_account": "6600400000",
+            "account_name": "业务招待费",
+            "header_text": "员工培训餐",
+            "detail_text": "培训餐",
+            "amount": "1200.00",
+            "currency": "CNY",
+            "classification": "可能应归福利费",
+            "matched_keywords": "培训餐",
+            "recommended_account": "福利费",
+            "recommendation_basis": "摘要命中培训餐",
+            "hesi_detail_descriptions": "内部培训餐",
+            "hesi_application_descriptions": "员工培训会议",
+        }
+    ]
+    result_path = tmp_path / "result.json"
+    candidate_path = tmp_path / "candidates.json"
+    _write(result_path, result_payload)
+    _write(candidate_path, candidate_payload)
+
+    merged = merge_tax_adjustment_report(
+        _base_report(),
+        result_path=result_path,
+        candidate_path=candidate_path,
+    )
+
+    result = merged["companies"][0]["monitor_results"][MONITOR_CODE]
+    assert result["status"] == "ALERT"
+    assert result["values"]["business_entertainment_alert_count"] == "1"
+    assert result["candidates"][1]["subject"] == "业务招待费"
+    assert result["candidates"][1]["recommended_account"] == "福利费"
+    assert result["candidates"][1]["hesi_detail_descriptions"] == "内部培训餐"
+    assert result["candidates"][1]["hesi_application_descriptions"] == "员工培训会议"
+    business_result = result["subject_results"]["business_entertainment"]
+    assert business_result["status"] == "ALERT"
+    assert business_result["outcome"] == "发现业务招待费疑似错入"
+    assert len(business_result["candidates"]) == 1
+    assert business_result["candidates"][0]["hesi_detail_descriptions"] == "内部培训餐"
+    welfare_result = result["subject_results"]["welfare"]
+    assert welfare_result["status"] == "CLEAR"
+    assert len(welfare_result["candidates"]) == 1
+    runtime = merged["runtime"][MONITOR_CODE]
+    assert runtime["business_entertainment_evaluated_company_count"] == 1
+    assert runtime["business_entertainment_alert_company_count"] == 1
 
 
 def test_merge_marks_monitor_blocked_when_result_file_is_missing(tmp_path: Path) -> None:

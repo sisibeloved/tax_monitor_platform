@@ -273,6 +273,35 @@ LARK_REFUND_WORKER_CONCURRENCY=2
 
 平台数据库和幂等 outbox 仍是主事实：扫描事务先持久化 `PENDING` 回写记录，专用 Worker 再获取租户令牌、查找 Base 记录并更新状态；网络或远端错误记录为 `FAILED` 并按有限次数重试。启用前须确认飞书应用已发布、拥有该多维表的记录读取/编辑权限，并被授权访问目标 Base。金额匹配仍按公司币种、`scale=2` 和 `ROUND_HALF_UP` 执行，该精度口径须经业务验收。
 
+六项监测的飞书示警采用“平台写队列、人员逐行勾选推送”的方式。目标 Base 为 `A1Kwb4tkZaZdE2s3C2dcG49Fn2d`，队列表为“示警推送队列”（`tblUPRyqDLPTR4vv`），行级手动工作流为“示警明细手动推送”（`wkf2HRUWBZWhQyVV`）。新增或更新队列记录会把“推送”（`fldJU3PyLk`）明确设为未勾选，绝不触发消息；只有用户在具体明细行勾选“推送”时，Base 工作流才沿该行“法人主体”关联记录实时读取主表 `fld2f8VqpE`（业财）并发送。发送成功后，工作流把队列状态更新为“已提交”、记录提交时间并自动清空勾选。因此业财人员变更不需要修改平台配置，也不在平台代码、预览或队列中复制应用相关 `open_id`。
+
+`backend/scripts/enqueue_feishu_alert_notifications.py` 每次都实时分页读取主表 `fld5uBjB9R`（公司代码）、`fld65JDObx`（公司名称）及记录 ID，仅处理公司代码非空且唯一的法人主体。试运行固定按六项能力顺序及最新报告中的公司顺序，每项最多选择前3家 `ALERT` 公司；每个“公司 × 能力”生成一条独立队列明细，包含检查结论、关键数值和具体示警内容。稳定的“推送唯一键”用于跳过已存在记录，重复运行不会重复建行。
+
+默认命令只生成队列预览，不写 Base，更不会发送消息：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\enqueue_feishu_alert_notifications.py
+```
+
+确认预览后，显式追加 `--enqueue` 才写入待推送队列：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\enqueue_feishu_alert_notifications.py --base-as user --enqueue
+```
+
+默认使用独立的 `tax-risk-notifier` Profile 和 bot 身份写队列；该应用只需目标 Base 的记录读写权限，不需要拥有动态业财名单的消息可用范围。当前应用尚未取得该 Base 的记录创建权限时，可显式使用 `--base-as user` 完成队列写入；这只写 Base，不会以用户身份发送消息。测试入队可加 `--test-push --max-items 3`，也可重复传入 `--company-code 3000 --company-code 3120 --company-code 3150` 限定法人主体。旧入口 `backend/scripts/send_feishu_alert_notifications.py` 仅作兼容包装，`--execute` 也只等价于 `--enqueue`，代码中已无直接消息 API 调用路径。预览默认写入 `artifacts/notifications/feishu-alert-queue-preview-latest.json`，不保存业财人员标识或任何飞书密钥。
+
+真实全量检测完成后，平台会把所有 `ALERT` 公司及完整示警明细归档到同一 Base 的期间表：季度能力进入 `季度示警明细-YYYYQn`，月度能力进入 `月度示警明细-YYYY-MM`。归档仅接受 `source_mode=REAL` 且满足 `Base记录数 - 空公司代码数 = 实际检测公司数` 的全量报告；使用 `--max-companies` 的局部调试绝不归档。每次报告形成独立检测批次，`归档唯一键` 保证重复运行不重复建行；新批次只把本次覆盖能力的旧记录标为非当前，历史记录不删除，默认“当前示警”视图只显示最新结果。归档表通过“法人主体”关联主表，保存检查结论、关键数值及全部候选凭证明细，不触发任何飞书消息。
+
+`backend/scripts/run_real_full_validation.py` 默认在写出真实全量网页报告后归档六项能力；`backend/scripts/run_real_tax_adjustment_validation.py` 更新网页报告后只刷新纳税调增科目能力的月度归档。紧急排障时可显式传 `--skip-alert-archive`，但正式全量任务不得使用。也可先单独预演，确认表名及行数后再写入：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\archive_feishu_alert_results.py --base-as user
+.\.venv\Scripts\python.exe scripts\archive_feishu_alert_results.py --base-as user --archive
+```
+
 利润表、科目余额表和汇总科目发生额接口不足以执行退税单条明细匹配。“汇算清缴相关科目明细”虽已提供凭证号、借贷标志、科目和摘要，但仍缺行项目唯一标识、过账日期和冲销标志。所得税费用科目范围已经业务表明确为 `6801010000/6801020000/6801030000`，平台只按代码匹配，不根据科目名称猜测；生产启用前仍必须取得完整 SAP 凭证行接口合同。由于尚未确认每月具体运行日，当前只允许通过幂等 API 或外部调度在 3-12 月触发，不内置未经确认的日历计划。
 
 科目发生额表使用独立 AppKey/AppSecret。本地配置时在受 Git 忽略的 `infra/.env` 中填写密钥，在入库连接器完成前保持启用开关为 `false`，不要把密钥写入 `infra/env.example`。接口分页大小按合同默认值配置为 `1000`，`offsetValue` 从 `0` 开始并由后续连接器管理。

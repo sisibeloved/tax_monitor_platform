@@ -105,9 +105,30 @@ def test_text_can_retain_both_abnormal_labels() -> None:
     assert decision.matched_keywords == ("员工聚餐", "签到", "培训班")
 
 
-def test_settlement_keyword_hit_stops_before_hesi_queries() -> None:
+def test_settlement_keyword_hit_keeps_decision_and_enriches_all_hesi_reasons() -> None:
     service, details, invoices, applications = _service(
-        (_row(voucher="1", detail="年会员工聚餐", original_doc="HSB1"),)
+        (_row(voucher="1", detail="年会员工聚餐", original_doc="HSB1"),),
+        details=(
+            HesiDetailRow(
+                company_code="3HD0",
+                document_code="B1",
+                description="员工活动报销",
+            ),
+        ),
+        invoices=(
+            HesiInvoiceRow(
+                company_code="3HD0",
+                code="B1",
+                reception_apply_code="A1",
+            ),
+        ),
+        applications=(
+            HesiApplicationRow(
+                company_code="3HD0",
+                code="A1",
+                description="年度员工活动申请",
+            ),
+        ),
     )
 
     result = service.run(_request())
@@ -115,10 +136,16 @@ def test_settlement_keyword_hit_stops_before_hesi_queries() -> None:
     checked = result.details[0]
     assert checked.status is CheckStatus.ABNORMAL
     assert checked.decision_source is BusinessEntertainmentEvidenceSource.SETTLEMENT_DETAIL_TEXT
-    assert details.calls == invoices.calls == applications.calls == []
+    assert checked.hesi_document_code == "B1"
+    assert checked.hesi_detail_descriptions == ("员工活动报销",)
+    assert checked.hesi_application_descriptions == ("年度员工活动申请",)
+    assert checked.hesi_detail_match_count == 1
+    assert checked.hesi_invoice_match_count == 1
+    assert checked.hesi_application_match_count == 1
+    assert details.calls == invoices.calls == applications.calls == [("3HD0",)]
 
 
-def test_hesi_detail_keyword_hit_stops_before_invoice_and_application() -> None:
+def test_hesi_detail_keyword_hit_keeps_decision_and_enriches_application_reason() -> None:
     service, details, invoices, applications = _service(
         (_row(voucher="1", detail="接待事项", original_doc="HSB1"),),
         details=(
@@ -128,6 +155,20 @@ def test_hesi_detail_keyword_hit_stops_before_invoice_and_application() -> None:
                 description="内部会议餐",
             ),
         ),
+        invoices=(
+            HesiInvoiceRow(
+                company_code="3HD0",
+                code="B1",
+                reception_apply_code="A1",
+            ),
+        ),
+        applications=(
+            HesiApplicationRow(
+                company_code="3HD0",
+                code="A1",
+                description="内部培训申请",
+            ),
+        ),
     )
 
     checked = service.run(_request()).details[0]
@@ -135,8 +176,9 @@ def test_hesi_detail_keyword_hit_stops_before_invoice_and_application() -> None:
     assert checked.labels == (BusinessEntertainmentLabel.EMPLOYEE_WELFARE,)
     assert checked.decision_source is BusinessEntertainmentEvidenceSource.HESI_DETAIL_DESCRIPTION
     assert checked.hesi_detail_match_count == 1
-    assert details.calls == [("3HD0",)]
-    assert invoices.calls == applications.calls == []
+    assert checked.hesi_detail_descriptions == ("内部会议餐",)
+    assert checked.hesi_application_descriptions == ("内部培训申请",)
+    assert details.calls == invoices.calls == applications.calls == [("3HD0",)]
 
 
 def test_full_chain_uses_all_invoice_links_and_application_descriptions() -> None:
@@ -163,6 +205,8 @@ def test_full_chain_uses_all_invoice_links_and_application_descriptions() -> Non
     assert checked.reception_apply_codes == ("A1", "A2")
     assert checked.hesi_invoice_match_count == 2
     assert checked.hesi_application_match_count == 2
+    assert checked.hesi_detail_descriptions == ("接待",)
+    assert checked.hesi_application_descriptions == ("客户接待", "会议通知及议程")
     assert result.hesi_detail_source_row_count == 1
     assert result.hesi_invoice_source_row_count == 2
     assert result.hesi_application_source_row_count == 2

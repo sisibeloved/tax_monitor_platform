@@ -22,8 +22,10 @@ from tax_risk.application.tax_adjustment_accounts.rules import (
 MONITOR_CODE: Final[str] = "tax_adjustment_account_accuracy"
 MONITOR_NAME: Final[str] = "纳税调增科目准确性检查"
 EVIDENCE_NOTICE: Final[str] = (
-    "本期真实结果覆盖福利费及公益性捐赠科目；业务招待费仍沿原语义监控链路单独运行。"
+    "本期真实结果覆盖业务招待费、福利费及公益性捐赠科目。业务招待费按汇算明细、"
+    "合思报销明细、合思发票及业务招待申请单逐层取证；任一必需证据源失败时阻断公司结论。"
     "疑似错入明细仅在纳税调增额大于0时示警；未达到门槛的候选明细仍可展开查看和导出。"
+    "业务招待费不适用该调增额门槛，规则证据链确认错入即示警。"
     "建议入账科目为规则判断的科目名称，具体SAP科目编码需按公司适用科目表确认。"
 )
 
@@ -126,7 +128,17 @@ def merge_tax_adjustment_report(
             1
             for result in monitor_results.values()
             if _positive_count(_result_values(result).get("welfare_abnormal_candidate_count"))
-            or _positive_count(_result_values(result).get("donation_abnormal_candidate_count"))
+                or _positive_count(_result_values(result).get("donation_abnormal_candidate_count"))
+        ),
+        "business_entertainment_evaluated_company_count": sum(
+            1
+            for result in monitor_results.values()
+            if _positive_count(_result_values(result).get("business_entertainment_detail_count"))
+        ),
+        "business_entertainment_alert_company_count": sum(
+            1
+            for result in monitor_results.values()
+            if _positive_count(_result_values(result).get("business_entertainment_alert_count"))
         ),
     }
     return merged
@@ -225,6 +237,27 @@ def _load_candidate_rows(
                         ),
                     }
                 )
+        raw_business_candidates = company.get("business_entertainment_candidates", [])
+        if not isinstance(raw_business_candidates, list):
+            raise TaxAdjustmentWebReportError(
+                f"business-entertainment candidates for {code} must be a list"
+            )
+        for raw_candidate in raw_business_candidates:
+            if not isinstance(raw_candidate, dict):
+                raise TaxAdjustmentWebReportError(
+                    f"business-entertainment candidate for {code} must be an object"
+                )
+            candidate_company = raw_candidate.get("company_code")
+            if candidate_company != code:
+                raise TaxAdjustmentWebReportError(
+                    f"business-entertainment candidate escaped company scope for {code}"
+                )
+            candidate = {
+                str(key): "" if value is None else str(value)
+                for key, value in raw_candidate.items()
+            }
+            candidate["candidate_no"] = str(len(candidates) + 1)
+            candidates.append(candidate)
         result[code] = tuple(candidates)
     return result
 
@@ -235,11 +268,13 @@ def _monitor_result(
 ) -> dict[str, object]:
     welfare_status = str(row.get("welfare_status") or "ERROR")
     donation_status = str(row.get("donation_status") or "ERROR")
-    statuses = {welfare_status, donation_status}
+    business_status = str(row.get("business_entertainment_status") or "ERROR")
+    statuses = {welfare_status, donation_status, business_status}
     evidence_candidates = candidates or ()
     if candidates is None:
         welfare_candidate_count = _count(row.get("welfare_abnormal_candidate_count"))
         donation_candidate_count = _count(row.get("donation_abnormal_candidate_count"))
+        business_candidate_count = _count(row.get("business_entertainment_alert_count"))
     else:
         welfare_candidate_count = sum(
             candidate.get("subject") == "福利费" for candidate in candidates
@@ -247,7 +282,65 @@ def _monitor_result(
         donation_candidate_count = sum(
             candidate.get("subject") == "公益性捐赠" for candidate in candidates
         )
-    candidate_count = welfare_candidate_count + donation_candidate_count
+        business_candidate_count = sum(
+            candidate.get("subject") == "业务招待费" for candidate in candidates
+        )
+    candidate_count = (
+        welfare_candidate_count + donation_candidate_count + business_candidate_count
+    )
+    business_candidates = tuple(
+        candidate
+        for candidate in evidence_candidates
+        if candidate.get("subject") == "业务招待费"
+    )
+    welfare_candidates = tuple(
+        candidate for candidate in evidence_candidates if candidate.get("subject") == "福利费"
+    )
+    donation_candidates = tuple(
+        candidate
+        for candidate in evidence_candidates
+        if candidate.get("subject") == "公益性捐赠"
+    )
+
+    business_values = {
+        "business_entertainment_cumulative": _optional_text(
+            row.get("business_entertainment_cumulative")
+        ),
+        "business_entertainment_detail_count": str(
+            _count(row.get("business_entertainment_detail_count"))
+        ),
+        "business_entertainment_alert_count": str(business_candidate_count),
+        "business_entertainment_alert_amount": _optional_text(
+            row.get("business_entertainment_alert_amount")
+        ),
+        "business_entertainment_hesi_detail_count": str(
+            _count(row.get("business_entertainment_hesi_detail_count"))
+        ),
+        "business_entertainment_hesi_invoice_count": str(
+            _count(row.get("business_entertainment_hesi_invoice_count"))
+        ),
+        "business_entertainment_hesi_application_count": str(
+            _count(row.get("business_entertainment_hesi_application_count"))
+        ),
+        "business_entertainment_evidence_status": _optional_text(
+            row.get("business_entertainment_evidence_status")
+        ),
+    }
+    welfare_values = {
+        "welfare_cumulative": _optional_text(row.get("welfare_cumulative")),
+        "salary_cumulative": _optional_text(row.get("salary_cumulative")),
+        "welfare_deduction_limit": _optional_text(row.get("welfare_deduction_limit")),
+        "welfare_adjustment": _optional_text(row.get("welfare_adjustment")),
+        "welfare_detail_selected": _optional_text(row.get("welfare_detail_selected")),
+        "welfare_abnormal_candidate_count": str(welfare_candidate_count),
+        "welfare_alert_count": str(_count(row.get("welfare_alert_count"))),
+        "welfare_alert_amount": _optional_text(row.get("welfare_alert_amount")),
+    }
+    donation_values = {
+        "donation_cumulative": _optional_text(row.get("donation_cumulative")),
+        "donation_abnormal_candidate_count": str(donation_candidate_count),
+        "donation_alert_count": str(_count(row.get("donation_alert_count"))),
+    }
 
     if "ERROR" in statuses:
         status = "BLOCKED"
@@ -255,7 +348,11 @@ def _monitor_result(
         reason = (
             "；".join(
                 str(value)
-                for value in (row.get("welfare_error"), row.get("donation_error"))
+                for value in (
+                    row.get("welfare_error"),
+                    row.get("donation_error"),
+                    row.get("business_entertainment_error"),
+                )
                 if value
             )
             or "纳税调增科目结果不可用"
@@ -282,20 +379,80 @@ def _monitor_result(
         "reason": reason,
         "alert_code": alert_code,
         "evidence_limited": True,
-        "values": {
-            "welfare_cumulative": _optional_text(row.get("welfare_cumulative")),
-            "salary_cumulative": _optional_text(row.get("salary_cumulative")),
-            "welfare_deduction_limit": _optional_text(row.get("welfare_deduction_limit")),
-            "welfare_adjustment": _optional_text(row.get("welfare_adjustment")),
-            "welfare_detail_selected": _optional_text(row.get("welfare_detail_selected")),
-            "welfare_abnormal_candidate_count": str(welfare_candidate_count),
-            "welfare_alert_count": str(_count(row.get("welfare_alert_count"))),
-            "welfare_alert_amount": _optional_text(row.get("welfare_alert_amount")),
-            "donation_cumulative": _optional_text(row.get("donation_cumulative")),
-            "donation_abnormal_candidate_count": str(donation_candidate_count),
-            "donation_alert_count": str(_count(row.get("donation_alert_count"))),
-        },
+        "values": {**business_values, **welfare_values, **donation_values},
         "candidates": list(evidence_candidates),
+        "subject_results": {
+            "business_entertainment": _subject_monitor_result(
+                raw_status=business_status,
+                error=row.get("business_entertainment_error"),
+                subject_name="业务招待费",
+                values=business_values,
+                candidates=business_candidates,
+                thresholded=False,
+            ),
+            "welfare": _subject_monitor_result(
+                raw_status=welfare_status,
+                error=row.get("welfare_error"),
+                subject_name="福利费",
+                values=welfare_values,
+                candidates=welfare_candidates,
+                thresholded=True,
+            ),
+            "donation": _subject_monitor_result(
+                raw_status=donation_status,
+                error=row.get("donation_error"),
+                subject_name="公益性捐赠",
+                values=donation_values,
+                candidates=donation_candidates,
+                thresholded=True,
+            ),
+        },
+    }
+
+
+def _subject_monitor_result(
+    *,
+    raw_status: str,
+    error: object,
+    subject_name: str,
+    values: Mapping[str, str | None],
+    candidates: tuple[dict[str, str], ...],
+    thresholded: bool,
+) -> dict[str, object]:
+    if raw_status == "ERROR":
+        status = "BLOCKED"
+        outcome = "无法计算"
+        reason = str(error or f"{subject_name}检查结果不可用")
+        alert_code = None
+    elif raw_status == "ALERT":
+        status = "ALERT"
+        outcome = f"发现{subject_name}疑似错入"
+        reason = None
+        alert_code = "TAX_ADJUSTMENT_ACCOUNT_MISCLASSIFIED"
+    elif raw_status == "CLEAR":
+        status = "CLEAR"
+        if thresholded and candidates:
+            outcome = "存在候选但未达到调增门槛"
+            reason = (
+                f"{subject_name}发现{len(candidates)}条疑似错入候选，"
+                "但纳税调增额为0，按门槛规则不示警"
+            )
+        else:
+            outcome = f"未发现需示警的{subject_name}错入"
+            reason = None
+        alert_code = None
+    else:
+        raise TaxAdjustmentWebReportError(
+            f"unsupported {subject_name} status: {raw_status}"
+        )
+    return {
+        "status": status,
+        "outcome": outcome,
+        "reason": reason,
+        "alert_code": alert_code,
+        "evidence_limited": True,
+        "values": dict(values),
+        "candidates": list(candidates),
     }
 
 

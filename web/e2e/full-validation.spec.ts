@@ -234,14 +234,25 @@ test("shows full-company tax-adjustment account results and candidates", async (
       monitor_results: {
         tax_adjustment_account_accuracy?: {
           candidates?: Array<Record<string, string>>;
+          subject_results?: {
+            welfare?: { candidates?: Array<Record<string, string>> };
+          };
         };
       };
     }>;
   };
   const candidate = report.companies.find(
     (company) => company.company_code === "3CC0",
-  )?.monitor_results.tax_adjustment_account_accuracy?.candidates?.[0];
+  )?.monitor_results.tax_adjustment_account_accuracy?.subject_results?.welfare
+    ?.candidates?.[0];
   expect(candidate).toBeDefined();
+  if (candidate) {
+    candidate.hesi_detail_descriptions = "供应商公务接待报销";
+    candidate.hesi_application_descriptions = "供应商来访招待申请";
+  }
+  await page.route("**/real-validation-latest.json?*", async (route) => {
+    await route.fulfill({ json: report });
+  });
   await page.goto(entryUrl);
 
   await page.getByLabel("监测能力").first().click();
@@ -251,8 +262,15 @@ test("shows full-company tax-adjustment account results and candidates", async (
     .click();
 
   await expect(
-    page.getByText(/本期真实结果覆盖福利费及公益性捐赠科目/),
+    page.getByText(/本期真实结果覆盖业务招待费、福利费及公益性捐赠科目/),
   ).toBeVisible();
+  await expect(
+    page.getByText("业务招待费累计金额", { exact: false }).first(),
+  ).toBeVisible();
+  await page
+    .getByLabel("检查科目")
+    .getByText("福利费", { exact: true })
+    .click();
   await expect(
     page.getByText("福利费累计金额", { exact: false }).first(),
   ).toBeVisible();
@@ -269,8 +287,15 @@ test("shows full-company tax-adjustment account results and candidates", async (
   await expect(
     page.getByText(candidate?.header_text as string, { exact: false }),
   ).toBeVisible();
+  const expandedCandidateTable = page.locator(".ant-table-expanded-row");
   await expect(
-    page.getByText(candidate?.recommended_account as string, { exact: true }),
+    expandedCandidateTable.getByText(candidate?.recommended_account as string, {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText(/合思报销单事由：供应商公务接待报销/)).toBeVisible();
+  await expect(
+    page.getByText(/业务招待申请单事由：供应商来访招待申请/),
   ).toBeVisible();
   await expect(page.getByText(/行项目摘要命中关键词：供应商/)).toBeVisible();
   await expect(

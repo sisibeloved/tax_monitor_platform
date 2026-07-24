@@ -71,7 +71,7 @@ export const CAPABILITIES: readonly CapabilityDefinition[] = [
     frequency: "每月",
     stage: "LIVE",
     description:
-      "检查福利费及公益性捐赠疑似错入，保留未达到调增门槛的候选明细。",
+      "检查业务招待费、福利费及公益性捐赠疑似错入，保留完整证据链与候选明细。",
     output: "公司结论、扣除限额、纳税调增额及疑似错入凭证明细",
   },
   {

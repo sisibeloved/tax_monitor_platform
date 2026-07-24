@@ -1,6 +1,10 @@
 export type ValidationStatus = "ALERT" | "CLEAR" | "BLOCKED" | "NOT_APPLICABLE";
+export type TaxAdjustmentSubjectCode =
+  | "business_entertainment"
+  | "welfare"
+  | "donation";
 
-export interface MonitorResult {
+export interface SubjectMonitorResult {
   status: ValidationStatus;
   outcome: string;
   reason: string | null;
@@ -8,6 +12,12 @@ export interface MonitorResult {
   evidence_limited?: boolean;
   values: Record<string, string | null>;
   candidates?: Record<string, string>[];
+}
+
+export interface MonitorResult extends SubjectMonitorResult {
+  subject_results?: Partial<
+    Record<TaxAdjustmentSubjectCode, SubjectMonitorResult>
+  >;
 }
 
 export interface SourceStatus {
@@ -63,6 +73,8 @@ export interface FullValidationReport {
       candidate_company_count: number;
       candidate_detail_count: number;
       formula_evaluated_company_count: number;
+      business_entertainment_evaluated_company_count?: number;
+      business_entertainment_alert_company_count?: number;
     };
   };
   refund_evidence_notice: string;

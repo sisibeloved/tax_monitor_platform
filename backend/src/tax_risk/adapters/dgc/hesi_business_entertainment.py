@@ -110,6 +110,7 @@ class _CompanyDataClientConfiguration(BaseModel):
     max_pages: int = Field(default=100, gt=0)
     max_page_bytes: int = Field(default=64 * 1024 * 1024, gt=0)
     timeout_seconds: float = Field(default=240, gt=0, le=600)
+    tls_server_name: str | None = None
 
     @field_validator("endpoint")
     @classmethod
@@ -120,6 +121,11 @@ class _CompanyDataClientConfiguration(BaseModel):
         if parsed.query or parsed.fragment:
             raise ValueError("DGC endpoint cannot contain query or fragment")
         return value.rstrip("/")
+
+    @field_validator("tls_server_name")
+    @classmethod
+    def normalize_tls_server_name(cls, value: str | None) -> str | None:
+        return value.strip().lower() or None if value is not None else None
 
 
 class HesiDetailClientConfiguration(_CompanyDataClientConfiguration):
@@ -248,6 +254,11 @@ class _CompanyDataClient(Generic[RowT]):
             request_url,
             content=body,
             headers=headers,
+            extensions=(
+                {"sni_hostname": self._configuration.tls_server_name}
+                if self._configuration.tls_server_name is not None
+                else None
+            ),
         )
         request_id = response.headers.get("x-request-id")
         if len(response.content) > self._configuration.max_page_bytes:

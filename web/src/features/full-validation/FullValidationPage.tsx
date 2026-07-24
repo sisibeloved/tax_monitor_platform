@@ -7,6 +7,7 @@ import {
   Input,
   Progress,
   Row,
+  Segmented,
   Select,
   Space,
   Statistic,
@@ -33,6 +34,8 @@ import {
 import type {
   FullValidationReport,
   MonitorResult,
+  SubjectMonitorResult,
+  TaxAdjustmentSubjectCode,
   ValidationCompany,
   ValidationStatus,
 } from "./types";
@@ -51,6 +54,60 @@ const STATUS_ORDER: ValidationStatus[] = [
   "BLOCKED",
   "NOT_APPLICABLE",
 ];
+
+const TAX_ADJUSTMENT_SUBJECTS: Array<{
+  value: TaxAdjustmentSubjectCode;
+  label: string;
+  valueKeys: string[];
+}> = [
+  {
+    value: "business_entertainment",
+    label: "业务招待费",
+    valueKeys: [
+      "business_entertainment_cumulative",
+      "business_entertainment_detail_count",
+      "business_entertainment_alert_count",
+      "business_entertainment_alert_amount",
+      "business_entertainment_hesi_detail_count",
+      "business_entertainment_hesi_invoice_count",
+      "business_entertainment_hesi_application_count",
+      "business_entertainment_evidence_status",
+    ],
+  },
+  {
+    value: "welfare",
+    label: "福利费",
+    valueKeys: [
+      "welfare_cumulative",
+      "salary_cumulative",
+      "welfare_deduction_limit",
+      "welfare_adjustment",
+      "welfare_detail_selected",
+      "welfare_abnormal_candidate_count",
+      "welfare_alert_count",
+      "welfare_alert_amount",
+    ],
+  },
+  {
+    value: "donation",
+    label: "公益性捐赠",
+    valueKeys: [
+      "donation_cumulative",
+      "donation_abnormal_candidate_count",
+      "donation_alert_count",
+    ],
+  },
+];
+
+function displayResult(
+  company: ValidationCompany,
+  monitor: CapabilityCode,
+  subject: TaxAdjustmentSubjectCode,
+): SubjectMonitorResult | undefined {
+  const result = company.monitor_results[monitor];
+  if (monitor !== "tax_adjustment_account_accuracy") return result;
+  return result?.subject_results?.[subject] ?? result;
+}
 
 const READINESS_META: Record<
   ReadinessStatus,
@@ -105,6 +162,11 @@ function formatValue(
       "welfare_alert_count",
       "donation_abnormal_candidate_count",
       "donation_alert_count",
+      "business_entertainment_detail_count",
+      "business_entertainment_alert_count",
+      "business_entertainment_hesi_detail_count",
+      "business_entertainment_hesi_invoice_count",
+      "business_entertainment_hesi_application_count",
     ].includes(key)
   ) {
     return value;
@@ -176,6 +238,16 @@ const CANDIDATE_COLUMNS: ColumnsType<Record<string, string>> = [
         <Typography.Text>
           行项目：{candidate.detail_text || "-"}
         </Typography.Text>
+        {candidate.hesi_detail_descriptions ? (
+          <Typography.Text type="secondary">
+            合思报销单事由：{candidate.hesi_detail_descriptions}
+          </Typography.Text>
+        ) : null}
+        {candidate.hesi_application_descriptions ? (
+          <Typography.Text type="secondary">
+            业务招待申请单事由：{candidate.hesi_application_descriptions}
+          </Typography.Text>
+        ) : null}
       </Space>
     ),
   },
@@ -324,6 +396,8 @@ export function FullValidationPage() {
     queryFn: fetchReport,
   });
   const [monitor, setMonitor] = useState<CapabilityCode>("current_tax_accrual");
+  const [taxAdjustmentSubject, setTaxAdjustmentSubject] =
+    useState<TaxAdjustmentSubjectCode>("business_entertainment");
   const [status, setStatus] = useState<ValidationStatus | "ALL">("ALL");
   const [outcome, setOutcome] = useState("ALL");
   const [keyword, setKeyword] = useState("");
@@ -332,25 +406,34 @@ export function FullValidationPage() {
     CAPABILITIES.find((capability) => capability.code === monitor) ??
     CAPABILITIES[0];
   const monitorIsLive = selectedCapability.stage === "LIVE";
+  const selectedTaxAdjustmentSubject =
+    TAX_ADJUSTMENT_SUBJECTS.find(
+      (subject) => subject.value === taxAdjustmentSubject,
+    ) ?? TAX_ADJUSTMENT_SUBJECTS[0];
 
   const statusOptions = useMemo(() => {
     if (!report || !monitorIsLive) return [];
     const available = new Set(
       report.companies
-        .map((company) => company.monitor_results[monitor]?.status)
+        .map(
+          (company) =>
+            displayResult(company, monitor, taxAdjustmentSubject)?.status,
+        )
         .filter((value): value is ValidationStatus => value !== undefined),
     );
     return STATUS_ORDER.filter((value) => available.has(value));
-  }, [monitor, monitorIsLive, report]);
+  }, [monitor, monitorIsLive, report, taxAdjustmentSubject]);
 
   const outcomeOptions = useMemo(() => {
     if (!report || !monitorIsLive) return [];
     return Array.from(
       new Set(
         report.companies
-          .map((company) => company.monitor_results[monitor])
+          .map((company) =>
+            displayResult(company, monitor, taxAdjustmentSubject),
+          )
           .filter(
-            (result): result is MonitorResult =>
+            (result): result is SubjectMonitorResult =>
               result !== undefined &&
               (status === "ALL" || result.status === status),
           )
@@ -358,7 +441,7 @@ export function FullValidationPage() {
           .filter((value): value is string => Boolean(value)),
       ),
     ).sort((left, right) => left.localeCompare(right, "zh-CN"));
-  }, [monitor, monitorIsLive, report, status]);
+  }, [monitor, monitorIsLive, report, status, taxAdjustmentSubject]);
 
   useEffect(() => {
     if (status !== "ALL" && !statusOptions.includes(status)) {
@@ -377,7 +460,7 @@ export function FullValidationPage() {
     if (!report || !monitorIsLive) return [];
     const normalized = keyword.trim().toLowerCase();
     return report.companies.filter((company) => {
-      const result = company.monitor_results[monitor];
+      const result = displayResult(company, monitor, taxAdjustmentSubject);
       return (
         result !== undefined &&
         (status === "ALL" || result.status === status) &&
@@ -387,7 +470,15 @@ export function FullValidationPage() {
           company.company_name.toLowerCase().includes(normalized))
       );
     });
-  }, [keyword, monitor, monitorIsLive, outcome, report, status]);
+  }, [
+    keyword,
+    monitor,
+    monitorIsLive,
+    outcome,
+    report,
+    status,
+    taxAdjustmentSubject,
+  ]);
 
   const portfolio = useMemo(() => {
     if (!report) return { alertCompanies: 0, blockedCompanies: 0, alerts: 0 };
@@ -425,6 +516,12 @@ export function FullValidationPage() {
     setOutcome("ALL");
   };
 
+  const selectTaxAdjustmentSubject = (value: string | number) => {
+    setTaxAdjustmentSubject(value as TaxAdjustmentSubjectCode);
+    setStatus("ALL");
+    setOutcome("ALL");
+  };
+
   const columns: ColumnsType<ValidationCompany> = [
     {
       title: "公司",
@@ -443,7 +540,11 @@ export function FullValidationPage() {
       width: 90,
       key: "status",
       render: (_, company) => {
-        const result = company.monitor_results[monitor] as MonitorResult;
+        const result = displayResult(
+          company,
+          monitor,
+          taxAdjustmentSubject,
+        ) as MonitorResult;
         const meta = STATUS_META[result.status];
         return <Tag color={meta.color}>{meta.label}</Tag>;
       },
@@ -452,18 +553,23 @@ export function FullValidationPage() {
       title: "检查结论",
       width: 220,
       key: "outcome",
-      render: (_, company) => company.monitor_results[monitor]?.outcome ?? "-",
+      render: (_, company) =>
+        displayResult(company, monitor, taxAdjustmentSubject)?.outcome ?? "-",
     },
     {
       title: "关键数值",
       width: 390,
       key: "values",
       render: (_, company) => {
-        const result = company.monitor_results[monitor];
+        const result = displayResult(company, monitor, taxAdjustmentSubject);
         if (!result || !report) return "-";
+        const valueKeys =
+          monitor === "tax_adjustment_account_accuracy"
+            ? selectedTaxAdjustmentSubject.valueKeys
+            : (VALUE_ORDER[monitor] ?? []);
         return (
           <Space direction="vertical" size={2}>
-            {(VALUE_ORDER[monitor] ?? []).map((key) => (
+            {valueKeys.map((key) => (
               <Typography.Text key={key}>
                 {VALUE_LABELS[key]}：
                 {formatValue(key, result.values[key] ?? null, report)}
@@ -477,14 +583,17 @@ export function FullValidationPage() {
       title: "阻断/限制原因",
       key: "reason",
       width: 360,
-      render: (_, company) => company.monitor_results[monitor]?.reason ?? "-",
+      render: (_, company) =>
+        displayResult(company, monitor, taxAdjustmentSubject)?.reason ?? "-",
     },
     {
       title: "候选明细",
       key: "candidates",
       width: 110,
       render: (_, company) => {
-        const count = company.monitor_results[monitor]?.candidates?.length ?? 0;
+        const count =
+          displayResult(company, monitor, taxAdjustmentSubject)?.candidates
+            ?.length ?? 0;
         return count > 0 ? <Tag color="warning">{count} 条</Tag> : "-";
       },
     },
@@ -694,6 +803,17 @@ export function FullValidationPage() {
                   label: capability.name,
                 }))}
               />
+              {monitor === "tax_adjustment_account_accuracy" ? (
+                <Segmented
+                  aria-label="检查科目"
+                  value={taxAdjustmentSubject}
+                  onChange={selectTaxAdjustmentSubject}
+                  options={TAX_ADJUSTMENT_SUBJECTS.map((subject) => ({
+                    value: subject.value,
+                    label: subject.label,
+                  }))}
+                />
+              ) : null}
               {monitorIsLive ? (
                 <>
                   <Select
@@ -736,13 +856,37 @@ export function FullValidationPage() {
                   <Button
                     type="primary"
                     disabled={rows.length === 0}
-                    onClick={() =>
+                    onClick={() => {
+                      const exportCapability =
+                        monitor === "tax_adjustment_account_accuracy"
+                          ? {
+                              ...selectedCapability,
+                              name: `${selectedCapability.name}-${selectedTaxAdjustmentSubject.label}`,
+                              shortName: `${selectedCapability.shortName}-${selectedTaxAdjustmentSubject.label}`,
+                            }
+                          : selectedCapability;
+                      const exportRows = rows.map((company) => {
+                        const result = displayResult(
+                          company,
+                          monitor,
+                          taxAdjustmentSubject,
+                        );
+                        return result === undefined
+                          ? company
+                          : {
+                              ...company,
+                              monitor_results: {
+                                ...company.monitor_results,
+                                [monitor]: result,
+                              },
+                            };
+                      });
                       downloadValidationDetailsCsv(
                         report,
-                        selectedCapability,
-                        rows,
-                      )
-                    }
+                        exportCapability,
+                        exportRows,
+                      );
+                    }}
                   >
                     导出明细
                   </Button>
@@ -771,7 +915,11 @@ export function FullValidationPage() {
                       }
                       columns={CANDIDATE_COLUMNS}
                       dataSource={
-                        company.monitor_results[monitor]?.candidates ?? []
+                        displayResult(
+                          company,
+                          monitor,
+                          taxAdjustmentSubject,
+                        )?.candidates ?? []
                       }
                       pagination={false}
                       scroll={{ x: 1540 }}
@@ -779,8 +927,11 @@ export function FullValidationPage() {
                     />
                   ),
                   rowExpandable: (company) =>
-                    (company.monitor_results[monitor]?.candidates?.length ??
-                      0) > 0,
+                    (displayResult(
+                      company,
+                      monitor,
+                      taxAdjustmentSubject,
+                    )?.candidates?.length ?? 0) > 0,
                 }}
                 scroll={{ x: 1450 }}
                 size="middle"

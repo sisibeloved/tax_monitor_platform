@@ -119,6 +119,8 @@ class BusinessEntertainmentCheckedDetail:
     hesi_invoice_match_count: int
     reception_apply_codes: tuple[str, ...]
     hesi_application_match_count: int
+    hesi_detail_descriptions: tuple[str, ...] = ()
+    hesi_application_descriptions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,22 +280,6 @@ class BusinessEntertainmentAccountCheckService:
         checked_details: list[BusinessEntertainmentCheckedDetail] = []
         for row in eligible_rows:
             settlement_decision = classify_business_entertainment_text(row.detail_text)
-            if settlement_decision.status is CheckStatus.ABNORMAL:
-                checked_details.append(
-                    _checked_detail(
-                        row=row,
-                        decision=settlement_decision,
-                        decision_source=(
-                            BusinessEntertainmentEvidenceSource.SETTLEMENT_DETAIL_TEXT
-                        ),
-                        evaluated_sources=(
-                            BusinessEntertainmentEvidenceSource.SETTLEMENT_DETAIL_TEXT,
-                        ),
-                        evidence_texts=(row.detail_text,) if row.detail_text else (),
-                    )
-                )
-                continue
-
             document_code = extract_hesi_document_code(row.original_system_doc_no)
             if document_code is None:
                 checked_details.append(
@@ -318,22 +304,6 @@ class BusinessEntertainmentAccountCheckService:
             matched_detail_rows = load_details().get(document_code, ())
             detail_descriptions = _unique_nonblank(item.description for item in matched_detail_rows)
             detail_decision = _classify_texts(detail_descriptions)
-            if detail_decision.status is CheckStatus.ABNORMAL:
-                checked_details.append(
-                    _checked_detail(
-                        row=row,
-                        decision=detail_decision,
-                        decision_source=(
-                            BusinessEntertainmentEvidenceSource.HESI_DETAIL_DESCRIPTION
-                        ),
-                        evaluated_sources=tuple(evaluated_sources),
-                        evidence_texts=detail_descriptions,
-                        hesi_document_code=document_code,
-                        hesi_detail_match_count=len(matched_detail_rows),
-                    )
-                )
-                continue
-
             evaluated_sources.append(BusinessEntertainmentEvidenceSource.HESI_INVOICE_LINK)
             matched_invoice_rows = load_invoices().get(document_code, ())
             reception_apply_codes = _unique_nonblank(
@@ -357,7 +327,16 @@ class BusinessEntertainmentAccountCheckService:
                 )
                 application_decision = _classify_texts(application_descriptions)
 
-            if application_decision.status is CheckStatus.ABNORMAL:
+            evidence_texts: tuple[str, ...]
+            if settlement_decision.status is CheckStatus.ABNORMAL:
+                decision_source = BusinessEntertainmentEvidenceSource.SETTLEMENT_DETAIL_TEXT
+                final_decision = settlement_decision
+                evidence_texts = (row.detail_text,) if row.detail_text else ()
+            elif detail_decision.status is CheckStatus.ABNORMAL:
+                decision_source = BusinessEntertainmentEvidenceSource.HESI_DETAIL_DESCRIPTION
+                final_decision = detail_decision
+                evidence_texts = detail_descriptions
+            elif application_decision.status is CheckStatus.ABNORMAL:
                 decision_source = BusinessEntertainmentEvidenceSource.HESI_APPLICATION_DESCRIPTION
                 final_decision = application_decision
                 evidence_texts = application_descriptions
@@ -378,6 +357,8 @@ class BusinessEntertainmentAccountCheckService:
                     hesi_invoice_match_count=len(matched_invoice_rows),
                     reception_apply_codes=reception_apply_codes,
                     hesi_application_match_count=len(matched_application_rows),
+                    hesi_detail_descriptions=detail_descriptions,
+                    hesi_application_descriptions=application_descriptions,
                 )
             )
 
@@ -452,6 +433,8 @@ def _checked_detail(
     hesi_invoice_match_count: int = 0,
     reception_apply_codes: tuple[str, ...] = (),
     hesi_application_match_count: int = 0,
+    hesi_detail_descriptions: tuple[str, ...] = (),
+    hesi_application_descriptions: tuple[str, ...] = (),
 ) -> BusinessEntertainmentCheckedDetail:
     return BusinessEntertainmentCheckedDetail(
         row=row,
@@ -466,6 +449,8 @@ def _checked_detail(
         hesi_invoice_match_count=hesi_invoice_match_count,
         reception_apply_codes=reception_apply_codes,
         hesi_application_match_count=hesi_application_match_count,
+        hesi_detail_descriptions=hesi_detail_descriptions,
+        hesi_application_descriptions=hesi_application_descriptions,
     )
 
 

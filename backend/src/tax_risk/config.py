@@ -156,6 +156,7 @@ class Settings(BaseSettings):
             "dgc_sap_account_balance": 4,
             "dgc_hesi_reimbursement": 4,
             "dgc_hesi_invoice": 4,
+            "dgc_hesi_application": 4,
             "dgc_sap_dividend_detail": 4,
             "dgc_invoice_detail": 4,
         }
@@ -258,6 +259,11 @@ class Settings(BaseSettings):
     dgc_hesi_invoice_field_map: dict[str, str] = Field(
         default_factory=_default_dgc_hesi_invoice_field_map
     )
+    dgc_hesi_application_enabled: bool = False
+    dgc_hesi_application_api_url: str | None = "https://116.63.221.181/post/apply"
+    dgc_hesi_application_app_key: SecretStr | None = None
+    dgc_hesi_application_app_secret: SecretStr | None = None
+    dgc_hesi_application_page_size: int = Field(default=5_000, gt=0, le=50_000)
     dgc_sap_dividend_detail_enabled: bool = False
     dgc_sap_dividend_detail_api_url: str | None = (
         "https://116.63.221.181/post/settlement_adjustment"
@@ -300,6 +306,7 @@ class Settings(BaseSettings):
             "dgc_sap_account_balance_page_size": self.dgc_sap_account_balance_page_size,
             "dgc_hesi_reimbursement_page_size": self.dgc_hesi_reimbursement_page_size,
             "dgc_hesi_invoice_page_size": self.dgc_hesi_invoice_page_size,
+            "dgc_hesi_application_page_size": self.dgc_hesi_application_page_size,
             "dgc_sap_dividend_detail_page_size": self.dgc_sap_dividend_detail_page_size,
             "dgc_invoice_detail_page_size": self.dgc_invoice_detail_page_size,
         }
@@ -513,6 +520,17 @@ class Settings(BaseSettings):
             api_url=self.dgc_hesi_invoice_api_url,
             app_key=self.dgc_hesi_invoice_app_key,
             app_secret=self.dgc_hesi_invoice_app_secret,
+        )
+        (
+            self.dgc_hesi_application_api_url,
+            self.dgc_hesi_application_app_key,
+            self.dgc_hesi_application_app_secret,
+        ) = _normalize_dgc_app_interface(
+            prefix="dgc_hesi_application",
+            enabled=self.dgc_hesi_application_enabled,
+            api_url=self.dgc_hesi_application_api_url,
+            app_key=self.dgc_hesi_application_app_key,
+            app_secret=self.dgc_hesi_application_app_secret,
         )
         (
             self.dgc_sap_dividend_detail_api_url,

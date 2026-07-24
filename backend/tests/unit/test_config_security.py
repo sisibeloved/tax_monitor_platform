@@ -44,6 +44,11 @@ INDEPENDENT_DGC_INTERFACES = (
         "hesi-invoice",
     ),
     (
+        "dgc_hesi_application",
+        "https://dgc.example.test/hesi-application",
+        "hesi-application",
+    ),
+    (
         "dgc_sap_dividend_detail",
         "https://dgc.example.test/dividend-detail",
         "dividend-detail",
@@ -143,6 +148,7 @@ def test_parallel_external_fetch_defaults_are_local_safe() -> None:
     assert settings.external_fetch_source_concurrency["dgc_sap_profit"] == 4
     assert settings.external_fetch_source_concurrency["dgc_hesi_reimbursement"] == 4
     assert settings.external_fetch_source_concurrency["dgc_hesi_invoice"] == 4
+    assert settings.external_fetch_source_concurrency["dgc_hesi_application"] == 4
     assert settings.external_fetch_source_concurrency["dgc_invoice_detail"] == 4
     assert settings.external_fetch_empty_cache_ttl_seconds < (
         settings.external_fetch_cache_ttl_seconds
@@ -284,6 +290,11 @@ def test_dgc_sap_profit_defaults_are_disabled_and_safe() -> None:
         "expense_line_amount": "amount_standard_dec",
         "invoice_approved_amount": "approve_amount_dec",
     }
+    assert settings.dgc_hesi_application_enabled is False
+    assert settings.dgc_hesi_application_api_url == "https://116.63.221.181/post/apply"
+    assert settings.dgc_hesi_application_app_key is None
+    assert settings.dgc_hesi_application_app_secret is None
+    assert settings.dgc_hesi_application_page_size == 5_000
     assert settings.dgc_sap_dividend_detail_enabled is False
     assert settings.dgc_sap_dividend_detail_api_url == (
         "https://116.63.221.181/post/settlement_adjustment"
@@ -656,6 +667,7 @@ def test_enabled_dgc_sap_profit_rejects_missing_required_settings(
         ("dgc_sap_account_balance_api_url", "http://dgc.example.test/account-balance"),
         ("dgc_hesi_reimbursement_api_url", "http://dgc.example.test/hesi-reimbursement"),
         ("dgc_hesi_invoice_api_url", "http://dgc.example.test/hesi-invoice"),
+        ("dgc_hesi_application_api_url", "http://dgc.example.test/hesi-application"),
         ("dgc_sap_dividend_detail_api_url", "http://dgc.example.test/dividend-detail"),
         ("dgc_invoice_detail_api_url", "http://dgc.example.test/invoice-detail"),
     ),
@@ -791,6 +803,8 @@ def test_dgc_ledger_must_be_nonempty() -> None:
         ("dgc_hesi_reimbursement_page_size", 50_001),
         ("dgc_hesi_invoice_page_size", 0),
         ("dgc_hesi_invoice_page_size", 50_001),
+        ("dgc_hesi_application_page_size", 0),
+        ("dgc_hesi_application_page_size", 50_001),
         ("dgc_sap_dividend_detail_page_size", 0),
         ("dgc_sap_dividend_detail_page_size", 50_001),
         ("dgc_invoice_detail_page_size", 0),
