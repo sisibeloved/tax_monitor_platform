@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "0023_refund_ambiguous_match_alert"
 down_revision: str | None = "0022_refund_taxes_payable_priority"
@@ -23,12 +22,12 @@ CONSTRAINT_NAME = "ck_income_tax_refund_scan_result_classification_state"
 
 def upgrade() -> None:
     op.drop_constraint(
-        CONSTRAINT_NAME,
+        op.f(CONSTRAINT_NAME),
         "income_tax_refund_scan_result",
         type_="check",
     )
     op.create_check_constraint(
-        CONSTRAINT_NAME,
+        op.f(CONSTRAINT_NAME),
         "income_tax_refund_scan_result",
         _classification_constraint("alert_code = 'AMBIGUOUS_REFUND_MATCH'"),
     )
@@ -52,12 +51,12 @@ def downgrade() -> None:
             f"scan result exists ({alerted_ambiguous_result})"
         )
     op.drop_constraint(
-        CONSTRAINT_NAME,
+        op.f(CONSTRAINT_NAME),
         "income_tax_refund_scan_result",
         type_="check",
     )
     op.create_check_constraint(
-        CONSTRAINT_NAME,
+        op.f(CONSTRAINT_NAME),
         "income_tax_refund_scan_result",
         _classification_constraint("alert_code IS NULL"),
     )
