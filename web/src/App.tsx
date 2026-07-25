@@ -1,5 +1,24 @@
-import { Layout, Tabs, Typography } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Avatar,
+  Button,
+  Dropdown,
+  Layout,
+  Spin,
+  Tabs,
+  Typography,
+  message,
+} from "antd";
+import { useState } from "react";
 
+import "./App.css";
+import {
+  type AuthSession,
+  authSessionQueryKey,
+  getAuthSession,
+  logout,
+} from "./features/auth/api";
+import { LoginPage } from "./features/auth/LoginPage";
 import { SapLinkCoveragePage } from "./features/business-entertainment/SapLinkCoveragePage";
 import { ExportJobsPage } from "./features/exports/ExportJobsPage";
 import { FullValidationPage } from "./features/full-validation/FullValidationPage";
@@ -11,25 +30,108 @@ import { RiskListPage } from "./features/risks/RiskListPage";
 const { Content, Header } = Layout;
 
 export default function App() {
+  const queryClient = useQueryClient();
+  const [signedOut, setSignedOut] = useState(false);
+  const sessionQuery = useQuery({
+    queryKey: authSessionQueryKey,
+    queryFn: getAuthSession,
+    retry: false,
+    staleTime: 60 * 1000,
+  });
+
+  const acceptSession = (session: AuthSession) => {
+    setSignedOut(false);
+    queryClient.setQueryData(authSessionQueryKey, session);
+  };
+
+  if (sessionQuery.isPending && !signedOut) {
+    return (
+      <main className="auth-loading">
+        <div className="brand-symbol" aria-hidden="true">
+          税
+        </div>
+        <Typography.Title level={1}>集团所得税风险监测平台</Typography.Title>
+        <Spin size="small" />
+      </main>
+    );
+  }
+
+  if (signedOut || sessionQuery.data === undefined) {
+    return (
+      <LoginPage
+        onAuthenticated={acceptSession}
+        sessionUnavailable={
+          sessionQuery.isError && !isUnauthorized(sessionQuery.error)
+        }
+      />
+    );
+  }
+
+  const finishLogout = async () => {
+    try {
+      await logout();
+      setSignedOut(true);
+      queryClient.removeQueries({ queryKey: authSessionQueryKey });
+    } catch {
+      message.error("退出失败，请稍后重试。");
+    }
+  };
+
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Header style={{ display: "flex", alignItems: "center" }}>
-        <Typography.Title
-          level={1}
-          style={{
-            color: "white",
-            margin: 0,
-            fontSize: 24,
-            lineHeight: "32px",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+    <AuthenticatedApp session={sessionQuery.data} onLogout={finishLogout} />
+  );
+}
+
+function AuthenticatedApp({
+  session,
+  onLogout,
+}: {
+  session: AuthSession;
+  onLogout: () => Promise<void>;
+}) {
+  const [loggingOut, setLoggingOut] = useState(false);
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await onLogout();
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
+  return (
+    <Layout className="app-layout">
+      <Header className="app-header">
+        <div className="app-brand">
+          <span className="app-brand-symbol" aria-hidden="true">
+            税
+          </span>
+          <Typography.Title level={1}>集团所得税风险监测</Typography.Title>
+        </div>
+        <Dropdown
+          menu={{
+            items: [{ key: "logout", label: "退出登录", danger: true }],
+            onClick: () => void handleLogout(),
           }}
+          placement="bottomRight"
+          trigger={["click"]}
         >
-          集团所得税风险监测
-        </Typography.Title>
+          <Button
+            className="user-menu-trigger"
+            loading={loggingOut}
+            type="text"
+          >
+            <Avatar size={30} src={session.avatar_url ?? undefined}>
+              {session.display_name.slice(0, 1)}
+            </Avatar>
+            <span className="user-display-name">{session.display_name}</span>
+            <span className="menu-chevron" aria-hidden="true">
+              ⌄
+            </span>
+          </Button>
+        </Dropdown>
       </Header>
-      <Content style={{ padding: 24 }}>
+      <Content className="app-content">
         <Tabs
           defaultActiveKey="full-validation"
           items={[
@@ -63,14 +165,19 @@ export default function App() {
               label: "运维驾驶舱",
               children: <OperationsDashboard />,
             },
-            {
-              key: "exports",
-              label: "安全导出",
-              children: <ExportJobsPage />,
-            },
+            { key: "exports", label: "安全导出", children: <ExportJobsPage /> },
           ]}
         />
       </Content>
     </Layout>
+  );
+}
+
+function isUnauthorized(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    error.status === 401
   );
 }

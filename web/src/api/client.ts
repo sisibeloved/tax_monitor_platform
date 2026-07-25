@@ -15,6 +15,10 @@ const configuredBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
   "",
 );
 
+export function apiUrl(path: string): string {
+  return `${configuredBaseUrl}${path}`;
+}
+
 export async function apiGet<T>(
   path: string,
   query?: Readonly<Record<string, string | number | undefined>>,
@@ -27,7 +31,7 @@ export async function apiGet<T>(
     }
   }
   const queryString = search.toString();
-  const url = `${configuredBaseUrl}${path}${queryString ? `?${queryString}` : ""}`;
+  const url = `${apiUrl(path)}${queryString ? `?${queryString}` : ""}`;
   const headers = new Headers(init?.headers);
   if (!headers.has("Accept")) {
     headers.set("Accept", "application/json");
@@ -36,6 +40,7 @@ export async function apiGet<T>(
     ...init,
     method: "GET",
     headers,
+    credentials: init?.credentials ?? "include",
   });
   const body: unknown = await response.json();
   if (!response.ok) {
@@ -56,11 +61,12 @@ export async function apiPost<TResponse, TBody>(
   if (!headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(`${configuredBaseUrl}${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    credentials: init?.credentials ?? "include",
   });
   const responseBody: unknown = await response.json();
   if (!response.ok) {

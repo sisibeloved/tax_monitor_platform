@@ -4,7 +4,6 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 _DGC_SAP_PROFIT_FIELD_NAMES = (
     "client",
     "company_code",
@@ -174,6 +173,20 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     development_principal_enabled: bool = False
     development_principal_secret: str | None = None
+    auth_session_secret: SecretStr | None = None
+    auth_session_cookie_name: str = "tax_risk_session"
+    auth_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
+    auth_oauth_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=30 * 60)
+    auth_login_max_failures: int = Field(default=5, ge=1, le=20)
+    auth_login_window_seconds: int = Field(default=5 * 60, ge=60, le=60 * 60)
+    auth_local_accounts: dict[str, dict[str, object]] = Field(default_factory=dict)
+    auth_feishu_enabled: bool = False
+    auth_feishu_client_id: str | None = None
+    auth_feishu_client_secret: SecretStr | None = None
+    auth_feishu_redirect_uri: str | None = None
+    auth_feishu_tenant_key: str | None = None
+    auth_feishu_principals: dict[str, dict[str, object]] = Field(default_factory=dict)
+    auth_feishu_timeout_seconds: float = Field(default=15, ge=1, le=60)
     ingest_max_upload_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     ingest_max_concurrent_uploads: int = Field(default=4, gt=0)
     tax_master_xlsx_max_zip_members: int = Field(default=128, gt=0)
@@ -294,6 +307,53 @@ class Settings(BaseSettings):
     export_download_secret: str = "development-export-download-secret"
     worker_scope_secret: str = "development-worker-scope-secret-change-me"
     expected_migration_head: str = "0023_refund_ambiguous_match_alert"
+
+    @model_validator(mode="after")
+    def validate_browser_authentication(self) -> Self:
+        if not self.auth_session_cookie_name or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for character in self.auth_session_cookie_name
+        ):
+            raise ValueError("authentication cookie name contains unsupported characters")
+        authentication_enabled = bool(
+            self.auth_local_accounts or self.auth_feishu_enabled or self.auth_feishu_principals
+        )
+        session_secret = (
+            self.auth_session_secret.get_secret_value()
+            if self.auth_session_secret is not None
+            else ""
+        )
+        if authentication_enabled and len(session_secret) < 32:
+            raise ValueError("configured authentication requires a 32-character session secret")
+        if self.auth_feishu_enabled:
+            required_text = {
+                "auth_feishu_client_id": self.auth_feishu_client_id,
+                "auth_feishu_redirect_uri": self.auth_feishu_redirect_uri,
+                "auth_feishu_tenant_key": self.auth_feishu_tenant_key,
+            }
+            missing = [name for name, value in required_text.items() if not value or not value.strip()]
+            if (
+                self.auth_feishu_client_secret is None
+                or not self.auth_feishu_client_secret.get_secret_value().strip()
+            ):
+                missing.append("auth_feishu_client_secret")
+            if not self.auth_feishu_principals:
+                missing.append("auth_feishu_principals")
+            if missing:
+                raise ValueError(
+                    "Feishu authentication requires configured values: " + ", ".join(missing)
+                )
+            assert self.auth_feishu_redirect_uri is not None
+            redirect = urlsplit(self.auth_feishu_redirect_uri)
+            if (
+                redirect.scheme not in {"http", "https"}
+                or not redirect.netloc
+                or redirect.fragment
+            ):
+                raise ValueError("Feishu redirect URI must be an absolute HTTP(S) URL")
+            if self.environment == "production" and redirect.scheme != "https":
+                raise ValueError("production Feishu redirect URI must use HTTPS")
+        return self
 
     @model_validator(mode="after")
     def validate_dgc_sap_profit(self) -> Self:
