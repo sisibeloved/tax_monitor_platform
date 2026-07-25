@@ -203,6 +203,8 @@ def _compose_config() -> dict[str, Any]:
 
 def _local_acceptance_config() -> dict[str, Any]:
     _require_docker_compose()
+    environment = os.environ.copy()
+    environment.pop("ENVIRONMENT", None)
     result = subprocess.run(
         [
             "docker",
@@ -216,6 +218,7 @@ def _local_acceptance_config() -> dict[str, Any]:
             "json",
         ],
         cwd=INFRA_DIR.parent,
+        env=environment,
         check=True,
         capture_output=True,
         text=True,
