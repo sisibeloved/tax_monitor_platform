@@ -1,50 +1,63 @@
-from collections.abc import Awaitable, Callable
-from calendar import monthrange
-from datetime import date
-from functools import partial
 import logging
 import re
-from fastapi import FastAPI, Request, Response
+from calendar import monthrange
+from collections.abc import Awaitable, Callable
+from datetime import date
+from functools import partial
 from threading import BoundedSemaphore
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from fastapi import FastAPI, Request, Response
 from sqlalchemy import select
 
-from tax_risk.api.routes.health import router as health_router
-from tax_risk.api.routes.health import DefaultReadinessProbe, ReadinessProbe
-from tax_risk.api.routes.audit import router as audit_router
-from tax_risk.api.routes.ingest import router as ingest_router
-from tax_risk.api.routes.income_tax_refunds import router as income_tax_refunds_router
-from tax_risk.api.routes.cases import router as cases_router
-from tax_risk.api.routes.dashboard import router as dashboard_router
-from tax_risk.api.routes.master_data import router as master_data_router
-from tax_risk.api.routes.monthly_semantic import router as monthly_semantic_router
-from tax_risk.api.routes.operations import router as operations_router
-from tax_risk.api.routes.runs import router as runs_router
-from tax_risk.api.routes.snapshots import router as snapshots_router
-from tax_risk.api.routes.semantic_governance import router as semantic_governance_router
-from tax_risk.api.routes.exports import router as exports_router
-from tax_risk.api.routes.business_entertainment import (
-    router as business_entertainment_router,
+from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (
+    DgcHesiInvoiceFieldMap,
+    DgcHesiReimbursementFieldMap,
 )
-from tax_risk.adapters.ingest.tax_master_xlsx import XlsxResourceLimits
 from tax_risk.adapters.ingest.dgc_sap_profit import (
     DgcClientConfig,
     DgcSapProfitClient,
     DgcSapProfitFieldMap,
     DgcSapProfitMetricMap,
 )
-from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (
-    DgcHesiInvoiceFieldMap,
-    DgcHesiReimbursementFieldMap,
+from tax_risk.adapters.ingest.tax_master_xlsx import XlsxResourceLimits
+from tax_risk.api.business_entertainment_dependencies import (
+    bind_structured_model_client,
 )
-from tax_risk.application.dgc_sap_profit import DgcSapProfitSource
+from tax_risk.api.routes.audit import router as audit_router
+from tax_risk.api.routes.auth import router as auth_router
+from tax_risk.api.routes.business_entertainment import (
+    router as business_entertainment_router,
+)
+from tax_risk.api.routes.cases import router as cases_router
+from tax_risk.api.routes.dashboard import router as dashboard_router
+from tax_risk.api.routes.exports import router as exports_router
+from tax_risk.api.routes.health import DefaultReadinessProbe, ReadinessProbe
+from tax_risk.api.routes.health import router as health_router
+from tax_risk.api.routes.income_tax_refunds import router as income_tax_refunds_router
+from tax_risk.api.routes.ingest import router as ingest_router
+from tax_risk.api.routes.master_data import router as master_data_router
+from tax_risk.api.routes.monthly_semantic import router as monthly_semantic_router
+from tax_risk.api.routes.operations import router as operations_router
+from tax_risk.api.routes.runs import router as runs_router
+from tax_risk.api.routes.semantic_governance import router as semantic_governance_router
+from tax_risk.api.routes.snapshots import router as snapshots_router
+from tax_risk.application.audit import AuditEventDraft, AuditService, normalized_filter_hash
+from tax_risk.application.business_entertainment.reporting import (
+    BusinessEntertainmentReportingService,
+)
+from tax_risk.application.dgc_hesi_invoice import DgcHesiInvoiceSource
+from tax_risk.application.dgc_hesi_reimbursement import DgcHesiReimbursementSource
+from tax_risk.application.dgc_invoice_detail import DgcInvoiceDetailSource
 from tax_risk.application.dgc_sap_account_balance import DgcSapAccountBalanceSource
 from tax_risk.application.dgc_sap_dividend_detail import DgcSapDividendDetailSource
-from tax_risk.application.dgc_hesi_reimbursement import DgcHesiReimbursementSource
-from tax_risk.application.dgc_hesi_invoice import DgcHesiInvoiceSource
-from tax_risk.application.dgc_invoice_detail import DgcInvoiceDetailSource
+from tax_risk.application.dgc_sap_profit import DgcSapProfitSource
 from tax_risk.application.dgc_sap_trial_balance import DgcSapTrialBalanceSource
+from tax_risk.application.exports import (
+    ExportObjectStore,
+    ExportService,
+    FileExportObjectStore,
+)
 from tax_risk.application.external_fetch import (
     CoordinatedDgcSource,
     DgcFetchSource,
@@ -60,15 +73,6 @@ from tax_risk.application.ingest import (
     create_csv_adapter,
 )
 from tax_risk.application.quarterly_batches import QuarterlyBatchService
-from tax_risk.application.audit import AuditEventDraft, AuditService, normalized_filter_hash
-from tax_risk.application.exports import (
-    ExportObjectStore,
-    ExportService,
-    FileExportObjectStore,
-)
-from tax_risk.application.business_entertainment.reporting import (
-    BusinessEntertainmentReportingService,
-)
 from tax_risk.config import Settings
 from tax_risk.observability.context import observability_context
 from tax_risk.observability.metrics import DEFAULT_METRICS, MetricRegistry
@@ -76,12 +80,12 @@ from tax_risk.observability.tracing import configure_structured_logging, start_s
 from tax_risk.persistence.repositories import UnitOfWork
 from tax_risk.persistence.risk_models import MonitoringRun, MonitoringRunCompany
 from tax_risk.persistence.snapshot_models import SnapshotSetMember
+from tax_risk.security.auth_configuration import (
+    build_authentication_service,
+    build_feishu_oauth_client,
+)
 from tax_risk.security.principal import PrincipalProvider
 from tax_risk.security.service_scope import issue_service_scope_token
-from tax_risk.api.business_entertainment_dependencies import (
-    bind_structured_model_client,
-)
-
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +142,8 @@ def create_app(
         object_store=resolved_export_store,
     )
     app.state.settings = resolved_settings
+    app.state.authentication_service = build_authentication_service(resolved_settings)
+    app.state.feishu_oauth_client = build_feishu_oauth_client(resolved_settings)
     if income_tax_refund_writeback_dispatcher is not None:
         app.state.income_tax_refund_writeback_dispatcher = income_tax_refund_writeback_dispatcher
     elif resolved_settings.lark_refund_writeback_enabled:
@@ -498,6 +504,7 @@ def create_app(
                 return response
 
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(audit_router)
     app.include_router(ingest_router)
     app.include_router(income_tax_refunds_router)

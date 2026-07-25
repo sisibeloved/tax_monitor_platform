@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
-from hashlib import sha256
 import hmac
 import json
 from collections.abc import AsyncIterator
+from hashlib import sha256
 from typing import Annotated, Any, Never, cast
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from tax_risk.config import Settings
+from tax_risk.security.authentication import AuthenticationService
+from tax_risk.security.context import bind_principal, reset_principal
+from tax_risk.security.policies import (
+    DEFAULT_POLICY,
+    Action,
+    AuthorizationDenied,
+    ResourceNotFound,
+)
 from tax_risk.security.principal import (
     API_ROLES,
     AUDIT_ROLE,
@@ -19,13 +27,6 @@ from tax_risk.security.principal import (
     GROUP_TAX_ROLE,
     Principal,
     PrincipalProvider,
-)
-from tax_risk.security.context import bind_principal, reset_principal
-from tax_risk.security.policies import (
-    Action,
-    AuthorizationDenied,
-    DEFAULT_POLICY,
-    ResourceNotFound,
 )
 
 
@@ -42,11 +43,25 @@ async def get_principal(
 ) -> AsyncIterator[Principal]:
     """Resolve an IdP principal, or a signed principal in development only."""
 
+    authentication_service = cast(
+        AuthenticationService | None,
+        getattr(request.app.state, "authentication_service", None),
+    )
+    settings = cast(Settings, request.app.state.settings)
+    identity = (
+        authentication_service.authenticate_session(
+            request.cookies.get(settings.auth_session_cookie_name)
+        )
+        if authentication_service is not None
+        else None
+    )
     provider = cast(PrincipalProvider | None, request.app.state.principal_provider)
-    if provider is not None:
+    if identity is not None:
+        principal = identity.principal
+        request.state.auth_identity = identity
+    elif provider is not None:
         principal = provider(request)
     else:
-        settings = cast(Settings, request.app.state.settings)
         if (
             settings.environment != "development"
             or not settings.development_principal_enabled
@@ -199,8 +214,8 @@ __all__ = [
     "actor_role",
     "company_scope",
     "get_principal",
-    "require_case_writer",
     "require_audit_reader",
+    "require_case_writer",
     "require_exporter",
     "require_group_tax",
     "require_monitor_runner",

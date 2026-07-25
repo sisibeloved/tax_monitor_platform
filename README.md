@@ -205,6 +205,43 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 
 Web 默认地址为 `http://127.0.0.1:8080/`，API 为 `http://127.0.0.1:8000/`。本地固定身份只能用于隔离开发机；生产必须关闭开发身份并接入批准的 IdP。
 
+### 登录配置
+
+平台支持本地账号密码和飞书 OAuth 授权登录。浏览器会话使用签名的 `HttpOnly` Cookie；生产环境自动启用 `Secure`，账号权限仍复用现有角色、公司范围和 PostgreSQL RLS。
+
+先生成本地账号的 scrypt 密码哈希：
+
+```bash
+backend/.venv/bin/python backend/scripts/hash_login_password.py
+```
+
+Windows PowerShell 使用：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\scripts\hash_login_password.py
+```
+
+将输出写入受 Git 忽略的 `infra/.env`，密码不得明文保存：
+
+```dotenv
+AUTH_SESSION_SECRET=<至少32字符的独立随机密钥>
+AUTH_LOCAL_ACCOUNTS={"tax.admin":{"password_hash":"<上一步输出>","subject":"local:tax.admin","display_name":"税务管理员","roles":["group-tax"],"allowed_company_ids":[],"organization_path":"/group/tax"}}
+DEVELOPMENT_PRINCIPAL_ENABLED=false
+```
+
+启用飞书登录时，在飞书开放平台登记精确回调地址 `https://<平台域名>/api/v1/auth/feishu/callback`，再配置应用凭据、允许的租户和用户映射：
+
+```dotenv
+AUTH_FEISHU_ENABLED=true
+AUTH_FEISHU_CLIENT_ID=<飞书应用ID>
+AUTH_FEISHU_CLIENT_SECRET=<飞书应用Secret>
+AUTH_FEISHU_REDIRECT_URI=https://<平台域名>/api/v1/auth/feishu/callback
+AUTH_FEISHU_TENANT_KEY=<允许登录的租户tenant_key>
+AUTH_FEISHU_PRINCIPALS={"ou_xxx":{"subject":"feishu:ou_xxx","display_name":"税务用户","roles":["group-tax"],"allowed_company_ids":[],"organization_path":"/group/tax"}}
+```
+
+飞书授权采用 OAuth v3 授权码流程、PKCE `S256` 和一次性 `state` 校验；应用 Secret、用户令牌均只保留在 API 服务端。用户授权以 `tenant_key + open_id` 为准，不使用邮箱或手机号作为登录凭据。
+
 ## SAP 利润表 DGC 接口
 
 平台按真实接口 `https://116.63.221.181/post/sapincome` 拉取 SAP 利润表。默认使用 DGC AppKey/AppSecret 对完整请求体执行华为 APIG `SDK-HMAC-SHA256` 签名，并发送 `X-Sdk-Date`、`Authorization` 和 `x-Authorization`；IAM Token 方式仅作为显式兼容配置。连接器管理 `limitValue`、`offsetValue` 分页，默认每页 `15000` 条。认证拒绝、`DLM.4018` 及其他远端或响应格式错误会直接失败，不写入半批数据；IAM 模式遇到 HTTP 401/403 或 `DLM.4211` 时只刷新 Token 并重试一次。单页字节数、总记录数和最大页数均有硬上限，远端错误详情不会原样返回调用方。
