@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import json
 import os
@@ -57,15 +57,50 @@ QUEUE_STATUS_FIELD_ID: Final[str] = "fldQqqrPAT"
 QUEUE_PUSH_FIELD_ID: Final[str] = "fldJU3PyLk"
 QUEUE_TEST_PUSH_FIELD_ID: Final[str] = "flddcbIkbl"
 QUEUE_GENERATED_AT_FIELD_ID: Final[str] = "fldVkuGJE4"
+QUEUE_SUBMITTED_AT_FIELD_ID: Final[str] = "fldrBQi6ui"
+QUEUE_FAILURE_REASON_FIELD_ID: Final[str] = "fldfnKtD3j"
+QUEUE_FINANCE_NAME_FIELD_ID: Final[str] = "fldVuyd9If"
+QUEUE_MODIFIED_VOUCHER_NUMBER_FIELD_ID: Final[str] = "fldCy6TW1d"
+QUEUE_MODIFIED_ACCOUNTING_YEAR_FIELD_ID: Final[str] = "fldrzAPx9X"
+MAIN_FINANCE_FIELD_ID: Final[str] = "fld2f8VqpE"
 QUEUE_EXISTING_FIELD_IDS: Final[tuple[str, ...]] = (
     QUEUE_UNIQUE_KEY_FIELD_ID,
     QUEUE_STATUS_FIELD_ID,
 )
 QUEUE_PENDING_STATUS: Final[str] = "待推送"
+QUEUE_STATUS_VALUES: Final[frozenset[str]] = frozenset({"待推送", "已提交", "已跳过", "失败"})
+QUEUE_FIELD_CONTRACT: Final[tuple[tuple[str, str, str], ...]] = (
+    (QUEUE_COMPANY_NAME_FIELD_ID, "公司名称", "text"),
+    (QUEUE_UNIQUE_KEY_FIELD_ID, "推送唯一键", "text"),
+    (QUEUE_SUBMITTED_AT_FIELD_ID, "提交时间", "datetime"),
+    (QUEUE_PERIOD_FIELD_ID, "监测期间", "text"),
+    (QUEUE_MONITOR_FIELD_ID, "示警能力", "text"),
+    (QUEUE_FAILURE_REASON_FIELD_ID, "失败原因", "text"),
+    (QUEUE_STATUS_FIELD_ID, "推送状态", "select"),
+    (QUEUE_TEST_PUSH_FIELD_ID, "测试推送", "checkbox"),
+    (QUEUE_COMPANY_LINK_FIELD_ID, "法人主体", "link"),
+    (QUEUE_GENERATED_AT_FIELD_ID, "生成时间", "datetime"),
+    (QUEUE_OUTCOME_FIELD_ID, "检查结论", "text"),
+    (QUEUE_FINANCE_NAME_FIELD_ID, "业财姓名", "lookup"),
+    (QUEUE_PUSH_FIELD_ID, "推送", "checkbox"),
+    (QUEUE_KEY_VALUES_FIELD_ID, "关键数值", "text"),
+    (QUEUE_DASHBOARD_URL_FIELD_ID, "驾驶舱链接", "text"),
+    (QUEUE_COMPANY_CODE_FIELD_ID, "公司代码", "text"),
+    (QUEUE_DETAILS_FIELD_ID, "示警明细", "text"),
+    (QUEUE_MODIFIED_VOUCHER_NUMBER_FIELD_ID, "修改的凭证号", "text"),
+    (QUEUE_MODIFIED_ACCOUNTING_YEAR_FIELD_ID, "修改的会计年度", "text"),
+)
 
 
 class LarkCliError(RuntimeError):
     """Credential-safe wrapper for failed lark-cli operations."""
+
+
+@dataclass(frozen=True, slots=True)
+class QueueWriteResult:
+    created_rows: int
+    existing_rows: int
+    record_ids: tuple[str, ...]
 
 
 def _load_json_object(path: Path) -> dict[str, object]:
@@ -214,6 +249,90 @@ def _load_company_directory(
     return build_company_link_directory(record_ids, rows)
 
 
+def _validate_queue_schema(
+    cli: str,
+    *,
+    base_identity: str,
+    base_profile: str | None,
+) -> None:
+    envelope = _run_lark_cli(
+        cli,
+        [
+            "base",
+            "+field-list",
+            "--base-token",
+            BASE_TOKEN,
+            "--table-id",
+            QUEUE_TABLE_ID,
+            "--offset",
+            "0",
+            "--limit",
+            "200",
+            "--as",
+            base_identity,
+        ],
+        expected_identity=base_identity,
+        profile=base_profile,
+    )
+    data = envelope.get("data")
+    fields = data.get("fields") if isinstance(data, Mapping) else None
+    if not isinstance(fields, list) or any(not isinstance(item, Mapping) for item in fields):
+        raise LarkCliError("Lark Base queue field list has an unexpected shape")
+    by_id: dict[str, Mapping[str, object]] = {}
+    for raw_field in fields:
+        field = cast(Mapping[str, object], raw_field)
+        field_id = field.get("id")
+        if isinstance(field_id, str):
+            if field_id in by_id:
+                raise LarkCliError(f"Lark Base queue contains duplicate field ID {field_id}")
+            by_id[field_id] = field
+    for field_id, expected_name, expected_type in QUEUE_FIELD_CONTRACT:
+        field = by_id.get(field_id)
+        if field is None:
+            raise LarkCliError(f"Lark Base queue is missing field {expected_name} ({field_id})")
+        if field.get("name") != expected_name or field.get("type") != expected_type:
+            raise LarkCliError(
+                f"Lark Base queue field {field_id} must be {expected_name}/{expected_type}, "
+                f"received {field.get('name')}/{field.get('type')}"
+            )
+    company_field = by_id[QUEUE_COMPANY_LINK_FIELD_ID]
+    if company_field.get("link_table") != MAIN_TABLE_ID:
+        raise LarkCliError("Lark Base queue 法人主体 field must link to the main company table")
+    finance_field = by_id[QUEUE_FINANCE_NAME_FIELD_ID]
+    if finance_field.get("select") != MAIN_FINANCE_FIELD_ID:
+        raise LarkCliError("Lark Base queue 业财姓名 lookup must read the main-table 业财 field")
+    dashboard_style = by_id[QUEUE_DASHBOARD_URL_FIELD_ID].get("style")
+    if not isinstance(dashboard_style, Mapping) or dashboard_style.get("type") != "url":
+        raise LarkCliError("Lark Base queue 驾驶舱链接 must use URL style")
+    for datetime_field_id, datetime_field_name in (
+        (QUEUE_GENERATED_AT_FIELD_ID, "生成时间"),
+        (QUEUE_SUBMITTED_AT_FIELD_ID, "提交时间"),
+    ):
+        datetime_style = by_id[datetime_field_id].get("style")
+        if (
+            not isinstance(datetime_style, Mapping)
+            or datetime_style.get("format") != "yyyy-MM-dd HH:mm"
+        ):
+            raise LarkCliError(
+                f"Lark Base queue {datetime_field_name} must use yyyy-MM-dd HH:mm format"
+            )
+    status_field = by_id[QUEUE_STATUS_FIELD_ID]
+    raw_options = status_field.get("options")
+    if not isinstance(raw_options, list):
+        raise LarkCliError("Lark Base queue 推送状态 options are missing")
+    status_values = {
+        option.get("name")
+        for option in raw_options
+        if isinstance(option, Mapping) and isinstance(option.get("name"), str)
+    }
+    if status_values != QUEUE_STATUS_VALUES or len(raw_options) != len(QUEUE_STATUS_VALUES):
+        raise LarkCliError("Lark Base queue 推送状态 options do not match the feedback workflow")
+    if status_field.get("multiple") is not False:
+        raise LarkCliError("Lark Base queue 推送状态 must be single-select")
+    if status_field.get("default_value") != [QUEUE_PENDING_STATUS]:
+        raise LarkCliError("Lark Base queue 推送状态 must default to 待推送")
+
+
 def _load_existing_queue_keys(
     cli: str,
     *,
@@ -350,6 +469,62 @@ def _enqueue_plan(
         record_ids.append(record_id)
         created += 1
     return created, already_queued, tuple(record_ids)
+
+
+def enqueue_report(
+    report: Mapping[str, object],
+    *,
+    monitor_codes: Collection[str] | None = None,
+    max_companies_per_monitor: int = 3,
+    dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    test_push: bool = False,
+    base_identity: str = "bot",
+    base_profile: str | None = DEFAULT_BASE_PROFILE,
+    cli: str | None = None,
+    execute: bool = True,
+) -> tuple[AlertQueuePlan, QueueWriteResult | None]:
+    """Plan and optionally enqueue report alerts using the verified feedback schema."""
+
+    executable = cli or shutil.which("lark-cli")
+    if executable is None:
+        raise LarkCliError("lark-cli is not installed")
+    effective_profile = base_profile if base_identity == "bot" else None
+    directory = _load_company_directory(
+        executable,
+        base_identity=base_identity,
+        base_profile=effective_profile,
+    )
+    plan = build_queue_plan(
+        report,
+        directory,
+        max_companies_per_monitor=max_companies_per_monitor,
+        dashboard_url=dashboard_url,
+        test_push=test_push,
+        monitor_codes=monitor_codes,
+    )
+    if plan.skipped:
+        skipped_keys = ",".join(f"{item.company_code}:{item.monitor_code}" for item in plan.skipped)
+        raise AlertNotificationError(
+            f"queue plan cannot resolve every company relationship: {skipped_keys}"
+        )
+    if not execute:
+        return plan, None
+    _validate_queue_schema(
+        executable,
+        base_identity=base_identity,
+        base_profile=effective_profile,
+    )
+    created, existing, record_ids = _enqueue_plan(
+        executable,
+        plan,
+        base_identity=base_identity,
+        base_profile=effective_profile,
+    )
+    return plan, QueueWriteResult(
+        created_rows=created,
+        existing_rows=existing,
+        record_ids=record_ids,
+    )
 
 
 def _limit_plan_items(plan: AlertQueuePlan, *, max_items: int | None) -> AlertQueuePlan:
@@ -521,6 +696,11 @@ def main() -> int:
     already_queued = 0
     record_ids: tuple[str, ...] = ()
     if args.enqueue:
+        _validate_queue_schema(
+            cli,
+            base_identity=args.base_as,
+            base_profile=base_profile,
+        )
         created, already_queued, record_ids = _enqueue_plan(
             cli,
             plan,

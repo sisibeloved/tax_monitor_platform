@@ -78,6 +78,25 @@ def test_selection_can_target_specific_companies_without_changing_monitor_cap() 
     assert {selection.company_code for selection in selections} == {"C2", "C4"}
 
 
+def test_selection_can_target_only_tax_adjustment_alerts() -> None:
+    selections = select_alerts(
+        _report(),
+        monitor_codes={"tax_adjustment_account_accuracy"},
+    )
+
+    assert len(selections) == 3
+    assert {selection.monitor_code for selection in selections} == {
+        "tax_adjustment_account_accuracy"
+    }
+
+
+def test_selection_rejects_unknown_or_empty_monitor_filters() -> None:
+    with pytest.raises(AlertNotificationError, match="unknown monitor codes"):
+        select_alerts(_report(), monitor_codes={"unknown"})
+    with pytest.raises(AlertNotificationError, match="cannot be empty"):
+        select_alerts(_report(), monitor_codes=set())
+
+
 def test_selection_rejects_limits_over_pilot_safety_cap() -> None:
     with pytest.raises(AlertNotificationError, match="between 1 and 3"):
         select_alerts(_report(), max_companies_per_monitor=4)

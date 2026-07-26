@@ -6,7 +6,11 @@ import subprocess
 import pytest
 
 from scripts import enqueue_feishu_alert_notifications as notifications
-from tax_risk.application.alert_notifications import AlertQueueItem, AlertQueuePlan
+from tax_risk.application.alert_notifications import (
+    AlertQueueItem,
+    AlertQueuePlan,
+    build_company_link_directory,
+)
 
 
 def _item(*, key: str = "taxrisk-queue-key", test_push: bool = True) -> AlertQueueItem:
@@ -24,6 +28,25 @@ def _item(*, key: str = "taxrisk-queue-key", test_push: bool = True) -> AlertQue
         dashboard_url="https://example.test/dashboard",
         test_push=test_push,
     )
+
+
+def _queue_fields() -> list[dict[str, object]]:
+    fields = [
+        {"id": field_id, "name": name, "type": field_type}
+        for field_id, name, field_type in notifications.QUEUE_FIELD_CONTRACT
+    ]
+    by_id = {str(field["id"]): field for field in fields}
+    by_id[notifications.QUEUE_COMPANY_LINK_FIELD_ID]["link_table"] = notifications.MAIN_TABLE_ID
+    by_id[notifications.QUEUE_FINANCE_NAME_FIELD_ID]["select"] = notifications.MAIN_FINANCE_FIELD_ID
+    by_id[notifications.QUEUE_DASHBOARD_URL_FIELD_ID]["style"] = {"type": "url"}
+    by_id[notifications.QUEUE_GENERATED_AT_FIELD_ID]["style"] = {"format": "yyyy-MM-dd HH:mm"}
+    by_id[notifications.QUEUE_SUBMITTED_AT_FIELD_ID]["style"] = {"format": "yyyy-MM-dd HH:mm"}
+    by_id[notifications.QUEUE_STATUS_FIELD_ID]["default_value"] = ["待推送"]
+    by_id[notifications.QUEUE_STATUS_FIELD_ID]["multiple"] = False
+    by_id[notifications.QUEUE_STATUS_FIELD_ID]["options"] = [
+        {"name": value} for value in sorted(notifications.QUEUE_STATUS_VALUES)
+    ]
+    return fields
 
 
 def test_run_lark_cli_rejects_an_identity_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,9 +143,133 @@ def test_queue_record_fields_link_company_and_never_store_recipient() -> None:
     assert fields[notifications.QUEUE_STATUS_FIELD_ID] == "待推送"
     assert fields[notifications.QUEUE_PUSH_FIELD_ID] is False
     assert fields[notifications.QUEUE_TEST_PUSH_FIELD_ID] is True
+    assert notifications.QUEUE_MODIFIED_VOUCHER_NUMBER_FIELD_ID not in fields
+    assert notifications.QUEUE_MODIFIED_ACCOUNTING_YEAR_FIELD_ID not in fields
     serialized = json.dumps(fields, ensure_ascii=False)
     assert "open_id" not in serialized
     assert "recipient" not in serialized
+
+
+def test_queue_schema_matches_push_and_feedback_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+
+    def field_list(
+        cli: str,
+        arguments: list[str],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        observed.extend(arguments)
+        return {"data": {"fields": _queue_fields()}}
+
+    monkeypatch.setattr(
+        notifications,
+        "_run_lark_cli",
+        field_list,
+    )
+
+    notifications._validate_queue_schema(
+        "lark-cli",
+        base_identity="user",
+        base_profile=None,
+    )
+    assert len(notifications.QUEUE_FIELD_CONTRACT) == 19
+    assert observed[:2] == ["base", "+field-list"]
+    assert "--format" not in observed
+
+
+def test_queue_schema_rejects_a_drifted_feedback_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fields = _queue_fields()
+    voucher_number = next(
+        field
+        for field in fields
+        if field["id"] == notifications.QUEUE_MODIFIED_VOUCHER_NUMBER_FIELD_ID
+    )
+    voucher_number["name"] = "原凭证号"
+    monkeypatch.setattr(
+        notifications,
+        "_run_lark_cli",
+        lambda *args, **kwargs: {"data": {"fields": fields}},
+    )
+
+    with pytest.raises(notifications.LarkCliError, match="修改的凭证号/text"):
+        notifications._validate_queue_schema(
+            "lark-cli",
+            base_identity="user",
+            base_profile=None,
+        )
+
+
+def test_enqueue_report_targets_only_tax_adjustment_and_validates_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report: dict[str, object] = {
+        "generated_at": "2026-07-24T10:00:00+00:00",
+        "fiscal_year": 2026,
+        "quarter": 2,
+        "through_period": 6,
+        "companies": [
+            {
+                "company_code": "3000",
+                "company_name": "测试公司",
+                "monitor_results": {
+                    "current_tax_accrual": {
+                        "status": "ALERT",
+                        "outcome": "少计提",
+                        "values": {},
+                    },
+                    "tax_adjustment_account_accuracy": {
+                        "status": "ALERT",
+                        "outcome": "发现疑似错入科目",
+                        "values": {},
+                    },
+                },
+            }
+        ],
+    }
+    directory = build_company_link_directory(
+        ["rec_company"],
+        [["3000", "测试公司"]],
+    )
+    validated: list[bool] = []
+    enqueued: list[AlertQueuePlan] = []
+    monkeypatch.setattr(
+        notifications,
+        "_load_company_directory",
+        lambda *args, **kwargs: directory,
+    )
+    monkeypatch.setattr(
+        notifications,
+        "_validate_queue_schema",
+        lambda *args, **kwargs: validated.append(True),
+    )
+
+    def enqueue(*args: object, **kwargs: object) -> tuple[int, int, tuple[str, ...]]:
+        plan = args[1]
+        assert isinstance(plan, AlertQueuePlan)
+        enqueued.append(plan)
+        return 1, 0, ("rec_queue",)
+
+    monkeypatch.setattr(notifications, "_enqueue_plan", enqueue)
+
+    plan, result = notifications.enqueue_report(
+        report,
+        monitor_codes={"tax_adjustment_account_accuracy"},
+        base_identity="user",
+        cli="lark-cli",
+    )
+
+    assert validated == [True]
+    assert enqueued == [plan]
+    assert [item.monitor_code for item in plan.items] == ["tax_adjustment_account_accuracy"]
+    assert result == notifications.QueueWriteResult(
+        created_rows=1,
+        existing_rows=0,
+        record_ids=("rec_queue",),
+    )
 
 
 def test_enqueue_skips_existing_keys_and_creates_only_missing_rows(

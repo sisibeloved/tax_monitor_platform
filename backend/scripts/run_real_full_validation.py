@@ -26,6 +26,7 @@ for import_path in (BACKEND_ROOT, BACKEND_SRC, BACKEND_SCRIPTS):
         sys.path.insert(0, str(import_path))
 
 from scripts.archive_feishu_alert_results import archive_report  # noqa: E402
+from scripts.enqueue_feishu_alert_notifications import enqueue_report  # noqa: E402
 from tax_risk.adapters.cache.memory_fetch_cache import MemoryFetchCache  # noqa: E402
 from tax_risk.adapters.ingest.base import CanonicalFinancialRow  # noqa: E402
 from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (  # noqa: E402
@@ -1051,6 +1052,9 @@ def main() -> int:
     parser.add_argument("--skip-alert-archive", action="store_true")
     parser.add_argument("--archive-base-as", choices=("user", "bot"), default="user")
     parser.add_argument("--archive-base-profile", default="tax-risk-notifier")
+    parser.add_argument("--skip-alert-queue", action="store_true")
+    parser.add_argument("--queue-base-as", choices=("user", "bot"), default="bot")
+    parser.add_argument("--queue-base-profile", default="tax-risk-notifier")
     args = parser.parse_args()
     period = args.quarter * 3
     generated_at = datetime.now(UTC)
@@ -1147,6 +1151,25 @@ def main() -> int:
                 f"retired={archive_result.retired_rows}",
                 flush=True,
             )
+    if args.max_companies is not None:
+        print("alert queue skipped: partial --max-companies run", flush=True)
+    elif args.skip_alert_queue:
+        print("alert queue skipped by explicit option", flush=True)
+    else:
+        queue_plan, queue_result = enqueue_report(
+            payload,
+            monitor_codes={"tax_adjustment_account_accuracy"},
+            base_identity=args.queue_base_as,
+            base_profile=args.queue_base_profile,
+        )
+        assert queue_result is not None
+        print(
+            "alert queue tax_adjustment_account_accuracy: "
+            f"planned={len(queue_plan.items)}, "
+            f"created={queue_result.created_rows}, "
+            f"existing={queue_result.existing_rows}",
+            flush=True,
+        )
     return 0
 
 

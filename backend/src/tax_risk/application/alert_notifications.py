@@ -143,6 +143,7 @@ def select_alerts(
     *,
     max_companies_per_monitor: int = MAX_ALERT_COMPANIES_PER_MONITOR,
     company_codes: Collection[str] | None = None,
+    monitor_codes: Collection[str] | None = None,
 ) -> tuple[AlertSelection, ...]:
     """Select the first N ALERT companies per monitor in report order."""
 
@@ -161,9 +162,10 @@ def select_alerts(
         if company_codes is not None
         else None
     )
+    selected_monitors = _requested_monitors(monitor_codes)
 
     selections: list[AlertSelection] = []
-    for monitor_code, fallback_name in MONITORS:
+    for monitor_code, fallback_name in selected_monitors:
         summary = monitor_summary.get(monitor_code)
         monitor_name = fallback_name
         if isinstance(summary, Mapping) and isinstance(summary.get("name"), str):
@@ -249,6 +251,7 @@ def build_queue_plan(
     dashboard_url: str,
     test_push: bool = False,
     company_codes: Collection[str] | None = None,
+    monitor_codes: Collection[str] | None = None,
 ) -> AlertQueuePlan:
     """Build one manually pushable queue row for each company-monitor alert."""
 
@@ -257,6 +260,7 @@ def build_queue_plan(
         report,
         max_companies_per_monitor=max_companies_per_monitor,
         company_codes=company_codes,
+        monitor_codes=monitor_codes,
     )
     period = _period_label(report)
     items: list[AlertQueueItem] = []
@@ -462,6 +466,21 @@ def _required_text(value: object, field_name: str) -> str:
     if normalized is None:
         raise AlertNotificationError(f"{field_name} must be a non-empty string")
     return normalized
+
+
+def _requested_monitors(
+    monitor_codes: Collection[str] | None,
+) -> tuple[tuple[str, str], ...]:
+    if monitor_codes is None:
+        return MONITORS
+    normalized = {_required_text(code, "monitor_codes item") for code in monitor_codes}
+    known = {code for code, _ in MONITORS}
+    unknown = normalized - known
+    if unknown:
+        raise AlertNotificationError(f"unknown monitor codes: {','.join(sorted(unknown))}")
+    if not normalized:
+        raise AlertNotificationError("monitor_codes cannot be empty")
+    return tuple(monitor for monitor in MONITORS if monitor[0] in normalized)
 
 
 def _optional_text(value: object) -> str | None:
