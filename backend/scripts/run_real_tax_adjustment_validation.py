@@ -24,7 +24,6 @@ for import_path in (BACKEND_ROOT, BACKEND_SRC, BACKEND_SCRIPTS):
 
 from scripts import run_real_full_validation as full_validation  # noqa: E402
 from scripts.archive_feishu_alert_results import archive_report  # noqa: E402
-from scripts.enqueue_feishu_alert_notifications import enqueue_report  # noqa: E402
 from tax_risk.adapters.cache.memory_fetch_cache import MemoryFetchCache  # noqa: E402
 from tax_risk.adapters.dgc.hesi_business_entertainment import (  # noqa: E402
     HesiApplicationClient,
@@ -525,9 +524,23 @@ def main() -> int:
     parser.add_argument("--skip-alert-archive", action="store_true")
     parser.add_argument("--archive-base-as", choices=("user", "bot"), default="user")
     parser.add_argument("--archive-base-profile", default="tax-risk-notifier")
-    parser.add_argument("--skip-alert-queue", action="store_true")
-    parser.add_argument("--queue-base-as", choices=("user", "bot"), default="bot")
-    parser.add_argument("--queue-base-profile", default="tax-risk-notifier")
+    parser.add_argument(
+        "--skip-alert-workflow",
+        "--skip-alert-queue",
+        dest="skip_alert_workflow",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--queue-base-as",
+        choices=("user", "bot"),
+        default="bot",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--queue-base-profile",
+        default="tax-risk-notifier",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
     if len(args.fiscal_year) != 4 or not args.fiscal_year.isdigit():
         raise ValueError("fiscal year must contain four digits")
@@ -1321,34 +1334,15 @@ def main() -> int:
             monitor_codes={"tax_adjustment_account_accuracy"},
             base_identity=args.archive_base_as,
             base_profile=args.archive_base_profile,
+            create_workflow=not args.skip_alert_workflow,
         )
         for archive_result in archive_results:
             print(
-                f"alert archive {archive_result.table_name}: "
+                f"alert detail {archive_result.table_name}: "
                 f"created={archive_result.created_rows}, "
-                f"restored={archive_result.restored_rows}, "
-                f"retired={archive_result.retired_rows}",
+                f"workflow={archive_result.workflow_id or 'skipped'}",
                 flush=True,
             )
-    if merged_report is None:
-        print("alert queue skipped: web report does not exist", flush=True)
-    elif args.skip_alert_queue:
-        print("alert queue skipped by explicit option", flush=True)
-    else:
-        queue_plan, queue_result = enqueue_report(
-            merged_report,
-            monitor_codes={"tax_adjustment_account_accuracy"},
-            base_identity=args.queue_base_as,
-            base_profile=args.queue_base_profile,
-        )
-        assert queue_result is not None
-        print(
-            "alert queue tax_adjustment_account_accuracy: "
-            f"planned={len(queue_plan.items)}, "
-            f"created={queue_result.created_rows}, "
-            f"existing={queue_result.existing_rows}",
-            flush=True,
-        )
     return 0
 
 

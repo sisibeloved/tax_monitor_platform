@@ -75,8 +75,8 @@ def test_archive_plan_groups_all_alerts_into_period_monthly_and_quarterly_tables
     )
 
     assert [table.table_name for table in plan.tables] == [
-        "季度示警明细-2026Q2",
-        "月度示警明细-2026-06",
+        "季度示警明细-2026年2季",
+        "月度示警明细-2026年06月",
     ]
     quarterly, monthly = plan.tables
     assert len(quarterly.rows) == 4

@@ -276,8 +276,8 @@ def _archive_key(batch_id: str, selection: AlertSelection) -> str:
 
 def _table_name(cadence: ArchiveCadence, year: int, quarter: int, period: int) -> str:
     if cadence == "季度":
-        return f"季度示警明细-{year}Q{quarter}"
-    return f"月度示警明细-{year}-{period:02d}"
+        return f"季度示警明细-{year}年{quarter}季"
+    return f"月度示警明细-{year}年{period:02d}月"
 
 
 def _period_label(cadence: ArchiveCadence, year: int, quarter: int, period: int) -> str:
