@@ -226,6 +226,137 @@ def test_app_secret_get_mode_signs_paginated_query_without_a_request_body() -> N
     )
 
 
+@pytest.mark.parametrize("request_method", ("GET", "POST"))
+def test_hesi_app_secret_modes_fetch_every_25_row_page(request_method: str) -> None:
+    offsets: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request_method == "GET":
+            offset = int(request.url.params["offsetValue"])
+            assert request.url.params["limitValue"] == "25"
+        else:
+            body = json.loads(request.content)
+            assert isinstance(body, dict)
+            offset = int(body["offsetValue"])
+            assert body["limitValue"] == 25
+        offsets.append(offset)
+        row_count = min(25, 250 - offset)
+        rows = [{"id": offset + index} for index in range(row_count)]
+        return httpx.Response(
+            200,
+            json={
+                "errCode": "DLM.0",
+                "data": {
+                    "totalSize": 250,
+                    "rowSize": row_count,
+                    "data": rows,
+                },
+            },
+        )
+
+    client = DgcSapProfitClient(
+        DgcClientConfig(
+            api_url="https://dgc.example.test/post/hesi",
+            request_method=request_method,
+            app_key="test-app-key",
+            app_secret="test-app-secret",
+            page_size=25,
+        ),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.fetch({"company_code": "3KF0"})
+
+    assert offsets == [0, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250]
+    assert len(result.records) == 250
+    assert result.records[-1]["id"] == 249
+
+
+def test_client_does_not_trust_an_undercounted_total_size() -> None:
+    api_bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == IAM_URL:
+            return _iam_response("token")
+        body = json.loads(request.content)
+        assert isinstance(body, dict)
+        api_bodies.append(body)
+        offset = body["offsetValue"]
+        if offset == 0:
+            rows = [{"id": 1}, {"id": 2}]
+        elif offset == 2:
+            rows = [{"id": 3}]
+        else:
+            rows = []
+        return httpx.Response(
+            200,
+            json={
+                "errCode": "DLM.0",
+                "data": {
+                    "totalSize": 1,
+                    "rowSize": len(rows),
+                    "data": rows,
+                },
+            },
+        )
+
+    client = DgcSapProfitClient(
+        _config(page_size=2),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.fetch({})
+
+    assert [body["offsetValue"] for body in api_bodies] == [0, 2]
+    assert tuple(row["id"] for row in result.records) == (1, 2, 3)
+
+
+def test_strict_offset_pagination_continues_after_short_nonempty_page() -> None:
+    offsets: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert isinstance(body, dict)
+        offsets.append(body["offsetValue"])
+        rows = [{"id": body["offsetValue"]}]
+        if body["offsetValue"] == 50:
+            rows = []
+        return httpx.Response(
+            200,
+            json={
+                "errCode": "DLM.0",
+                "data": {"rowSize": len(rows), "data": rows},
+            },
+        )
+
+    client = DgcSapProfitClient(
+        DgcClientConfig(
+            api_url="https://dgc.example.test/hesimingxi",
+            app_key="test-app-key",
+            app_secret="test-app-secret",
+            page_size=25,
+            strict_offset_pagination=True,
+        ),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.fetch({"company_code": "3KF0"})
+
+    assert offsets == [0, 25, 50]
+    assert tuple(row["id"] for row in result.records) == (0, 25)
+
+
+def test_strict_offset_pagination_rejects_large_page_size() -> None:
+    with pytest.raises(ValueError, match="must not exceed 25"):
+        DgcClientConfig(
+            api_url="https://dgc.example.test/hesiinvoice",
+            app_key="test-app-key",
+            app_secret="test-app-secret",
+            page_size=26,
+            strict_offset_pagination=True,
+        )
+
+
 def test_get_mode_rejects_null_or_structured_query_parameters() -> None:
     client = DgcSapProfitClient(
         DgcClientConfig(
@@ -304,6 +435,46 @@ def test_client_authenticates_paginates_and_preserves_json_decimal_precision() -
     assert result.records[0]["cumulative_profit"] == Decimal("123.4500")
     assert isinstance(result.records[0]["cumulative_profit"], Decimal)
     assert len(result.checksum) == 64
+
+
+def test_client_continues_when_service_clamps_page_below_requested_limit() -> None:
+    api_bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == IAM_URL:
+            return _iam_response("token")
+        body = json.loads(request.content)
+        assert isinstance(body, dict)
+        api_bodies.append(body)
+        offset = body["offsetValue"]
+        rows = [{"id": 5}]
+        if offset == 0:
+            rows = [{"id": 1}, {"id": 2}]
+        elif offset == 2:
+            rows = [{"id": 3}, {"id": 4}]
+        return httpx.Response(
+            200,
+            json={
+                "errCode": "DLM.0",
+                "data": {
+                    "rowSize": len(rows),
+                    "columnSize": 1,
+                    "success": True,
+                    "data": rows,
+                    "columnNames": ["id"],
+                },
+            },
+        )
+
+    client = DgcSapProfitClient(
+        _config(page_size=5),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.fetch({})
+
+    assert [body["offsetValue"] for body in api_bodies] == [0, 2, 4]
+    assert tuple(record["id"] for record in result.records) == (1, 2, 3, 4, 5)
 
 
 def test_client_caches_token_until_monotonic_ttl_expires() -> None:
@@ -501,6 +672,13 @@ def test_client_accepts_supported_wrapped_success_shapes(
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url) == IAM_URL:
             return _iam_response("token")
+        body = json.loads(request.content)
+        assert isinstance(body, dict)
+        if body["offsetValue"] > 0:
+            return httpx.Response(
+                200,
+                json={"errCode": "DLM.0", "data": {"rowSize": 0, "data": []}},
+            )
         return httpx.Response(200, json=payload)
 
     result = DgcSapProfitClient(

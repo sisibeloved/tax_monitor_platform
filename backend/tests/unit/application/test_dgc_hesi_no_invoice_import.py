@@ -11,6 +11,7 @@ from tax_risk.adapters.ingest.base import BulkFileAdapter, CanonicalFinancialRow
 from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (
     DgcHesiInvoiceFieldMap,
     DgcHesiReimbursementFieldMap,
+    HESI_NO_INVOICE_CALCULATION_VERSION,
 )
 from tax_risk.adapters.ingest.dgc_sap_profit import DgcFetchResult
 from tax_risk.api.schemas import DgcHesiNoInvoiceImportRequest
@@ -85,6 +86,7 @@ def test_import_fetches_both_sources_and_persists_one_metric() -> None:
     assert reimbursements.parameters == {"company_code": "3000"}
     assert invoices.parameters == {"company_code": "3000"}
     scope = {
+        "calculation_version": HESI_NO_INVOICE_CALCULATION_VERSION,
         "company_code": "3000",
         "fiscal_year": "2026",
         "through_period": 6,
@@ -107,6 +109,12 @@ def test_import_fetches_both_sources_and_persists_one_metric() -> None:
             "dgc_hesi_no_invoice_scope_sha256": scope_sha256,
             "reimbursement_checksum": "a" * 64,
             "invoice_checksum": "b" * 64,
+            "reimbursement_source_record_count": 1,
+            "invoice_source_record_count": 1,
+            "reimbursement_duplicate_count": 0,
+            "invoice_duplicate_count": 0,
+            "invoice_duplicate_key": ["full_payload_sha256"],
+            "claim_level_aggregation_count": 0,
         },
     )
     assert ingest.ingested is not None
@@ -150,6 +158,7 @@ def _invoice(amount: str) -> dict[str, object]:
     return {
         "company_code": "3000",
         "code": "C-1",
+        "invoice_id": "INVOICE-C-1",
         "feetypeid": "TYPE-F1000",
         "amount_standard_dec": "100",
         "approve_amount_dec": amount,

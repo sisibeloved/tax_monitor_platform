@@ -14,6 +14,7 @@ from tax_risk.adapters.ingest.dgc_hesi_no_invoice import (
     DgcHesiNoInvoiceAdapter,
     DgcHesiNoInvoiceMetricAdapter,
     DgcHesiReimbursementFieldMap,
+    HESI_NO_INVOICE_CALCULATION_VERSION,
 )
 from tax_risk.application.dgc_hesi_invoice import DgcHesiInvoiceSource
 from tax_risk.application.dgc_hesi_reimbursement import DgcHesiReimbursementSource
@@ -79,6 +80,7 @@ class DgcHesiNoInvoiceImportService:
         reimbursement_parameters = {"company_code": company_code}
         invoice_parameters = {"company_code": company_code}
         scope = {
+            "calculation_version": HESI_NO_INVOICE_CALCULATION_VERSION,
             "company_code": company_code,
             "fiscal_year": fiscal_year,
             "through_period": fiscal_period,
@@ -127,6 +129,14 @@ class DgcHesiNoInvoiceImportService:
                     "dgc_hesi_no_invoice_scope_sha256": scope_sha256,
                     "reimbursement_checksum": reimbursement_result.checksum,
                     "invoice_checksum": invoice_result.checksum,
+                    "reimbursement_source_record_count": len(reimbursement_result.records),
+                    "invoice_source_record_count": len(invoice_result.records),
+                    "reimbursement_duplicate_count": result.reimbursement_duplicate_count,
+                    "invoice_duplicate_count": result.invoice_duplicate_count,
+                    "invoice_duplicate_key": ["full_payload_sha256"],
+                    "claim_level_aggregation_count": len(
+                        result.claim_level_aggregation_codes
+                    ),
                 },
             )
         )
